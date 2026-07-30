@@ -69,8 +69,66 @@ async def quick_analysis(request: AnalysisRequest):
 @router.post("/chat")
 async def chat_analysis(request: ChatQueryRequest):
     """
-    AI Chat reasoning assistant query endpoint.
+    AI Chat reasoning assistant query endpoint utilizing OpenRouter or falling back to mock data.
     """
+    from app.config import settings
+    import httpx
+
+    # If API key is provided and not a placeholder, query OpenRouter
+    if settings.llm_api_key and settings.llm_api_key not in ["", "your_api_key", "placeholder", "your_openrouter_api_key"]:
+        try:
+            headers = {
+                "Authorization": f"Bearer {settings.llm_api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://trade-z-web.vercel.app",
+                "X-Title": "Trade-Z",
+            }
+            payload = {
+                "model": settings.llm_model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are Trade-Z AI, an expert Forex, Crypto and general market analysis assistant. "
+                            "You talk professionally, explain Forex concepts clearly to beginners when asked, and provide "
+                            "institutional analysis using terms like order blocks, liquidity sweeps, risk-to-reward ratio, "
+                            "win rate, and market structures. Keep answers highly educational, concise, and professional."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": request.prompt
+                    }
+                ]
+            }
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    json=payload
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    choices = result.get("choices", [])
+                    if choices:
+                        reply = choices[0].get("message", {}).get("content", "")
+                        if reply:
+                            return {
+                                "success": True,
+                                "data": {
+                                    "reply": reply,
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                },
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }
+                
+                print(f"OpenRouter Error status {response.status_code}: {response.text}")
+        except Exception as e:
+            print(f"OpenRouter Connection Exception: {e}")
+
+    # Fallback to local expert rules (perfect for local testing or when offline)
     prompt = request.prompt.lower()
     reply = "I have scanned the financial markets. "
 

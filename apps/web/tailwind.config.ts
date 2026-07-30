@@ -18,18 +18,18 @@ const config: Config = {
           elevated: '#1e1e2d',
           hover: '#252536',
         },
-        // Brand — Royal Purple
+        // Brand — Electric Blue
         brand: {
-          50: '#f3f0ff',
-          100: '#e9e0ff',
-          200: '#d4c4ff',
-          300: '#b89aff',
-          400: '#a78bfa',
-          500: '#8b5cf6',
-          600: '#7c3aed',
-          700: '#6d28d9',
-          800: '#5b21b6',
-          900: '#4c1d95',
+          50: '#eff6ff',
+          100: '#dbeafe',
+          200: '#bfdbfe',
+          300: '#93c5fd',
+          400: '#60a5fa',
+          500: '#0055ff',
+          600: '#2563eb',
+          700: '#1d4ed8',
+          800: '#1e40af',
+          900: '#1e3a8a',
         },
         // Semantic
         profit: '#10b981',
@@ -47,9 +47,9 @@ const config: Config = {
         '3xl': '20px',
       },
       boxShadow: {
-        'glow': '0 0 20px rgba(139, 92, 246, 0.3)',
-        'glow-sm': '0 0 10px rgba(139, 92, 246, 0.2)',
-        'glow-lg': '0 0 40px rgba(139, 92, 246, 0.4)',
+        'glow': '0 0 20px rgba(0, 85, 255, 0.3)',
+        'glow-sm': '0 0 10px rgba(0, 85, 255, 0.2)',
+        'glow-lg': '0 0 40px rgba(0, 85, 255, 0.4)',
         'card': '0 4px 6px -1px rgba(0, 0, 0, 0.5)',
         'elevated': '0 10px 15px -3px rgba(0, 0, 0, 0.6)',
       },
@@ -67,8 +67,8 @@ const config: Config = {
       },
       keyframes: {
         glow: {
-          '0%': { boxShadow: '0 0 5px rgba(139, 92, 246, 0.2)' },
-          '100%': { boxShadow: '0 0 20px rgba(139, 92, 246, 0.4)' },
+          '0%': { boxShadow: '0 0 5px rgba(0, 85, 255, 0.2)' },
+          '100%': { boxShadow: '0 0 20px rgba(0, 85, 255, 0.4)' },
         },
         slideUp: {
           '0%': { transform: 'translateY(20px)', opacity: '0' },

@@ -23,8 +23,8 @@ class Settings(BaseSettings):
 
     # LLM (optional - for AI chat and explanations)
     llm_api_key: Optional[str] = None
-    llm_model: str = "gpt-4o-mini"
-    llm_provider: str = "openai"
+    llm_model: str = "google/gemini-2.5-flash:free"
+    llm_provider: str = "openrouter"
 
     class Config:
         env_file = ".env"

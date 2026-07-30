@@ -107,17 +107,17 @@ export default function TradesPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-6 space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-white tracking-tight">Active Positions</h1>
+        <h1 className="text-xl md:text-2xl font-bold text-white tracking-tight">Active Positions</h1>
         <p className="text-xs text-[#94a3b8] mt-1 font-mono">
           MANAGE OPEN TRADES, MODIFY BOUNDS & PROTECT DRAWDOWN
         </p>
       </div>
 
       {/* Positions List */}
-      <div className="card p-5">
+      <div className="card p-4 md:p-5">
         {loading ? (
           <div className="text-center p-8 text-xs text-[#64748b]">Loading open positions...</div>
         ) : trades.length === 0 ? (
@@ -134,10 +134,10 @@ export default function TradesPage() {
               <thead>
                 <tr className="border-b border-[#1e293b] text-[#64748b] text-[10px] font-semibold uppercase tracking-wider font-mono">
                   <th className="pb-2">Asset</th>
-                  <th className="pb-2 text-right">Size</th>
-                  <th className="pb-2 text-right">Entry Price</th>
-                  <th className="pb-2 text-right">Stop Loss</th>
-                  <th className="pb-2 text-right">Take Profit</th>
+                  <th className="pb-2 text-right hidden sm:table-cell">Size</th>
+                  <th className="pb-2 text-right hidden md:table-cell">Entry Price</th>
+                  <th className="pb-2 text-right hidden sm:table-cell">Stop Loss</th>
+                  <th className="pb-2 text-right hidden sm:table-cell">Take Profit</th>
                   <th className="pb-2 text-right">P&L ($)</th>
                   <th className="pb-2 text-right">Actions</th>
                 </tr>
@@ -156,16 +156,16 @@ export default function TradesPage() {
                         </span>
                         <span className="font-bold text-white font-mono">{trade.pair}</span>
                       </td>
-                      <td className="py-3.5 text-right font-mono text-[#94a3b8]">
+                      <td className="py-3.5 text-right font-mono text-[#94a3b8] hidden sm:table-cell">
                         {trade.lotSize.toFixed(2)} Lots
                       </td>
-                      <td className="py-3.5 text-right font-mono text-white">
+                      <td className="py-3.5 text-right font-mono text-white hidden md:table-cell">
                         {trade.entryPrice.toFixed(5)}
                       </td>
-                      <td className="py-3.5 text-right font-mono text-red-400">
+                      <td className="py-3.5 text-right font-mono text-red-400 hidden sm:table-cell">
                         {trade.stopLoss.toFixed(5)}
                       </td>
-                      <td className="py-3.5 text-right font-mono text-emerald-400">
+                      <td className="py-3.5 text-right font-mono text-emerald-400 hidden sm:table-cell">
                         {trade.takeProfit.toFixed(5)}
                       </td>
                       <td className={`py-3.5 text-right font-mono font-bold ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>

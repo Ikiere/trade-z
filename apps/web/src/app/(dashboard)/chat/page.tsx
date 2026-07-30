@@ -37,7 +37,7 @@ export default function ChatPage() {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-  const handleSend = (textToSend: string) => {
+  const handleSend = async (textToSend: string) => {
     if (!textToSend.trim()) return;
 
     const userMsg: Message = {
@@ -51,7 +51,34 @@ export default function ChatPage() {
     setInput('');
     setIsTyping(true);
 
-    // Mock AI reply simulating reasoning and explanation
+    try {
+      const apiUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/v1/chat`;
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: textToSend })
+      });
+
+      if (res.ok) {
+        const body = await res.json();
+        const reply = body?.data?.reply;
+        if (reply) {
+          const aiMsg: Message = {
+            id: `msg-ai-${Date.now()}`,
+            sender: 'ai',
+            text: reply,
+            timestamp: new Date().toISOString(),
+          };
+          setMessages((prev) => [...prev, aiMsg]);
+          setIsTyping(false);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Backend chat offline, falling back to local simulation:', err);
+    }
+
+    // Local rule-based simulation fallback if backend/OpenRouter is offline
     setTimeout(() => {
       let reply = 'I have evaluated your request against current market conditions. ';
 
@@ -76,7 +103,7 @@ export default function ChatPage() {
 
       setMessages((prev) => [...prev, aiMsg]);
       setIsTyping(false);
-    }, 1500);
+    }, 1200);
   };
 
   return (
@@ -157,7 +184,7 @@ export default function ChatPage() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSend(input)}
-          className="input flex-1 py-3 px-4"
+          className="input flex-1 py-3 px-4 text-xs"
         />
         <button
           onClick={() => handleSend(input)}

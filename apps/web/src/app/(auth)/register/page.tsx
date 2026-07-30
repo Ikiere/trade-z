@@ -38,23 +38,43 @@ export default function RegisterPage() {
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    const { data: signUpData, error } = await supabase.auth.signUp({
-      email: data.email,
-      password: data.password,
-      options: {
-        data: {
-          full_name: data.fullName,
+    try {
+      const { data: signUpData, error } = await supabase.auth.signUp({
+        email: data.email,
+        password: data.password,
+        options: {
+          data: {
+            full_name: data.fullName,
+          },
         },
-      },
-    });
+      });
 
-    if (error) {
-      setErrorMsg(error.message);
-      setIsLoading(false);
-    } else if (signUpData.session) {
-      router.push('/dashboard');
-    } else {
-      setSuccessMsg('Account created! Please check your email to verify your account.');
+      if (error) {
+        // error.message can be an empty string when a DB trigger crashes (500)
+        const msg = error.message?.trim();
+        if (!msg || msg === 'Database error saving new user') {
+          setErrorMsg(
+            'Account setup failed — the database is not fully configured yet. Please contact support.'
+          );
+        } else {
+          setErrorMsg(msg);
+        }
+      } else if (!signUpData?.user) {
+        // User is null — server-side silent failure (trigger crash, 500, etc.)
+        setErrorMsg(
+          'Registration failed due to a server error. Please try again in a moment.'
+        );
+      } else if (signUpData.session) {
+        // Email verification is disabled — user is immediately signed in
+        router.push('/dashboard');
+      } else {
+        // Email verification enabled — account created, needs email confirmation
+        setSuccessMsg('Account created! Please check your email to verify your account.');
+      }
+    } catch (err) {
+      console.error('[Register] Unexpected error:', err);
+      setErrorMsg('An unexpected error occurred. Please try again.');
+    } finally {
       setIsLoading(false);
     }
   };

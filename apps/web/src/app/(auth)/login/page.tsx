@@ -30,16 +30,23 @@ export default function LoginPage() {
     setIsLoading(true);
     setErrorMsg(null);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email: data.email,
-      password: data.password,
-    });
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: data.email,
+        password: data.password,
+      });
 
-    if (error) {
-      setErrorMsg(error.message);
+      if (error) {
+        const msg = error.message?.trim();
+        setErrorMsg(msg || 'Sign in failed. Please check your credentials and try again.');
+      } else {
+        router.push('/dashboard');
+      }
+    } catch (err) {
+      console.error('[Login] Unexpected error:', err);
+      setErrorMsg('An unexpected error occurred. Please try again.');
+    } finally {
       setIsLoading(false);
-    } else {
-      router.push('/dashboard');
     }
   };
 

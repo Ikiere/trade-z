@@ -2,14 +2,20 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { registerSchema, type RegisterInput } from '@trade-z/validation';
 import { Eye, EyeOff, Mail, Lock, User, Loader2, ArrowRight, Check } from 'lucide-react';
+import { createClient } from '@/lib/supabase';
 
 export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const router = useRouter();
+  const supabase = createClient();
 
   const {
     register,
@@ -29,9 +35,28 @@ export default function RegisterPage() {
 
   const onSubmit = async (data: RegisterInput) => {
     setIsLoading(true);
-    // TODO: Implement Supabase auth
-    console.log('Register:', data);
-    setTimeout(() => setIsLoading(false), 2000);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    const { data: signUpData, error } = await supabase.auth.signUp({
+      email: data.email,
+      password: data.password,
+      options: {
+        data: {
+          full_name: data.fullName,
+        },
+      },
+    });
+
+    if (error) {
+      setErrorMsg(error.message);
+      setIsLoading(false);
+    } else if (signUpData.session) {
+      router.push('/dashboard');
+    } else {
+      setSuccessMsg('Account created! Please check your email to verify your account.');
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -42,6 +67,16 @@ export default function RegisterPage() {
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        {errorMsg && (
+          <div className="p-3 text-sm text-loss bg-loss/10 border border-loss/20 rounded-lg">
+            {errorMsg}
+          </div>
+        )}
+        {successMsg && (
+          <div className="p-3 text-sm text-profit bg-profit/10 border border-profit/20 rounded-lg">
+            {successMsg}
+          </div>
+        )}
         {/* Full Name */}
         <div>
           <label htmlFor="fullName" className="block text-sm font-medium text-[#94a3b8] mb-1.5">

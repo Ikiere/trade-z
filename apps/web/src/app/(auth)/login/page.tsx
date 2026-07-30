@@ -2,15 +2,20 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { loginSchema, type LoginInput } from '@trade-z/validation';
 import { motion } from 'framer-motion';
 import { Eye, EyeOff, Mail, Lock, Loader2, ArrowRight } from 'lucide-react';
+import { createClient } from '@/lib/supabase';
 
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const router = useRouter();
+  const supabase = createClient();
 
   const {
     register,
@@ -23,9 +28,19 @@ export default function LoginPage() {
 
   const onSubmit = async (data: LoginInput) => {
     setIsLoading(true);
-    // TODO: Implement Supabase auth
-    console.log('Login:', data);
-    setTimeout(() => setIsLoading(false), 2000);
+    setErrorMsg(null);
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: data.email,
+      password: data.password,
+    });
+
+    if (error) {
+      setErrorMsg(error.message);
+      setIsLoading(false);
+    } else {
+      router.push('/dashboard');
+    }
   };
 
   return (
@@ -38,6 +53,11 @@ export default function LoginPage() {
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+        {errorMsg && (
+          <div className="p-3 text-sm text-loss bg-loss/10 border border-loss/20 rounded-lg">
+            {errorMsg}
+          </div>
+        )}
         {/* Email */}
         <div>
           <label htmlFor="email" className="block text-sm font-medium text-[#94a3b8] mb-1.5">

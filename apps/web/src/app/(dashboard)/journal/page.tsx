@@ -1,42 +1,96 @@
 'use client';
 
-import { useState } from 'react';
-import { MOCK_JOURNAL_ENTRIES } from '@/lib/mock-data';
+import { useEffect, useState } from 'react';
+import { createClient } from '@/lib/supabase';
 import type { JournalEntry, TradingMood } from '@trade-z/types';
-import { BookOpen, Calendar, ShieldCheck, Heart, Frown, Smile, Trash2, Award } from 'lucide-react';
+import { BookOpen, Calendar, ShieldCheck, Heart, Frown, Smile, Trash2, Award, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function JournalPage() {
-  const [entries, setEntries] = useState<JournalEntry[]>(MOCK_JOURNAL_ENTRIES);
+  const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [mood, setMood] = useState<TradingMood>('confident');
   const [rating, setRating] = useState(5);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  async function loadEntries() {
+    const supabase = createClient();
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data } = await supabase
+        .from('journal_entries')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('entry_date', { ascending: false });
+
+      if (data) {
+        // Map database schema to frontend model
+        const mapped = data.map((entry: any) => ({
+          id: entry.id,
+          userId: entry.user_id,
+          tradeId: entry.trade_id,
+          title: entry.title,
+          content: entry.content,
+          mood: entry.mood as TradingMood,
+          tags: entry.tags || [],
+          screenshots: entry.screenshots || [],
+          lessons: entry.lessons || [],
+          rating: entry.rating || 5,
+          date: entry.entry_date,
+          createdAt: entry.created_at,
+          updatedAt: entry.updated_at
+        }));
+        setEntries(mapped);
+      }
+    } catch (err) {
+      console.error('Error loading journal entries:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadEntries();
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title || !content) return;
 
-    const newEntry: JournalEntry = {
-      id: `j-${Date.now()}`,
-      userId: 'user-1',
-      title,
-      content,
-      mood,
-      rating,
-      tags: ['Manual Journal'],
-      screenshots: [],
-      lessons: [],
-      date: new Date().toISOString().split('T')[0],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    setSubmitting(true);
+    const supabase = createClient();
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-    setEntries([newEntry, ...entries]);
-    setTitle('');
-    setContent('');
-    setMood('confident');
-    setRating(5);
+      const { error } = await supabase
+        .from('journal_entries')
+        .insert({
+          user_id: user.id,
+          title,
+          content,
+          mood,
+          rating,
+          tags: ['Manual Journal'],
+          entry_date: new Date().toISOString().split('T')[0]
+        });
+
+      if (error) throw error;
+
+      setTitle('');
+      setContent('');
+      setMood('confident');
+      setRating(5);
+      await loadEntries();
+    } catch (err) {
+      console.error('Error adding journal entry:', err);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -63,6 +117,7 @@ export default function JournalPage() {
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="e.g. Excellent H4 Order block bounce"
                 className="input"
+                required
               />
             </div>
 
@@ -75,6 +130,7 @@ export default function JournalPage() {
                 placeholder="What did you feel? Why did you enter?"
                 rows={4}
                 className="input resize-none"
+                required
               />
             </div>
 
@@ -110,7 +166,8 @@ export default function JournalPage() {
               </select>
             </div>
 
-            <button type="submit" className="btn btn-primary w-full py-2.5">
+            <button type="submit" disabled={submitting} className="btn btn-primary w-full py-2.5 flex items-center justify-center gap-1.5">
+              {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
               Add Journal Entry
             </button>
           </form>
@@ -120,7 +177,9 @@ export default function JournalPage() {
         <div className="card p-5 lg:col-span-2 space-y-4">
           <h3 className="text-sm font-semibold text-white">Journal History</h3>
 
-          {entries.length === 0 ? (
+          {loading ? (
+            <p className="text-xs text-[#64748b] text-center py-6">Loading journal logs...</p>
+          ) : entries.length === 0 ? (
             <p className="text-xs text-[#64748b] text-center py-6">No journal logs recorded yet.</p>
           ) : (
             <div className="space-y-4">

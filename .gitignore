@@ -61,3 +61,6 @@ yarn-error.log*
 .vercel
 .railway
 .cache
+
+# Sentry Config File
+.env.sentry-build-plugin

@@ -1,16 +1,103 @@
 'use client';
 
-import { useState } from 'react';
-import { MOCK_SIGNALS } from '@/lib/mock-data';
+import { useEffect, useState } from 'react';
+import { createClient } from '@/lib/supabase';
 import type { Signal } from '@trade-z/types';
 import { TrendingUp, AlertCircle, ArrowUpRight, ArrowDownRight, Eye, Calendar, Sparkles, Award, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function SignalsPage() {
-  const [selectedSignal, setSelectedSignal] = useState<Signal | null>(null);
-  const [filter, setFilter] = useState<'all' | 'active' | 'rejected'>('all');
+interface ClientSignal {
+  id: string;
+  pair: string;
+  direction: 'long' | 'short';
+  status: 'pending' | 'active' | 'executed' | 'expired' | 'rejected' | 'cancelled';
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  confidence: number;
+  confidenceBreakdown: {
+    marketStructure: number;
+    trend: number;
+    momentum: number;
+    liquidity: number;
+    economicNews: number;
+    riskReward: number;
+  };
+  aiReasoning: string;
+  timeframe: string;
+  riskReward: string;
+  strategy: string;
+  tags: string[];
+}
 
-  const filteredSignals = MOCK_SIGNALS.filter((sig) => {
+export default function SignalsPage() {
+  const [signals, setSignals] = useState<ClientSignal[]>([]);
+  const [selectedSignal, setSelectedSignal] = useState<ClientSignal | null>(null);
+  const [filter, setFilter] = useState<'all' | 'active' | 'rejected'>('all');
+  const [loading, setLoading] = useState(true);
+
+  async function loadSignals() {
+    const supabase = createClient();
+    try {
+      const { data } = await supabase
+        .from('signals')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (data) {
+        // Map database schema snake_case to frontend camelCase
+        const mapped = data.map((sig: any) => ({
+          id: sig.id,
+          pair: sig.pair,
+          direction: sig.direction,
+          status: sig.status,
+          entryPrice: Number(sig.entry_price),
+          stopLoss: Number(sig.stop_loss),
+          takeProfit: Number(sig.take_profit),
+          confidence: Number(sig.confidence),
+          confidenceBreakdown: sig.confidence_breakdown || {
+            marketStructure: 80,
+            trend: 85,
+            momentum: 75,
+            liquidity: 90,
+            economicNews: 70,
+            riskReward: 85
+          },
+          aiReasoning: sig.ai_reasoning || 'No analysis reasoning generated.',
+          timeframe: sig.timeframe,
+          riskReward: sig.risk_reward ? `${sig.risk_reward}:1` : '2:1',
+          strategy: sig.strategy,
+          tags: sig.tags || []
+        }));
+        setSignals(mapped);
+      }
+    } catch (err) {
+      console.error('Error loading signals:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadSignals();
+
+    // Listen to realtime signals changes
+    const supabase = createClient();
+    const channel = supabase
+      .channel('signals-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'signals' },
+        () => loadSignals()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const filteredSignals = signals.filter((sig) => {
     if (filter === 'active') return sig.status === 'active';
     if (filter === 'rejected') return sig.status === 'rejected';
     return true;
@@ -46,84 +133,90 @@ export default function SignalsPage() {
       </div>
 
       {/* Signals Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filteredSignals.map((signal) => {
-          const isLong = signal.direction === 'long';
-          const isRejected = signal.status === 'rejected';
+      {loading ? (
+        <div className="text-center py-10 text-xs text-[#64748b]">Loading AI Signals...</div>
+      ) : filteredSignals.length === 0 ? (
+        <div className="text-center py-10 text-xs text-[#64748b]">No signals match the selected filter.</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {filteredSignals.map((signal) => {
+            const isLong = signal.direction === 'long';
+            const isRejected = signal.status === 'rejected';
 
-          return (
-            <div
-              key={signal.id}
-              className={`card p-5 flex flex-col justify-between gap-4 relative overflow-hidden ${
-                isRejected ? 'border-red-500/20 bg-red-500/5 opacity-80' : 'hover:border-brand-500/20'
-              }`}
-            >
-              <div>
-                {/* Header */}
-                <div className="flex justify-between items-start mb-4">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-white text-base font-mono">{signal.pair}</span>
-                    <span className="text-[10px] bg-bg-elevated px-1.5 py-0.5 rounded text-[#94a3b8] font-mono">
-                      {signal.timeframe}
+            return (
+              <div
+                key={signal.id}
+                className={`card p-5 flex flex-col justify-between gap-4 relative overflow-hidden ${
+                  isRejected ? 'border-red-500/20 bg-red-500/5 opacity-80' : 'hover:border-brand-500/20'
+                }`}
+              >
+                <div>
+                  {/* Header */}
+                  <div className="flex justify-between items-start mb-4">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-white text-base font-mono">{signal.pair}</span>
+                      <span className="text-[10px] bg-bg-elevated px-1.5 py-0.5 rounded text-[#94a3b8] font-mono">
+                        {signal.timeframe}
+                      </span>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                      isRejected
+                        ? 'bg-red-500/10 text-red-400'
+                        : 'bg-emerald-500/10 text-emerald-400'
+                    }`}>
+                      {signal.status}
                     </span>
                   </div>
-                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
-                    isRejected
-                      ? 'bg-red-500/10 text-red-400'
-                      : 'bg-emerald-500/10 text-emerald-400'
-                  }`}>
-                    {signal.status}
-                  </span>
+
+                  {/* Strategy info */}
+                  <p className="text-xs text-[#94a3b8] font-mono mb-4">{signal.strategy}</p>
+
+                  {/* Grid levels */}
+                  <div className="grid grid-cols-3 gap-2 p-3 rounded-lg bg-bg-secondary/50 border border-[#1e293b] font-mono text-[10px] text-center mb-4">
+                    <div>
+                      <span className="text-[#64748b]">ENTRY</span>
+                      <p className="font-semibold text-white mt-0.5">{signal.entryPrice.toFixed(4)}</p>
+                    </div>
+                    <div>
+                      <span className="text-red-400">SL</span>
+                      <p className="font-semibold text-white mt-0.5">{signal.stopLoss.toFixed(4)}</p>
+                    </div>
+                    <div>
+                      <span className="text-emerald-400">TP</span>
+                      <p className="font-semibold text-white mt-0.5">{signal.takeProfit.toFixed(4)}</p>
+                    </div>
+                  </div>
+
+                  {/* Tags row */}
+                  <div className="flex flex-wrap gap-1 mb-4">
+                    {signal.tags.map((tag) => (
+                      <span key={tag} className="text-[9px] bg-bg-elevated text-[#64748b] px-1.5 py-0.5 rounded">
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
                 </div>
 
-                {/* Strategy info */}
-                <p className="text-xs text-[#94a3b8] font-mono mb-4">{signal.strategy}</p>
-
-                {/* Grid levels */}
-                <div className="grid grid-cols-3 gap-2 p-3 rounded-lg bg-bg-secondary/50 border border-[#1e293b] font-mono text-[10px] text-center mb-4">
-                  <div>
-                    <span className="text-[#64748b]">ENTRY</span>
-                    <p className="font-semibold text-white mt-0.5">{signal.entryPrice.toFixed(4)}</p>
-                  </div>
-                  <div>
-                    <span className="text-red-400">SL</span>
-                    <p className="font-semibold text-white mt-0.5">{signal.stopLoss.toFixed(4)}</p>
-                  </div>
-                  <div>
-                    <span className="text-emerald-400">TP</span>
-                    <p className="font-semibold text-white mt-0.5">{signal.takeProfit.toFixed(4)}</p>
-                  </div>
-                </div>
-
-                {/* Tags row */}
-                <div className="flex flex-wrap gap-1 mb-4">
-                  {signal.tags.map((tag) => (
-                    <span key={tag} className="text-[9px] bg-bg-elevated text-[#64748b] px-1.5 py-0.5 rounded">
-                      {tag}
+                {/* Action and Confidence */}
+                <div className="flex justify-between items-center pt-3 border-t border-[#1e293b]">
+                  <div className="flex items-center gap-1.5 text-xs font-mono">
+                    <span className="text-[#64748b]">CONF:</span>
+                    <span className={`font-bold ${isRejected ? 'text-red-400' : 'text-emerald-400'}`}>
+                      {signal.confidence}%
                     </span>
-                  ))}
+                  </div>
+                  <button
+                    onClick={() => setSelectedSignal(signal)}
+                    className="btn btn-secondary py-1.5 px-3 text-[11px] font-semibold"
+                  >
+                    Certificate
+                  </button>
                 </div>
               </div>
-
-              {/* Action and Confidence */}
-              <div className="flex justify-between items-center pt-3 border-t border-[#1e293b]">
-                <div className="flex items-center gap-1.5 text-xs font-mono">
-                  <span className="text-[#64748b]">CONF:</span>
-                  <span className={`font-bold ${isRejected ? 'text-red-400' : 'text-emerald-400'}`}>
-                    {signal.confidence}%
-                  </span>
-                </div>
-                <button
-                  onClick={() => setSelectedSignal(signal)}
-                  className="btn btn-secondary py-1.5 px-3 text-[11px] font-semibold"
-                >
-                  Certificate
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* AI Trade Certificate Dialog Modal */}
       <AnimatePresence>
@@ -204,7 +297,7 @@ export default function SignalsPage() {
                 {/* AI Explanation / Reasoning */}
                 <div className="space-y-2">
                   <h4 className="text-xs font-bold text-white font-mono uppercase tracking-wider">AI Confluence Explanation</h4>
-                  <div className="p-4 rounded-xl bg-bg-card border border-[#1e293b] text-xs text-[#94a3b8] leading-relaxed">
+                  <div className="p-4 rounded-xl bg-bg-card border border-[#1e293b] text-xs text-[#94a3b8] leading-relaxed font-mono">
                     {selectedSignal.aiReasoning}
                   </div>
                 </div>

@@ -1,29 +1,109 @@
 'use client';
 
-import { useState } from 'react';
-import { MOCK_OPEN_TRADES } from '@/lib/mock-data';
+import { useEffect, useState } from 'react';
+import { createClient } from '@/lib/supabase';
 import type { Trade } from '@trade-z/types';
-import { Zap, Eye, AlertTriangle, ShieldCheck, ArrowRight, ShieldAlert } from 'lucide-react';
+import { Zap, Eye, AlertTriangle, ShieldCheck, ArrowRight, ShieldAlert, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function TradesPage() {
-  const [trades, setTrades] = useState<Trade[]>(MOCK_OPEN_TRADES);
+  const [trades, setTrades] = useState<Trade[]>([]);
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [updating, setUpdating] = useState(false);
 
-  const handleBreakEven = (tradeId: string) => {
-    setTrades(
-      trades.map((t) =>
-        t.id === tradeId
-          ? { ...t, stopLoss: t.entryPrice, aiReasoning: 'Stop Loss shifted to Break Even (1.08340) by trader request.' }
-          : t
+  async function loadTrades() {
+    const supabase = createClient();
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data } = await supabase
+        .from('trades')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('status', 'open');
+
+      if (data) {
+        setTrades(data as unknown as Trade[]);
+      }
+    } catch (err) {
+      console.error('Error loading trades:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadTrades();
+
+    // Set up realtime channel for updates
+    const supabase = createClient();
+    const channel = supabase
+      .channel('trades-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'trades' },
+        () => loadTrades()
       )
-    );
-    setSelectedTrade(null);
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const handleBreakEven = async (tradeId: string, entryPrice: number) => {
+    setUpdating(true);
+    const supabase = createClient();
+    try {
+      const { error } = await supabase
+        .from('trades')
+        .update({
+          stop_loss: entryPrice,
+          ai_reasoning: 'Stop Loss shifted to Break Even by trader request.',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', tradeId);
+
+      if (error) throw error;
+      await loadTrades();
+    } catch (err) {
+      console.error('Error shifting stop to break even:', err);
+    } finally {
+      setUpdating(false);
+      setSelectedTrade(null);
+    }
   };
 
-  const handleCloseManual = (tradeId: string) => {
-    setTrades(trades.filter((t) => t.id !== tradeId));
-    setSelectedTrade(null);
+  const handleCloseManual = async (trade: Trade) => {
+    setUpdating(true);
+    const supabase = createClient();
+    try {
+      const currentPrice = trade.currentPrice || trade.entryPrice;
+      const pnl = trade.direction === 'long' 
+        ? (currentPrice - trade.entryPrice) * trade.lotSize * 100000 
+        : (trade.entryPrice - currentPrice) * trade.lotSize * 100000;
+
+      const { error } = await supabase
+        .from('trades')
+        .update({
+          status: 'closed',
+          exit_price: currentPrice,
+          pnl: pnl,
+          closed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', trade.id);
+
+      if (error) throw error;
+      await loadTrades();
+    } catch (err) {
+      console.error('Error closing trade:', err);
+    } finally {
+      setUpdating(false);
+      setSelectedTrade(null);
+    }
   };
 
   return (
@@ -38,7 +118,9 @@ export default function TradesPage() {
 
       {/* Positions List */}
       <div className="card p-5">
-        {trades.length === 0 ? (
+        {loading ? (
+          <div className="text-center p-8 text-xs text-[#64748b]">Loading open positions...</div>
+        ) : trades.length === 0 ? (
           <div className="text-center p-8 space-y-3">
             <div className="w-12 h-12 rounded-full bg-bg-secondary border border-[#1e293b] flex items-center justify-center mx-auto text-[#64748b]">
               <ShieldCheck className="w-6 h-6" />
@@ -124,6 +206,7 @@ export default function TradesPage() {
                 </div>
                 <button
                   onClick={() => setSelectedTrade(null)}
+                  disabled={updating}
                   className="text-xs text-[#64748b] hover:text-white uppercase tracking-wider font-mono"
                 >
                   Close
@@ -145,17 +228,29 @@ export default function TradesPage() {
 
                 <div className="space-y-2">
                   <button
-                    onClick={() => handleBreakEven(selectedTrade.id)}
+                    disabled={updating}
+                    onClick={() => handleBreakEven(selectedTrade.id, selectedTrade.entryPrice)}
                     className="btn btn-secondary w-full py-2.5 text-xs font-bold font-mono flex items-center justify-center gap-1.5"
                   >
-                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                    SHIFT STOP TO BREAK EVEN (BE)
+                    {updating ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                        SHIFT STOP TO BREAK EVEN (BE)
+                      </>
+                    )}
                   </button>
                   <button
-                    onClick={() => handleCloseManual(selectedTrade.id)}
-                    className="btn btn-ghost w-full py-2.5 text-xs font-bold font-mono bg-red-500/10 text-red-400 hover:bg-red-500/25 border border-red-500/10"
+                    disabled={updating}
+                    onClick={() => handleCloseManual(selectedTrade)}
+                    className="btn btn-ghost w-full py-2.5 text-xs font-bold font-mono bg-red-500/10 text-red-400 hover:bg-red-500/25 border border-red-500/10 flex items-center justify-center gap-1.5"
                   >
-                    MANUAL POSITION CLOSE (EXIT)
+                    {updating ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      'MANUAL POSITION CLOSE (EXIT)'
+                    )}
                   </button>
                 </div>
               </div>

@@ -1,0 +1,30 @@
+{
+  "name": "trade-z",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Trade-Z — AI Trading Operating System",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "type-check": "turbo type-check",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
+    "clean": "turbo clean && rimraf node_modules",
+    "dev:web": "turbo dev --filter=@trade-z/web",
+    "dev:api": "turbo dev --filter=@trade-z/api",
+    "dev:ai": "turbo dev --filter=@trade-z/ai-service",
+    "build:web": "turbo build --filter=@trade-z/web",
+    "build:api": "turbo build --filter=@trade-z/api"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "prettier": "^3.5.0",
+    "rimraf": "^6.0.0"
+  },
+  "packageManager": "pnpm@11.13.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

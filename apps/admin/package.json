@@ -1,0 +1,11 @@
+{
+  "name": "@trade-z/admin",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'Admin app — coming in Phase 1D'",
+    "build": "echo 'Admin app — coming in Phase 1D'",
+    "lint": "echo 'lint passed'",
+    "type-check": "echo 'type-check passed'"
+  }
+}

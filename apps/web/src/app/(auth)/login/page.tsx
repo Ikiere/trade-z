@@ -9,6 +9,7 @@ import { loginSchema, type LoginInput } from '@trade-z/validation';
 import { motion } from 'framer-motion';
 import { Eye, EyeOff, Mail, Lock, Loader2, ArrowRight } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
+import * as Sentry from '@sentry/nextjs';
 
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
@@ -38,11 +39,19 @@ export default function LoginPage() {
 
       if (error) {
         const msg = error.message?.trim();
+        Sentry.captureException(error, {
+          tags: { flow: 'login', error_code: error.status?.toString() ?? 'unknown' },
+          extra: { email: data.email, supabase_error: error },
+        });
         setErrorMsg(msg || 'Sign in failed. Please check your credentials and try again.');
       } else {
         router.push('/dashboard');
       }
     } catch (err) {
+      Sentry.captureException(err, {
+        tags: { flow: 'login', type: 'unexpected' },
+        extra: { email: data.email },
+      });
       console.error('[Login] Unexpected error:', err);
       setErrorMsg('An unexpected error occurred. Please try again.');
     } finally {

@@ -8,6 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { registerSchema, type RegisterInput } from '@trade-z/validation';
 import { Eye, EyeOff, Mail, Lock, User, Loader2, ArrowRight, Check } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
+import * as Sentry from '@sentry/nextjs';
 
 export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
@@ -52,6 +53,10 @@ export default function RegisterPage() {
       if (error) {
         // error.message can be an empty string when a DB trigger crashes (500)
         const msg = error.message?.trim();
+        Sentry.captureException(error, {
+          tags: { flow: 'signup', error_code: error.status?.toString() ?? 'unknown' },
+          extra: { email: data.email, supabase_error: error },
+        });
         if (!msg || msg === 'Database error saving new user') {
           setErrorMsg(
             'Account setup failed — the database is not fully configured yet. Please contact support.'
@@ -61,6 +66,11 @@ export default function RegisterPage() {
         }
       } else if (!signUpData?.user) {
         // User is null — server-side silent failure (trigger crash, 500, etc.)
+        Sentry.captureMessage('Signup returned null user with no error', {
+          level: 'error',
+          tags: { flow: 'signup' },
+          extra: { email: data.email, signUpData },
+        });
         setErrorMsg(
           'Registration failed due to a server error. Please try again in a moment.'
         );
@@ -72,6 +82,10 @@ export default function RegisterPage() {
         setSuccessMsg('Account created! Please check your email to verify your account.');
       }
     } catch (err) {
+      Sentry.captureException(err, {
+        tags: { flow: 'signup', type: 'unexpected' },
+        extra: { email: data.email },
+      });
       console.error('[Register] Unexpected error:', err);
       setErrorMsg('An unexpected error occurred. Please try again.');
     } finally {

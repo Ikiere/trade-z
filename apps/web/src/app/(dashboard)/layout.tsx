@@ -54,7 +54,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         setUser({
           id: sbUser.id,
           email: sbUser.email || '',
-          fullName: profileData?.display_name || sbUser.raw_user_meta_data?.full_name || 'Trader',
+          fullName: profileData?.display_name || sbUser.user_metadata?.full_name || 'Trader',
           role: 'user',
           status: 'active',
           createdAt: sbUser.created_at,

@@ -13,7 +13,6 @@ import {
   Eye,
   Target,
   Activity,
-  ChevronRight,
   ArrowRight,
   Check,
   X,
@@ -23,6 +22,8 @@ import {
   Globe,
   Menu,
   XIcon,
+  HelpCircle,
+  TrendingDown
 } from 'lucide-react';
 
 // ============================================================================
@@ -44,7 +45,7 @@ const stagger: Variants = {
 };
 
 const scaleIn: Variants = {
-  hidden: { opacity: 0, scale: 0.9 },
+  hidden: { opacity: 0, scale: 0.95 },
   visible: { opacity: 1, scale: 1, transition: { duration: 0.5 } },
 };
 
@@ -53,12 +54,12 @@ const scaleIn: Variants = {
 // ============================================================================
 
 const AI_STATUSES = [
-  { text: 'Scanning EURUSD on H4...', icon: '🔍', color: '#8b5cf6' },
-  { text: 'Analyzing Gold liquidity pools...', icon: '🧠', color: '#f59e0b' },
-  { text: 'GBPJPY rejected — weak momentum', icon: '🚫', color: '#ef4444' },
-  { text: 'USDJPY: 94% confidence — awaiting confirmation', icon: '✅', color: '#10b981' },
-  { text: 'No trade on AUDUSD — news in 12 min', icon: '⏸️', color: '#64748b' },
-  { text: 'Managing EURUSD — SL moved to BE', icon: '📊', color: '#6366f1' },
+  { text: 'Scanning EURUSD charts...', icon: '🔍', color: '#0055ff' },
+  { text: 'Checking Gold support levels...', icon: '📈', color: '#f59e0b' },
+  { text: 'GBPJPY setup skipped — weak volume', icon: '⏸️', color: '#ef4444' },
+  { text: 'USDJPY target matched — executing trade', icon: '✅', color: '#10b981' },
+  { text: 'Waiting on AUDUSD — economic news in 12 min', icon: '⏱️', color: '#64748b' },
+  { text: 'EURUSD updated — shifted stop loss to entry', icon: '🛡️', color: '#2563eb' },
 ];
 
 function AIStatusTicker() {
@@ -84,7 +85,7 @@ function AIStatusTicker() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
           transition={{ duration: 0.3 }}
-          className="text-sm font-mono text-[#94a3b8]"
+          className="text-xs font-mono text-[#94a3b8]"
         >
           {AI_STATUSES[index].icon} {AI_STATUSES[index].text}
         </motion.span>
@@ -98,40 +99,20 @@ function AIStatusTicker() {
 // ============================================================================
 
 function ConfidenceMeter({ value, required }: { value: number; required: number }) {
-  const passed = value >= required;
-  const color = passed ? '#10b981' : '#ef4444';
-
   return (
-    <div className="p-4 rounded-xl bg-bg-card border border-[#1e293b]">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-xs uppercase tracking-wider text-[#64748b]">
-          AI Confidence
+    <div className="p-4 rounded-xl bg-bg-card border border-[#1e293b] text-left">
+      <div className="flex justify-between items-center mb-2">
+        <span className="text-[10px] text-[#64748b] uppercase tracking-wider font-mono font-semibold">
+          AI Setup Match
         </span>
-        <span
-          className="text-xs font-mono px-2 py-0.5 rounded-full"
-          style={{
-            color,
-            backgroundColor: passed
-              ? 'rgba(16, 185, 129, 0.1)'
-              : 'rgba(239, 68, 68, 0.1)',
-          }}
-        >
-          {passed ? 'PASS' : 'REJECT'}
+        <span className="text-xs font-mono font-semibold text-white">
+          {value}% / {required}% required
         </span>
-      </div>
-      <div className="flex items-end gap-2 mb-2">
-        <span className="text-3xl font-bold font-mono" style={{ color }}>
-          {value}%
-        </span>
-        <span className="text-sm text-[#64748b] mb-1">/ {required}% required</span>
       </div>
       <div className="w-full h-2 bg-bg-secondary rounded-full overflow-hidden">
-        <motion.div
-          className="h-full rounded-full"
-          style={{ backgroundColor: color }}
-          initial={{ width: 0 }}
-          animate={{ width: `${value}%` }}
-          transition={{ duration: 1.5, ease: 'easeOut' }}
+        <div
+          className="h-full bg-brand-500 rounded-full transition-all duration-500"
+          style={{ width: `${value}%` }}
         />
       </div>
     </div>
@@ -146,12 +127,10 @@ function FeatureCard({
   icon: Icon,
   title,
   description,
-  delay = 0,
 }: {
   icon: React.ElementType;
   title: string;
   description: string;
-  delay?: number;
 }) {
   return (
     <motion.div
@@ -163,8 +142,8 @@ function FeatureCard({
         <div className="w-12 h-12 rounded-lg bg-brand-600/10 flex items-center justify-center mb-4 group-hover:bg-brand-600/20 transition-colors">
           <Icon className="w-6 h-6 text-brand-400" />
         </div>
-        <h3 className="text-lg font-semibold text-white mb-2">{title}</h3>
-        <p className="text-sm text-[#94a3b8] leading-relaxed">{description}</p>
+        <h3 className="text-base font-bold text-white mb-2">{title}</h3>
+        <p className="text-xs text-[#94a3b8] leading-relaxed">{description}</p>
       </div>
     </motion.div>
   );
@@ -192,7 +171,7 @@ function PricingCard({
   return (
     <motion.div
       variants={scaleIn}
-      className={`relative p-8 rounded-2xl border transition-all duration-300 ${
+      className={`relative p-8 rounded-2xl border transition-all duration-300 flex flex-col justify-between ${
         isPopular
           ? 'bg-gradient-to-b from-brand-600/10 to-bg-card border-brand-500/30 shadow-glow'
           : 'bg-bg-card border-[#1e293b] hover:border-[#334155]'
@@ -205,18 +184,38 @@ function PricingCard({
           </span>
         </div>
       )}
-      <div className="mb-6">
-        <h3 className="text-xl font-bold text-white mb-1">{name}</h3>
-        <p className="text-sm text-[#94a3b8]">{description}</p>
-      </div>
-      <div className="flex items-baseline gap-1 mb-6">
-        <span className="text-4xl font-bold text-white">${price}</span>
-        {price > 0 && <span className="text-[#64748b]">/month</span>}
-        {price === 0 && <span className="text-[#64748b]">forever</span>}
+      <div>
+        <div className="mb-6">
+          <h3 className="text-lg font-bold text-white mb-1">{name}</h3>
+          <p className="text-xs text-[#94a3b8]">{description}</p>
+        </div>
+        <div className="flex items-baseline gap-1 mb-6">
+          <span className="text-4xl font-bold text-white font-mono">${price}</span>
+          {price > 0 && <span className="text-xs text-[#64748b] font-mono">/month</span>}
+          {price === 0 && <span className="text-xs text-[#64748b] font-mono">forever</span>}
+        </div>
+        <ul className="space-y-3 mb-8">
+          {features.map((feature) => (
+            <li key={feature.name} className="flex items-center gap-3">
+              {feature.included ? (
+                <Check className="w-4 h-4 text-brand-400 shrink-0" />
+              ) : (
+                <X className="w-4 h-4 text-[#475569] shrink-0" />
+              )}
+              <span
+                className={`text-xs ${
+                  feature.included ? 'text-[#94a3b8]' : 'text-[#475569]'
+                }`}
+              >
+                {feature.name}
+              </span>
+            </li>
+          ))}
+        </ul>
       </div>
       <Link
         href="/register"
-        className={`block w-full text-center py-3 rounded-lg font-medium transition-all duration-200 mb-6 ${
+        className={`block w-full text-center py-2.5 rounded-lg text-xs font-bold transition-all duration-200 ${
           isPopular
             ? 'bg-gradient-to-r from-brand-600 to-brand-500 text-white hover:shadow-glow hover:-translate-y-0.5'
             : 'bg-bg-elevated text-white border border-[#1e293b] hover:border-[#334155] hover:bg-bg-hover'
@@ -224,24 +223,6 @@ function PricingCard({
       >
         {cta}
       </Link>
-      <ul className="space-y-3">
-        {features.map((feature) => (
-          <li key={feature.name} className="flex items-center gap-3">
-            {feature.included ? (
-              <Check className="w-4 h-4 text-brand-400 shrink-0" />
-            ) : (
-              <X className="w-4 h-4 text-[#475569] shrink-0" />
-            )}
-            <span
-              className={`text-sm ${
-                feature.included ? 'text-[#94a3b8]' : 'text-[#475569]'
-              }`}
-            >
-              {feature.name}
-            </span>
-          </li>
-        ))}
-      </ul>
     </motion.div>
   );
 }
@@ -275,24 +256,24 @@ function Navbar() {
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-600 to-brand-400 flex items-center justify-center">
-              <Zap className="w-5 h-5 text-white" />
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-600 to-brand-450 flex items-center justify-center">
+              <Zap className="w-4 h-4 text-white" />
             </div>
-            <span className="text-xl font-bold text-white">
-              Trade<span className="text-brand-400">-Z</span>
+            <span className="text-lg font-bold text-white tracking-tight">
+              Trade<span className="text-brand-400">Z</span>
             </span>
           </Link>
 
           {/* Desktop Navigation */}
           <div className="hidden md:flex items-center gap-8">
-            <a href="#features" className="text-sm text-[#94a3b8] hover:text-white transition-colors">
+            <a href="#features" className="text-xs text-[#94a3b8] hover:text-white transition-colors">
               Features
             </a>
-            <a href="#ai" className="text-sm text-[#94a3b8] hover:text-white transition-colors">
-              AI Engine
+            <a href="#rules" className="text-xs text-[#94a3b8] hover:text-white transition-colors">
+              Trading Rules
             </a>
-            <a href="#pricing" className="text-sm text-[#94a3b8] hover:text-white transition-colors">
-              Pricing
+            <a href="#pricing" className="text-xs text-[#94a3b8] hover:text-white transition-colors">
+              Plans
             </a>
           </div>
 
@@ -300,16 +281,15 @@ function Navbar() {
           <div className="hidden md:flex items-center gap-3">
             <Link
               href="/login"
-              className="px-4 py-2 text-sm text-[#94a3b8] hover:text-white transition-colors"
+              className="px-4 py-2 text-xs text-[#94a3b8] hover:text-white transition-colors font-medium"
             >
               Sign In
             </Link>
             <Link
               href="/register"
-              className="btn btn-primary text-sm"
+              className="btn btn-primary text-xs py-2 px-4"
             >
               Get Started
-              <ArrowRight className="w-4 h-4" />
             </Link>
           </div>
 
@@ -318,7 +298,7 @@ function Navbar() {
             className="md:hidden text-[#94a3b8] hover:text-white"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           >
-            {mobileMenuOpen ? <XIcon className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+            {mobileMenuOpen ? <XIcon className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
         </div>
       </div>
@@ -333,20 +313,20 @@ function Navbar() {
             className="md:hidden bg-bg-primary/95 backdrop-blur-xl border-b border-[#1e293b]"
           >
             <div className="px-4 py-4 space-y-3">
-              <a href="#features" className="block text-sm text-[#94a3b8] hover:text-white py-2">
+              <a href="#features" className="block text-xs text-[#94a3b8] hover:text-white py-2">
                 Features
               </a>
-              <a href="#ai" className="block text-sm text-[#94a3b8] hover:text-white py-2">
-                AI Engine
+              <a href="#rules" className="block text-xs text-[#94a3b8] hover:text-white py-2">
+                Trading Rules
               </a>
-              <a href="#pricing" className="block text-sm text-[#94a3b8] hover:text-white py-2">
-                Pricing
+              <a href="#pricing" className="block text-xs text-[#94a3b8] hover:text-white py-2">
+                Plans
               </a>
               <hr className="border-[#1e293b]" />
-              <Link href="/login" className="block text-sm text-[#94a3b8] hover:text-white py-2">
+              <Link href="/login" className="block text-xs text-[#94a3b8] hover:text-white py-2">
                 Sign In
               </Link>
-              <Link href="/register" className="btn btn-primary w-full text-sm">
+              <Link href="/register" className="btn btn-primary w-full text-xs py-2 text-center">
                 Get Started
               </Link>
             </div>
@@ -369,80 +349,71 @@ export default function LandingPage() {
       {/* ================================================================
           HERO SECTION
           ================================================================ */}
-      <section className="relative min-h-screen flex items-center justify-center pt-16">
-        {/* Animated gradient background */}
+      <section className="relative min-h-screen flex items-center justify-center pt-20">
         <div className="absolute inset-0 animated-bg" />
-
-        {/* Radial gradient overlay */}
         <div className="absolute inset-0 bg-gradient-radial from-brand-600/10 via-transparent to-transparent" />
-
-        {/* Grid pattern */}
+        
+        {/* Subtle dot grid */}
         <div
-          className="absolute inset-0 opacity-[0.03]"
+          className="absolute inset-0 opacity-[0.02]"
           style={{
             backgroundImage:
-              'linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)',
-            backgroundSize: '60px 60px',
+              'radial-gradient(rgba(255,255,255,0.15) 1px, transparent 1px)',
+            backgroundSize: '40px 40px',
           }}
         />
 
-        {/* Floating orbs */}
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-brand-600/10 rounded-full blur-[100px] animate-float" />
-        <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-brand-400/10 rounded-full blur-[80px] animate-float" style={{ animationDelay: '3s' }} />
-
-        <div className="relative z-10 max-w-5xl mx-auto px-4 text-center">
+        <div className="relative z-10 max-w-5xl mx-auto px-4 text-center space-y-8">
           {/* AI Status Ticker */}
           <motion.div
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
-            className="flex justify-center mb-8"
+            className="flex justify-center"
           >
             <AIStatusTicker />
           </motion.div>
 
           {/* Headline */}
           <motion.h1
-            initial={{ opacity: 0, y: 30 }}
+            initial={{ opacity: 0, y: 25 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.4, duration: 0.8 }}
-            className="text-4xl sm:text-5xl md:text-7xl font-bold leading-tight mb-6"
+            transition={{ delay: 0.4, duration: 0.7 }}
+            className="text-4xl sm:text-5xl md:text-7xl font-bold leading-tight tracking-tight"
           >
-            <span className="text-white">Your AI</span>{' '}
-            <span className="text-gradient">Trading</span>
-            <br />
-            <span className="text-white">Operating System</span>
+            <span className="text-white">Trade Forex with</span>{' '}
+            <br className="hidden sm:block" />
+            <span className="text-gradient">AI discipline.</span>
           </motion.h1>
 
           {/* Subtitle */}
           <motion.p
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.6 }}
-            className="text-lg sm:text-xl text-[#94a3b8] max-w-2xl mx-auto mb-8 leading-relaxed"
+            className="text-base sm:text-lg text-[#94a3b8] max-w-2xl mx-auto leading-relaxed"
           >
-            Trade-Z continuously scans markets, evaluates opportunities with institutional
-            discipline, explains every decision, and only trades when{' '}
-            <span className="text-brand-400 font-medium">every condition is met</span>.
+            No emotions. No manual mistakes. Trade-Z is your automated co-pilot. 
+            It scans markets, tracks risk, and triggers trades only when conditions are 100% right.
           </motion.p>
 
           {/* CTA Buttons */}
           <motion.div
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.8 }}
-            className="flex flex-col sm:flex-row gap-4 justify-center mb-12"
+            className="flex flex-col sm:flex-row gap-3 justify-center items-center"
           >
             <Link
               href="/register"
-              className="btn btn-primary px-8 py-3.5 text-base group"
+              className="btn btn-primary px-8 py-3.5 text-xs font-bold group w-full sm:w-auto text-center"
             >
               Start Trading Smarter
-              <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform inline ml-1" />
             </Link>
             <a
               href="#features"
-              className="btn btn-secondary px-8 py-3.5 text-base"
+              className="btn btn-secondary px-8 py-3.5 text-xs font-bold w-full sm:w-auto text-center"
             >
               See How It Works
             </a>
@@ -450,14 +421,14 @@ export default function LandingPage() {
 
           {/* Confidence Meter Demo */}
           <motion.div
-            initial={{ opacity: 0, y: 40 }}
+            initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 1.0, duration: 0.8 }}
+            transition={{ delay: 1.0, duration: 0.7 }}
             className="max-w-sm mx-auto"
           >
-            <ConfidenceMeter value={82} required={95} />
-            <p className="text-xs text-[#64748b] mt-2 font-mono">
-              Decision: NO TRADE — Weak momentum, upcoming USD news
+            <ConfidenceMeter value={76} required={85} />
+            <p className="text-[10px] text-red-400 mt-2 font-mono uppercase tracking-wider">
+              AI Decision: PASS (Market volume low, high impact news approaching)
             </p>
           </motion.div>
         </div>
@@ -466,26 +437,26 @@ export default function LandingPage() {
       {/* ================================================================
           FEATURES SECTION
           ================================================================ */}
-      <section id="features" className="py-24 px-4 relative">
+      <section id="features" className="py-24 px-4 relative border-t border-[#12121a]">
         <div className="max-w-7xl mx-auto">
           <motion.div
             initial="hidden"
             whileInView="visible"
             viewport={{ once: true, margin: '-100px' }}
             variants={stagger}
-            className="text-center mb-16"
+            className="text-center mb-16 space-y-4"
           >
-            <motion.div variants={fadeInUp} className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-brand-600/10 border border-brand-600/20 mb-6">
-              <Sparkles className="w-4 h-4 text-brand-400" />
-              <span className="text-sm text-brand-300 font-medium">Institutional-Grade Intelligence</span>
+            <motion.div variants={fadeInUp} className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-600/10 border border-brand-600/20">
+              <Sparkles className="w-3.5 h-3.5 text-brand-400" />
+              <span className="text-xs text-brand-300 font-medium font-mono uppercase">Designed to Protect Capital</span>
             </motion.div>
-            <motion.h2 variants={fadeInUp} className="text-3xl sm:text-4xl font-bold text-white mb-4">
+            <motion.h2 variants={fadeInUp} className="text-2xl sm:text-4xl font-bold text-white">
               Not a signal website.{' '}
-              <span className="text-gradient">An operating system.</span>
+              <span className="text-gradient">A risk-first system.</span>
             </motion.h2>
-            <motion.p variants={fadeInUp} className="text-lg text-[#94a3b8] max-w-2xl mx-auto">
-              Trade-Z doesn't just tell you what to trade. It thinks, analyzes, decides,
-              manages, and explains — like a disciplined institutional trader.
+            <motion.p variants={fadeInUp} className="text-sm text-[#94a3b8] max-w-2xl mx-auto leading-relaxed">
+              Most traders lose because of bad emotions and lack of discipline. Trade-Z solves this. 
+              The system calculates correct sizes, moves stops, and checks news blocks automatically.
             </motion.p>
           </motion.div>
 
@@ -498,59 +469,58 @@ export default function LandingPage() {
           >
             <FeatureCard
               icon={Brain}
-              title="AI Decision Engine"
-              description="25+ weighted factors analyzed across multiple timeframes. Every trade must pass a confidence threshold before execution."
+              title="Smart Scanner"
+              description="Scans 40+ currency pairs across multiple timeframes. No setup goes unchecked, and false breakouts are filtered."
             />
             <FeatureCard
               icon={Shield}
-              title="Risk Management"
-              description="Automated position sizing, daily loss limits, drawdown protection, and risk-per-trade controls built into every decision."
+              title="Capital Shield"
+              description="Automatic lot-size calculation, strict daily loss caps, and drawdown protect systems built directly into the core."
             />
             <FeatureCard
               icon={Eye}
-              title="Market Structure Analysis"
-              description="Break of Structure, Change of Character, Order Blocks, Fair Value Gaps — analyzed in real-time across all timeframes."
+              title="Technical Checks"
+              description="Reads market structures, identifies high-probability order blocks, and tracks fair value gaps in real-time."
             />
             <FeatureCard
               icon={Target}
-              title="Multi-Timeframe Confluence"
-              description="Monthly to 5-minute analysis. Higher timeframes set direction, lower timeframes find entries. Disagreement = no trade."
+              title="Confluence Matching"
+              description="Ensures higher timeframe trends align with short-term entries. If timeframes disagree, the system passes on the trade."
             />
             <FeatureCard
               icon={Activity}
-              title="Live Trade Management"
-              description="Auto break-even, trailing stops, partial profits, news protection, and drawdown management on every open position."
+              title="Dynamic Position Control"
+              description="Locks in profit automatically. Automatically shifts stops to entry (break-even) and clips partial wins."
             />
             <FeatureCard
               icon={Lock}
-              title="No Trade = Best Trade"
-              description="The AI confidently rejects poor setups. Low liquidity, upcoming news, excessive spread — the AI says no and explains why."
+              title="Knows When to Pass"
+              description="Skipping bad setups is a skill. The AI exits or passes during low volume, high news events, or wide spreads."
             />
             <FeatureCard
               icon={Bot}
-              title="AI Chat Assistant"
-              description="Ask 'Analyze Gold' or 'Why was my trade rejected?' and get clear, contextual explanations about any market or decision."
+              title="AI Conversational Chat"
+              description="Ask questions like 'What is my current margin?' or 'Why was Gold skipped?' in simple English and get instant answers."
             />
             <FeatureCard
               icon={LineChart}
-              title="TradingView Charts"
-              description="Professional-grade interactive charts with real-time data, technical indicators, and AI markup directly in the platform."
+              title="TradingView Chart Engine"
+              description="Professional live charts with active markups, support lines, and target boundaries visible instantly."
             />
             <FeatureCard
               icon={Globe}
-              title="Multiple Asset Classes"
-              description="Forex, crypto, commodities, indices — all analyzed by the same disciplined AI engine across the same confidence framework."
+              title="Multi-Broker Integrations"
+              description="Connect to your favorite brokerage accounts. Run simulation paper accounts or live execution slots."
             />
           </motion.div>
         </div>
       </section>
 
       {/* ================================================================
-          AI PHILOSOPHY SECTION
+          AI RULES PHILOSOPHY SECTION
           ================================================================ */}
-      <section id="ai" className="py-24 px-4 relative">
-        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-brand-900/5 to-transparent" />
-        <div className="max-w-7xl mx-auto relative">
+      <section id="rules" className="py-24 px-4 relative bg-bg-secondary/20 border-t border-[#12121a]">
+        <div className="max-w-7xl mx-auto">
           <motion.div
             initial="hidden"
             whileInView="visible"
@@ -559,34 +529,39 @@ export default function LandingPage() {
             className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center"
           >
             {/* Left side — Text */}
-            <div>
-              <motion.div variants={fadeInUp} className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-brand-600/10 border border-brand-600/20 mb-6">
-                <Brain className="w-4 h-4 text-brand-400" />
-                <span className="text-sm text-brand-300 font-medium">AI Philosophy</span>
+            <div className="space-y-6">
+              <motion.div variants={fadeInUp} className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-600/10 border border-brand-600/20">
+                <Brain className="w-3.5 h-3.5 text-brand-400" />
+                <span className="text-xs text-brand-300 font-medium font-mono uppercase">Trade Filtering Rules</span>
               </motion.div>
-              <motion.h2 variants={fadeInUp} className="text-3xl sm:text-4xl font-bold text-white mb-6">
-                The AI thinks before it acts.{' '}
-                <span className="text-gradient">Every single time.</span>
+              <motion.h2 variants={fadeInUp} className="text-2xl sm:text-4xl font-bold text-white">
+                The AI filters trade noise.{' '}
+                <span className="text-gradient">Safety first.</span>
               </motion.h2>
-              <motion.div variants={fadeInUp} className="space-y-4">
+              <motion.p variants={fadeInUp} className="text-xs text-[#94a3b8] leading-relaxed">
+                If even a single check fails, the AI cancels execution and explains the reason. 
+                This prevents unnecessary loss of capital on low-probability setups.
+              </motion.p>
+              <motion.div variants={fadeInUp} className="space-y-2">
                 {[
-                  { condition: 'Confidence too low', action: 'Reject' },
-                  { condition: 'Liquidity is poor', action: 'Reject' },
-                  { condition: 'Risk is too high', action: 'Reject' },
-                  { condition: 'News approaching', action: 'Reject' },
-                  { condition: 'Spread is excessive', action: 'Reject' },
-                  { condition: 'Timeframes disagree', action: 'Reject' },
-                  { condition: 'Daily loss limit hit', action: 'Reject' },
+                  { condition: 'Market trend direction disagrees', action: 'Pass setup' },
+                  { condition: 'Liquidity is thin or session is closed', action: 'Pass setup' },
+                  { condition: 'Stop loss is too wide for target ratio', action: 'Pass setup' },
+                  { condition: 'High-impact economic news within 1 hour', action: 'Pass setup' },
+                  { condition: 'Broker spreads are abnormally wide', action: 'Pass setup' },
+                  { condition: 'Daily account loss limit is reached', action: 'Lock trading' },
                 ].map(({ condition, action }) => (
                   <div
                     key={condition}
-                    className="flex items-center gap-3 p-3 rounded-lg bg-bg-card border border-[#1e293b] group hover:border-loss/30 transition-colors"
+                    className="flex items-center justify-between p-3 rounded-lg bg-bg-card border border-[#1e293b] hover:border-red-500/25 transition-all text-xs"
                   >
-                    <div className="w-8 h-8 rounded-lg bg-loss/10 flex items-center justify-center shrink-0">
-                      <X className="w-4 h-4 text-loss" />
+                    <div className="flex items-center gap-2">
+                      <div className="w-5 h-5 rounded-full bg-red-500/10 flex items-center justify-center">
+                        <X className="w-3 h-3 text-red-400" />
+                      </div>
+                      <span className="text-[#94a3b8]">{condition}</span>
                     </div>
-                    <span className="text-sm text-[#94a3b8] flex-1">{condition}</span>
-                    <span className="text-xs font-mono text-loss uppercase tracking-wider">
+                    <span className="font-mono text-[10px] text-red-400 font-bold uppercase tracking-wider">
                       {action}
                     </span>
                   </div>
@@ -594,64 +569,57 @@ export default function LandingPage() {
               </motion.div>
             </div>
 
-            {/* Right side — Demo card */}
+            {/* Right side — Live Demo Block */}
             <motion.div variants={scaleIn} className="space-y-4">
               <div className="p-6 rounded-2xl bg-bg-card border border-[#1e293b]">
                 <div className="flex items-center gap-3 mb-6">
-                  <div className="w-10 h-10 rounded-xl bg-brand-600/20 flex items-center justify-center">
+                  <div className="w-10 h-10 rounded-xl bg-brand-600/25 flex items-center justify-center">
                     <Brain className="w-5 h-5 text-brand-400" />
                   </div>
                   <div>
-                    <h4 className="text-sm font-semibold text-white">AI Analysis — EURUSD</h4>
-                    <p className="text-xs text-[#64748b]">4H Timeframe • Just now</p>
+                    <h4 className="text-sm font-semibold text-white">Rule Evaluation — EURUSD</h4>
+                    <p className="text-[10px] text-[#64748b] font-mono">H4 Interval • Live Check</p>
                   </div>
                 </div>
 
-                {/* Analysis Bars */}
                 <div className="space-y-3 mb-6">
                   {[
-                    { label: 'Market Structure', value: 88, color: '#10b981' },
-                    { label: 'Trend Alignment', value: 92, color: '#10b981' },
-                    { label: 'Momentum', value: 45, color: '#ef4444' },
-                    { label: 'Liquidity', value: 72, color: '#f59e0b' },
-                    { label: 'Volume', value: 68, color: '#f59e0b' },
-                    { label: 'News Impact', value: 30, color: '#ef4444' },
-                  ].map(({ label, value, color }) => (
+                    { label: 'Market Structure Alignment', value: 90, ok: true },
+                    { label: 'Trend Direction Match', value: 85, ok: true },
+                    { label: 'Momentum Alignment', value: 45, ok: false },
+                    { label: 'Liquidity Availability', value: 70, ok: true },
+                    { label: 'News Spread Danger', value: 20, ok: false },
+                  ].map(({ label, value, ok }) => (
                     <div key={label}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs text-[#94a3b8]">{label}</span>
-                        <span className="text-xs font-mono" style={{ color }}>
-                          {value}%
+                      <div className="flex items-center justify-between mb-1 text-xs">
+                        <span className="text-[#94a3b8]">{label}</span>
+                        <span className={`font-mono font-bold ${ok ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {ok ? 'PASS' : 'FAIL'} ({value}%)
                         </span>
                       </div>
-                      <div className="w-full h-1.5 bg-bg-secondary rounded-full overflow-hidden">
-                        <motion.div
-                          className="h-full rounded-full"
-                          style={{ backgroundColor: color }}
-                          initial={{ width: 0 }}
-                          whileInView={{ width: `${value}%` }}
-                          viewport={{ once: true }}
-                          transition={{ duration: 1, delay: 0.2 }}
+                      <div className="w-full h-1 bg-bg-secondary rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${ok ? 'bg-emerald-500' : 'bg-red-500'}`}
+                          style={{ width: `${value}%` }}
                         />
                       </div>
                     </div>
                   ))}
                 </div>
 
-                {/* Decision */}
-                <div className="p-4 rounded-xl bg-loss/5 border border-loss/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-6 h-6 rounded-full bg-loss/20 flex items-center justify-center">
-                      <X className="w-3 h-3 text-loss" />
+                {/* Final Decision */}
+                <div className="p-4 rounded-xl bg-red-500/5 border border-red-500/10">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <div className="w-5 h-5 rounded-full bg-red-500/10 flex items-center justify-center">
+                      <X className="w-3 h-3 text-red-400" />
                     </div>
-                    <span className="text-sm font-bold text-loss uppercase tracking-wider">
-                      No Trade
+                    <span className="text-xs font-bold text-red-400 uppercase tracking-wider font-mono">
+                      AI DECISION: PASS
                     </span>
                   </div>
-                  <p className="text-xs text-[#94a3b8] leading-relaxed">
-                    Momentum is weak at 45% (required: 60%). USD CPI release in 47 minutes.
-                    Liquidity below threshold for current session. Recommend waiting for
-                    London session open or post-news price action.
+                  <p className="text-[11px] text-[#94a3b8] leading-relaxed">
+                    Momentum check failed (45% vs 65% required). High-impact CPI inflation index reports 
+                    scheduled in 45 minutes. Execution halted to protect account safety.
                   </p>
                 </div>
               </div>
@@ -663,22 +631,22 @@ export default function LandingPage() {
       {/* ================================================================
           TRADING MODES SECTION
           ================================================================ */}
-      <section className="py-24 px-4">
+      <section className="py-24 px-4 border-t border-[#12121a]">
         <div className="max-w-7xl mx-auto">
           <motion.div
             initial="hidden"
             whileInView="visible"
             viewport={{ once: true, margin: '-100px' }}
             variants={stagger}
-            className="text-center mb-16"
+            className="text-center mb-16 space-y-3"
           >
-            <motion.h2 variants={fadeInUp} className="text-3xl sm:text-4xl font-bold text-white mb-4">
+            <h2 className="text-2xl sm:text-4xl font-bold text-white">
               Three ways to trade.{' '}
-              <span className="text-gradient">Your rules.</span>
-            </motion.h2>
-            <motion.p variants={fadeInUp} className="text-lg text-[#94a3b8] max-w-2xl mx-auto">
-              Whether you want full control, AI assistance, or complete automation.
-            </motion.p>
+              <span className="text-gradient">Your choice.</span>
+            </h2>
+            <p className="text-sm text-[#94a3b8] max-w-2xl mx-auto">
+              Decide how much control you want to retain or hand over to the AI co-pilot.
+            </p>
           </motion.div>
 
           <motion.div
@@ -690,43 +658,45 @@ export default function LandingPage() {
           >
             {[
               {
-                title: 'Manual Mode',
+                title: 'Co-Pilot Mode',
                 icon: BarChart3,
-                description: 'AI generates signals with full analysis. You review and place trades yourself.',
-                features: ['Full analysis & reasoning', 'Entry, SL, TP provided', 'Confidence scoring', 'You execute trades'],
+                description: 'AI does all the hard research. You get detailed alerts and place trades manually.',
+                features: ['Full research & rationale', 'Calculated SL/TP parameters', 'Confidence matches', 'You place trades'],
                 color: '#94a3b8',
               },
               {
-                title: 'Semi-Automatic',
+                title: 'One-Tap Mode',
                 icon: TrendingUp,
-                description: 'AI notifies you of opportunities. Approve with one tap and the AI executes.',
-                features: ['Push notifications', 'One-tap approval', 'AI handles execution', 'Review before action'],
-                color: '#8b5cf6',
+                description: 'AI alerts you when a trade setup forms. Tap once to approve, and the AI handles the rest.',
+                features: ['Instant push alerts', 'One-tap execution', 'Automated management', 'Review before entry'],
+                color: '#0055ff',
               },
               {
-                title: 'Fully Automatic',
+                title: 'Auto-Pilot Mode',
                 icon: Zap,
-                description: 'AI opens, manages, and closes trades based on your rules — 24/5 operation.',
-                features: ['Autonomous execution', 'Auto risk management', 'Trailing & partial TP', 'Daily loss protection'],
+                description: 'The AI executes trades, manages sizes, and closes positions automatically 24/5.',
+                features: ['Fully automated setup', 'Automatic stop loss moves', 'Daily loss protection caps', 'Hands-free execution'],
                 color: '#10b981',
               },
             ].map(({ title, icon: Icon, description, features, color }) => (
               <motion.div
                 key={title}
                 variants={fadeInUp}
-                className="p-6 rounded-2xl bg-bg-card border border-[#1e293b] hover:border-[#334155] transition-all duration-300"
+                className="p-6 rounded-2xl bg-bg-card border border-[#1e293b] hover:border-[#334155] transition-all duration-300 flex flex-col justify-between"
               >
-                <div
-                  className="w-12 h-12 rounded-xl flex items-center justify-center mb-4"
-                  style={{ backgroundColor: `${color}15` }}
-                >
-                  <Icon className="w-6 h-6" style={{ color }} />
+                <div>
+                  <div
+                    className="w-12 h-12 rounded-xl flex items-center justify-center mb-4"
+                    style={{ backgroundColor: `${color}15` }}
+                  >
+                    <Icon className="w-6 h-6" style={{ color }} />
+                  </div>
+                  <h3 className="text-lg font-bold text-white mb-2">{title}</h3>
+                  <p className="text-xs text-[#94a3b8] mb-6 leading-relaxed">{description}</p>
                 </div>
-                <h3 className="text-xl font-bold text-white mb-2">{title}</h3>
-                <p className="text-sm text-[#94a3b8] mb-4 leading-relaxed">{description}</p>
                 <ul className="space-y-2">
                   {features.map((f) => (
-                    <li key={f} className="flex items-center gap-2 text-sm text-[#94a3b8]">
+                    <li key={f} className="flex items-center gap-2 text-xs text-[#94a3b8]">
                       <Check className="w-4 h-4 text-brand-400 shrink-0" />
                       {f}
                     </li>
@@ -741,7 +711,7 @@ export default function LandingPage() {
       {/* ================================================================
           PRICING SECTION
           ================================================================ */}
-      <section id="pricing" className="py-24 px-4 relative">
+      <section id="pricing" className="py-24 px-4 relative border-t border-[#12121a]">
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-brand-900/5 to-transparent" />
         <div className="max-w-7xl mx-auto relative">
           <motion.div
@@ -749,14 +719,14 @@ export default function LandingPage() {
             whileInView="visible"
             viewport={{ once: true }}
             variants={stagger}
-            className="text-center mb-16"
+            className="text-center mb-16 space-y-3"
           >
-            <motion.h2 variants={fadeInUp} className="text-3xl sm:text-4xl font-bold text-white mb-4">
+            <h2 className="text-2xl sm:text-4xl font-bold text-white">
               Simple, transparent pricing
-            </motion.h2>
-            <motion.p variants={fadeInUp} className="text-lg text-[#94a3b8] max-w-2xl mx-auto">
-              Start for free. Upgrade when you're ready for more power.
-            </motion.p>
+            </h2>
+            <p className="text-sm text-[#94a3b8] max-w-2xl mx-auto">
+              Start for free. No credit card required. Upgrade as you scale.
+            </p>
           </motion.div>
 
           <motion.div
@@ -767,54 +737,54 @@ export default function LandingPage() {
             className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto"
           >
             <PricingCard
-              name="Free"
+              name="Free Plan"
               price={0}
-              description="Get started with basic AI signals"
+              description="Basic AI signal setups for beginners"
               cta="Start Free"
               isPopular={false}
               features={[
-                { name: 'AI Market Analysis', included: true },
-                { name: 'Up to 5 signals/day', included: true },
-                { name: 'Manual mode only', included: true },
-                { name: '1 paper trading account', included: true },
-                { name: 'Trade journal', included: true },
-                { name: 'AI Chat', included: false },
-                { name: 'Automation', included: false },
-                { name: 'Live broker connections', included: false },
+                { name: 'AI Market Scan parameters', included: true },
+                { name: 'Up to 5 trade alerts daily', included: true },
+                { name: 'Manual trading support', included: true },
+                { name: '1 simulation demo account', included: true },
+                { name: 'Digital trade journal', included: true },
+                { name: 'AI Chat integration', included: false },
+                { name: 'Auto-pilot execution', included: false },
+                { name: 'Live broker slots', included: false },
               ]}
             />
             <PricingCard
-              name="Pro"
+              name="Pro Plan"
               price={49}
-              description="Full AI power for serious traders"
+              description="Complete co-pilot utilities for regular traders"
               cta="Get Pro"
               isPopular={true}
               features={[
-                { name: 'Unlimited signals', included: true },
-                { name: 'All trading modes', included: true },
-                { name: '5 broker connections', included: true },
-                { name: 'AI Chat (500 msgs/mo)', included: true },
-                { name: 'Advanced analytics', included: true },
-                { name: 'Semi & auto modes', included: true },
-                { name: 'News protection', included: true },
-                { name: 'Priority support', included: false },
+                { name: 'Unlimited trade alerts', included: true },
+                { name: 'All 3 execution modes', included: true },
+                { name: 'Up to 5 live broker slots', included: true },
+                { name: 'Interactive AI Chat helper', included: true },
+                { name: 'Detailed execution logs', included: true },
+                { name: 'Drawdown safety modifiers', included: true },
+                { name: 'News filter protection', included: true },
+                { name: 'Priority alert routing', included: false },
               ]}
             />
             <PricingCard
-              name="Enterprise"
+              name="Expert Plan"
               price={199}
-              description="Maximum power for professionals"
+              description="Full scale power for high volume operators"
               cta="Contact Sales"
               isPopular={false}
               features={[
-                { name: 'Everything in Pro', included: true },
-                { name: 'Unlimited AI Chat', included: true },
-                { name: 'Unlimited brokers', included: true },
-                { name: 'API access', included: true },
-                { name: 'Custom AI strategies', included: true },
-                { name: 'White-label options', included: true },
-                { name: 'Dedicated manager', included: true },
-                { name: 'Priority support', included: true },
+                { name: 'Everything inside Pro Plan', included: true },
+                { name: 'Unlimited AI Chat messages', included: true },
+                { name: 'Unlimited live broker connections', included: true },
+                { name: 'Direct strategy API access', included: true },
+                { name: 'Custom AI strategy scripting', included: true },
+                { name: 'White-label layout adjustments', included: true },
+                { name: 'Dedicated system manager', included: true },
+                { name: 'Priority developer assistance', included: true },
               ]}
             />
           </motion.div>
@@ -824,7 +794,7 @@ export default function LandingPage() {
       {/* ================================================================
           CTA SECTION
           ================================================================ */}
-      <section className="py-24 px-4">
+      <section className="py-24 px-4 border-t border-[#12121a]">
         <div className="max-w-4xl mx-auto">
           <motion.div
             initial="hidden"
@@ -833,24 +803,24 @@ export default function LandingPage() {
             variants={fadeInUp}
             className="relative p-12 rounded-3xl bg-gradient-to-br from-brand-600/20 to-bg-card border border-brand-500/20 text-center overflow-hidden"
           >
-            {/* Glow effects */}
-            <div className="absolute top-0 right-0 w-64 h-64 bg-brand-600/20 rounded-full blur-[80px]" />
-            <div className="absolute bottom-0 left-0 w-48 h-48 bg-brand-400/15 rounded-full blur-[60px]" />
+            {/* Soft backdrop glows */}
+            <div className="absolute top-0 right-0 w-64 h-64 bg-brand-500/10 rounded-full blur-[80px]" />
+            <div className="absolute bottom-0 left-0 w-48 h-48 bg-brand-600/10 rounded-full blur-[60px]" />
 
-            <div className="relative">
-              <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
-                Ready to trade with{' '}
-                <span className="text-gradient">institutional discipline?</span>
+            <div className="relative space-y-6">
+              <h2 className="text-2xl sm:text-4xl font-bold text-white">
+                Start trading with{' '}
+                <span className="text-gradient">AI discipline today.</span>
               </h2>
-              <p className="text-lg text-[#94a3b8] mb-8 max-w-xl mx-auto">
-                Join traders who trust AI that knows when <em>not</em> to trade.
+              <p className="text-sm text-[#94a3b8] max-w-xl mx-auto leading-relaxed">
+                Connect your account and join traders who let data, risk rules, and statistics handle the execution.
               </p>
               <Link
                 href="/register"
-                className="btn btn-primary px-10 py-4 text-base group inline-flex"
+                className="btn btn-primary px-10 py-3.5 text-xs font-bold inline-flex items-center gap-2 group"
               >
-                Get Started — It's Free
-                <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                Create Free Account
+                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </Link>
             </div>
           </motion.div>
@@ -860,31 +830,31 @@ export default function LandingPage() {
       {/* ================================================================
           FOOTER
           ================================================================ */}
-      <footer className="border-t border-[#1e293b] py-12 px-4">
+      <footer className="border-t border-[#1e293b] py-12 px-4 bg-bg-primary">
         <div className="max-w-7xl mx-auto">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8 text-xs">
             {/* Brand */}
-            <div>
-              <Link href="/" className="flex items-center gap-2 mb-4">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-600 to-brand-400 flex items-center justify-center">
-                  <Zap className="w-5 h-5 text-white" />
+            <div className="space-y-4">
+              <Link href="/" className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-600 to-brand-450 flex items-center justify-center">
+                  <Zap className="w-4 h-4 text-white" />
                 </div>
-                <span className="text-lg font-bold text-white">
-                  Trade<span className="text-brand-400">-Z</span>
+                <span className="text-base font-bold text-white">
+                  Trade<span className="text-brand-400">Z</span>
                 </span>
               </Link>
-              <p className="text-sm text-[#64748b] leading-relaxed">
-                AI Trading Operating System. Trade with institutional discipline.
+              <p className="text-[#64748b] leading-relaxed">
+                AI Forex trading assistant. Built for risk protection and disciplined execution.
               </p>
             </div>
 
-            {/* Product */}
+            {/* Product Links */}
             <div>
-              <h4 className="text-sm font-semibold text-white mb-4">Product</h4>
-              <ul className="space-y-2">
-                {['Features', 'AI Engine', 'Pricing', 'Changelog', 'Documentation'].map((item) => (
+              <h4 className="font-bold text-white mb-4 uppercase tracking-wider">Product</h4>
+              <ul className="space-y-2 font-mono text-[11px]">
+                {['Features', 'Trading Rules', 'Pricing Plans', 'Changelog'].map((item) => (
                   <li key={item}>
-                    <a href="#" className="text-sm text-[#64748b] hover:text-white transition-colors">
+                    <a href="#" className="text-[#64748b] hover:text-white transition-colors">
                       {item}
                     </a>
                   </li>
@@ -892,13 +862,13 @@ export default function LandingPage() {
               </ul>
             </div>
 
-            {/* Company */}
+            {/* Resources Links */}
             <div>
-              <h4 className="text-sm font-semibold text-white mb-4">Company</h4>
-              <ul className="space-y-2">
-                {['About', 'Blog', 'Careers', 'Contact', 'Partners'].map((item) => (
+              <h4 className="font-bold text-white mb-4 uppercase tracking-wider">Company</h4>
+              <ul className="space-y-2 font-mono text-[11px]">
+                {['About Us', 'Contact', 'FAQ'].map((item) => (
                   <li key={item}>
-                    <a href="#" className="text-sm text-[#64748b] hover:text-white transition-colors">
+                    <a href="#" className="text-[#64748b] hover:text-white transition-colors">
                       {item}
                     </a>
                   </li>
@@ -908,11 +878,11 @@ export default function LandingPage() {
 
             {/* Legal */}
             <div>
-              <h4 className="text-sm font-semibold text-white mb-4">Legal</h4>
-              <ul className="space-y-2">
-                {['Terms of Service', 'Privacy Policy', 'Risk Disclaimer', 'Cookie Policy'].map((item) => (
+              <h4 className="font-bold text-white mb-4 uppercase tracking-wider">Legal</h4>
+              <ul className="space-y-2 font-mono text-[11px]">
+                {['Terms of Service', 'Privacy Policy', 'Risk Disclaimer'].map((item) => (
                   <li key={item}>
-                    <a href="#" className="text-sm text-[#64748b] hover:text-white transition-colors">
+                    <a href="#" className="text-[#64748b] hover:text-white transition-colors">
                       {item}
                     </a>
                   </li>
@@ -921,12 +891,10 @@ export default function LandingPage() {
             </div>
           </div>
 
-          <div className="pt-8 border-t border-[#1e293b] flex flex-col sm:flex-row items-center justify-between gap-4">
-            <p className="text-sm text-[#475569]">
-              © {new Date().getFullYear()} Trade-Z. All rights reserved.
-            </p>
-            <p className="text-xs text-[#475569]">
-              Trading involves risk. Past performance does not guarantee future results.
+          <div className="pt-8 border-t border-[#1e293b] flex flex-col sm:flex-row items-center justify-between gap-4 text-[10px] text-[#475569] font-mono">
+            <p>© {new Date().getFullYear()} Trade-Z. All rights reserved.</p>
+            <p className="text-center sm:text-right max-w-md">
+              Trading Forex and leveraged instruments involves high risk. Only trade with money you can afford to lose.
             </p>
           </div>
         </div>

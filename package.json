@@ -16,8 +16,8 @@
     "dev:ai": "turbo dev --filter=@trade-z/ai-service",
     "build:web": "turbo build --filter=@trade-z/web",
     "build:api": "turbo build --filter=@trade-z/api",
-    "start": "pnpm --filter=@trade-z/web start",
-    "star": "pnpm --filter=@trade-z/web start"
+    "start": "npx next start apps/web",
+    "star": "npx next start apps/web"
   },
   "devDependencies": {
     "turbo": "^2.5.0",

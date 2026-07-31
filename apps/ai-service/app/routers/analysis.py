@@ -109,48 +109,56 @@ async def chat_analysis(request: ChatQueryRequest):
             elif "flash" in model_name.lower():
                 model_name = "google/gemini-2.5-flash:free"
 
-            payload = {
-                "model": model_name,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are Trade-Z AI, an expert Forex, Crypto and general market analysis assistant. "
-                            "You talk professionally, explain Forex concepts clearly to beginners when asked, and provide "
-                            "institutional analysis using terms like order blocks, liquidity sweeps, risk-to-reward ratio, "
-                            "win rate, and market structures. Keep answers highly educational, concise, and professional."
-                        )
-                    },
-                    {
-                        "role": "user",
-                        "content": request.prompt
-                    }
-                ]
-            }
+            async def attempt_call(model_to_use: str):
+                payload = {
+                    "model": model_to_use,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are Trade-Z AI, an expert Forex, Crypto and general market analysis assistant. "
+                                "You talk professionally, explain Forex concepts clearly to beginners when asked, and provide "
+                                "institutional analysis using terms like order blocks, liquidity sweeps, risk-to-reward ratio, "
+                                "win rate, and market structures. Keep answers highly educational, concise, and professional."
+                            )
+                        },
+                        {
+                            "role": "user",
+                            "content": request.prompt
+                        }
+                    ]
+                }
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    return await client.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers=headers,
+                        json=payload
+                    )
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers=headers,
-                    json=payload
-                )
+            # First attempt: user's primary configured model
+            response = await attempt_call(model_name)
 
-                if response.status_code == 200:
-                    result = response.json()
-                    choices = result.get("choices", [])
-                    if choices:
-                        reply = choices[0].get("message", {}).get("content", "")
-                        if reply:
-                            return {
-                                "success": True,
-                                "data": {
-                                    "reply": reply,
-                                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                                },
+            # Fallback if model is blocked (e.g. 404 for paid models on free-tier keys)
+            if response.status_code != 200:
+                print(f"Primary model {model_name} failed with status {response.status_code}. Falling back to openrouter/free...")
+                response = await attempt_call("openrouter/free")
+
+            if response.status_code == 200:
+                result = response.json()
+                choices = result.get("choices", [])
+                if choices:
+                    reply = choices[0].get("message", {}).get("content", "")
+                    if reply:
+                        return {
+                            "success": True,
+                            "data": {
+                                "reply": reply,
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                            }
-                
-                print(f"OpenRouter Error status {response.status_code}: {response.text}")
+                            },
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+            else:
+                print(f"OpenRouter call failed with status {response.status_code}: {response.text}")
         except Exception as e:
             print(f"OpenRouter Connection Exception: {e}")
 

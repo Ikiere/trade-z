@@ -1,5 +1,15 @@
 import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ChatService } from './chat.service';
+import { IsString, IsOptional } from 'class-validator';
+
+export class AnalysisDto {
+  @IsString()
+  pair!: string;
+
+  @IsString()
+  @IsOptional()
+  timeframe?: string;
+}
 
 @Controller('chat')
 export class ChatController {
@@ -18,7 +28,7 @@ export class ChatController {
 
   @Post('analysis')
   @HttpCode(HttpStatus.OK)
-  async getAnalysis(@Body() body: { pair: string; timeframe?: string }) {
+  async getAnalysis(@Body() body: AnalysisDto) {
     const result = await this.chatService.getQuickAnalysis(body.pair, body.timeframe || '4h');
     return result;
   }

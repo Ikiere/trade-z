@@ -155,4 +155,99 @@ export class TradesService {
 
     return data;
   }
+
+  async createSignal(userId: string, signalData: any) {
+    const { data, error } = await this.supabase
+      .from('signals')
+      .insert({
+        user_id: userId,
+        pair: signalData.pair,
+        direction: signalData.direction,
+        status: signalData.status,
+        entry_price: signalData.entry_price,
+        stop_loss: signalData.stop_loss,
+        take_profit: signalData.take_profit,
+        confidence: signalData.confidence,
+        ai_reasoning: signalData.ai_reasoning,
+        timeframe: signalData.timeframe,
+        strategy: signalData.strategy,
+        tags: signalData.tags,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error inserting signal via service role:', error.message);
+      throw new Error(`Failed to create signal: ${error.message}`);
+    }
+    return data;
+  }
+
+  async logManualTrade(
+    userId: string,
+    data: {
+      pair: string;
+      direction: 'long' | 'short';
+      lotSize: number;
+      pnl: number;
+    },
+  ) {
+    // 1. Insert trade
+    let entry = 1.0845;
+    if (data.pair.includes('GBP')) entry = 1.2680;
+    if (data.pair.includes('JPY')) entry = 154.20;
+    if (data.pair.includes('XAU')) entry = 2350.50;
+
+    const exit = data.direction === 'long' ? entry + (data.pnl / 1000) : entry - (data.pnl / 1000);
+
+    const { data: newTrade, error: tradeErr } = await this.supabase
+      .from('trades')
+      .insert({
+        user_id: userId,
+        pair: data.pair,
+        type: 'market',
+        direction: data.direction,
+        status: 'closed',
+        entry_price: entry,
+        exit_price: exit,
+        stop_loss: entry * 0.99,
+        take_profit: entry * 1.02,
+        lot_size: data.lotSize,
+        pnl: data.pnl,
+        opened_at: new Date(Date.now() - 3600000).toISOString(),
+        closed_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (tradeErr) {
+      throw new Error(`Failed to log manual trade: ${tradeErr.message}`);
+    }
+
+    // 2. Fetch and update default portfolio
+    const { data: portfolio } = await this.supabase
+      .from('portfolios')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('is_default', true)
+      .maybeSingle();
+
+    if (portfolio) {
+      const currentBal = Number(portfolio.balance);
+      const currentEq = Number(portfolio.equity);
+      const currentPnl = Number(portfolio.today_pnl);
+
+      await this.supabase
+        .from('portfolios')
+        .update({
+          balance: currentBal + data.pnl,
+          equity: currentEq + data.pnl,
+          today_pnl: currentPnl + data.pnl,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', portfolio.id);
+    }
+
+    return newTrade;
+  }
 }

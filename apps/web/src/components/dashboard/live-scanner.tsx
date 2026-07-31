@@ -146,24 +146,35 @@ export default function LiveScannerWidget() {
           const direction = reasoning.toLowerCase().includes('sell') || reasoning.toLowerCase().includes('short') ? 'short' : 'long';
           const priceInfo = getSimulatedPrice(pair);
 
-          // Write Signal to Supabase
+          // Write Signal to Supabase via NestJS proxy API (bypasses client-side RLS)
           const supabase = createClient();
-          const { error: sigError } = await supabase.from('signals').insert({
-            user_id: userId,
-            pair,
-            direction,
-            status: isApproved ? 'active' : 'rejected',
-            entry_price: priceInfo.entry,
-            stop_loss: priceInfo.sl,
-            take_profit: priceInfo.tp,
-            confidence,
-            ai_reasoning: reasoning,
-            timeframe: '4h',
-            strategy: 'AI Confluence Flow',
-            tags: isApproved ? ['bullish_breakout', 'h4_orderblock'] : ['insufficient_momentum']
+          const { data: { session } } = await supabase.auth.getSession();
+          const token = session?.access_token;
+
+          const sigRes = await fetch(`${apiBase}/api/v1/trades/signals`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              pair,
+              direction,
+              status: isApproved ? 'active' : 'rejected',
+              entry_price: priceInfo.entry,
+              stop_loss: priceInfo.sl,
+              take_profit: priceInfo.tp,
+              confidence,
+              ai_reasoning: reasoning,
+              timeframe: '4h',
+              strategy: 'AI Confluence Flow',
+              tags: isApproved ? ['bullish_breakout', 'h4_orderblock'] : ['insufficient_momentum']
+            })
           });
 
-          if (sigError) throw sigError;
+          if (!sigRes.ok) {
+            throw new Error(`Gateway failed to save signal: ${sigRes.statusText}`);
+          }
 
           if (isApproved) {
             setLogs(prev => [
@@ -175,27 +186,28 @@ export default function LiveScannerWidget() {
             if (tradingMode === 'fully_automatic') {
               setLogs(prev => [`[AUTO TRADING] Autonomous execution triggered for ${pair}...`, ...prev]);
               
-              // Place paper/live trade row
-              const { error: tradeErr } = await supabase.from('trades').insert({
-                user_id: userId,
-                pair,
-                type: 'market',
-                direction,
-                status: 'open',
-                entry_price: priceInfo.entry,
-                stop_loss: priceInfo.sl,
-                take_profit: priceInfo.tp,
-                lot_size: defaultLot,
-                risk_percent: 1.0,
-                ai_confidence: confidence,
-                ai_reasoning: reasoning,
-                opened_at: new Date().toISOString()
+              // Place paper/live trade via NestJS API
+              const tradeRes = await fetch(`${apiBase}/api/v1/trades`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                  pair,
+                  direction,
+                  entryPrice: priceInfo.entry,
+                  stopLoss: priceInfo.sl,
+                  takeProfit: priceInfo.tp,
+                  riskPercent: 1.0
+                })
               });
 
-              if (tradeErr) {
-                console.error('Auto trade insertion error:', tradeErr);
+              if (tradeRes.ok) {
+                setLogs(prev => [`[AUTO TRADING] Successfully placed live position for ${pair}!`, ...prev]);
               } else {
-                setLogs(prev => [`[AUTO TRADING] Successfully placed live position for ${pair} (${defaultLot} Lots)!`, ...prev]);
+                const errBody = await tradeRes.json();
+                setLogs(prev => [`[AUTO TRADING] Auto execution failed: ${errBody?.message || tradeRes.statusText}`, ...prev]);
               }
             }
           } else {
@@ -244,54 +256,30 @@ export default function LiveScannerWidget() {
     const supabase = createClient();
     const netPnl = parseFloat(logPnl);
     const size = parseFloat(logLot);
-    const priceInfo = getSimulatedPrice(logPair);
 
     try {
-      // 1. Insert trade
-      const { error: tradeErr } = await supabase.from('trades').insert({
-        user_id: userId,
-        pair: logPair,
-        type: 'market',
-        direction: logDirection,
-        status: 'closed',
-        entry_price: priceInfo.entry,
-        stop_loss: priceInfo.sl,
-        take_profit: priceInfo.tp,
-        exit_price: logDirection === 'long' ? priceInfo.entry + (netPnl / 1000) : priceInfo.entry - (netPnl / 1000),
-        lot_size: size,
-        pnl: netPnl,
-        opened_at: new Date(Date.now() - 3600000).toISOString(),
-        closed_at: new Date().toISOString()
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      // Log trade via NestJS proxy (bypasses RLS and safely updates portfolio in single transaction)
+      const res = await fetch(`${apiBase}/api/v1/trades/log`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          pair: logPair,
+          direction: logDirection,
+          lotSize: size,
+          pnl: netPnl
+        })
       });
 
-      if (tradeErr) throw tradeErr;
-
-      // 2. Fetch and update portfolio balance
-      const { data: port, error: portFetchErr } = await supabase
-        .from('portfolios')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('is_default', true)
-        .maybeSingle();
-
-      if (portFetchErr) throw portFetchErr;
-
-      if (port) {
-        const currentBal = Number(port.balance);
-        const currentEq = Number(port.equity);
-        const currentPnl = Number(port.today_pnl);
-
-        const { error: portUpdErr } = await supabase
-          .from('portfolios')
-          .update({
-            balance: currentBal + netPnl,
-            equity: currentEq + netPnl,
-            today_pnl: currentPnl + netPnl,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', port.id);
-
-        if (portUpdErr) throw portUpdErr;
+      if (!res.ok) {
+        const errBody = await res.json();
+        throw new Error(errBody?.message || `Gateway error: ${res.statusText}`);
       }
 
       setLogSuccess('Trade logged successfully & account balance updated!');

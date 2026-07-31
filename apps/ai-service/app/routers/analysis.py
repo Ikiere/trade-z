@@ -8,6 +8,7 @@ import pandas as pd
 from app.services.indicators import calculate_ema, calculate_rsi
 from app.services.structure import detect_market_structure
 from app.services.decision import evaluate_decision
+from app.services.calendar import fetch_tradingview_calendar, check_news_filter
 
 router = APIRouter()
 
@@ -21,6 +22,19 @@ class AnalysisRequest(BaseModel):
 
 class ChatQueryRequest(BaseModel):
     prompt: str
+
+
+@router.get("/calendar")
+async def get_calendar():
+    """
+    Fetches real-time economic calendar data from TradingView.
+    """
+    events = await fetch_tradingview_calendar()
+    return {
+        "success": True,
+        "data": events,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
 
 
 @router.post("/quick")
@@ -42,7 +56,10 @@ async def quick_analysis(request: AnalysisRequest):
     rsi = calculate_rsi(df, period=3).iloc[-1]
     structure = detect_market_structure(df)
 
-    # 3. Evaluate decision
+    # 3. Read the real economic calendar to enforce the news safety check
+    news_safe = await check_news_filter(request.pair)
+
+    # 4. Evaluate decision
     decision_result = evaluate_decision(
         pair=request.pair,
         timeframe=request.timeframe,
@@ -52,7 +69,7 @@ async def quick_analysis(request: AnalysisRequest):
         liquidity_score=95.0,
         volume_score=90.0,
         risk_reward_ratio=2.5,
-        news_impact_low=True,
+        news_impact_low=news_safe,
     )
 
     return {

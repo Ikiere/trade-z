@@ -17,6 +17,8 @@ async function bootstrap() {
     'http://127.0.0.1:3000',
     'http://127.0.0.1:3001',
     'https://trade-z-web.vercel.app',
+    'https://trade-z-web-production.up.railway.app',
+    'https://trade-z-production-9a14.up.railway.app',
   ];
   if (corsOrigin) {
     allowedOrigins.push(corsOrigin);

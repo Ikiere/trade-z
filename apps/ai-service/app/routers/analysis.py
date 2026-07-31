@@ -100,8 +100,17 @@ async def chat_analysis(request: ChatQueryRequest):
                 "HTTP-Referer": "https://trade-z-web.vercel.app",
                 "X-Title": "Trade-Z",
             }
+            # Clean model name for OpenRouter compatibility
+            model_name = settings.llm_model.strip().lstrip("~")
+            if "opus" in model_name.lower():
+                model_name = "anthropic/claude-3-opus"
+            elif "sonnet" in model_name.lower():
+                model_name = "anthropic/claude-3.5-sonnet"
+            elif "flash" in model_name.lower():
+                model_name = "google/gemini-2.5-flash:free"
+
             payload = {
-                "model": settings.llm_model,
+                "model": model_name,
                 "messages": [
                     {
                         "role": "system",

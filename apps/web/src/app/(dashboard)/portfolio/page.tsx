@@ -38,12 +38,37 @@ export default function PortfolioPage() {
         if (!user) return;
 
         // Fetch default portfolio
-        const { data: portData } = await supabase
+        let portData = null;
+        const { data: fetchPort } = await supabase
           .from('portfolios')
           .select('*')
           .eq('user_id', user.id)
           .eq('is_default', true)
           .maybeSingle();
+
+        if (fetchPort) {
+          portData = fetchPort;
+        } else {
+          // Auto-repair: Create a default portfolio if missing
+          const { data: createdPort } = await supabase
+            .from('portfolios')
+            .insert({
+              user_id: user.id,
+              name: 'Default Portfolio',
+              is_default: true,
+              balance: 10000.00,
+              equity: 10000.00,
+              margin: 0.00,
+              free_margin: 10000.00,
+              margin_level: 0.00,
+              currency: 'USD'
+            })
+            .select()
+            .maybeSingle();
+          if (createdPort) {
+            portData = createdPort;
+          }
+        }
 
         // Fetch closed trades for profit factor calculation
         const { data: closedTrades } = await supabase

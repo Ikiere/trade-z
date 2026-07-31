@@ -44,12 +44,37 @@ export default function DashboardPage() {
         if (!user) return;
 
         // 1. Fetch default portfolio
-        const { data: portfolio } = await supabase
+        let portfolio = null;
+        const { data: fetchPort } = await supabase
           .from('portfolios')
           .select('*')
           .eq('user_id', user.id)
           .eq('is_default', true)
           .maybeSingle();
+
+        if (fetchPort) {
+          portfolio = fetchPort;
+        } else {
+          // Auto-repair: Create a default portfolio if missing
+          const { data: createdPort } = await supabase
+            .from('portfolios')
+            .insert({
+              user_id: user.id,
+              name: 'Default Portfolio',
+              is_default: true,
+              balance: 10000.00,
+              equity: 10000.00,
+              margin: 0.00,
+              free_margin: 10000.00,
+              margin_level: 0.00,
+              currency: 'USD'
+            })
+            .select()
+            .maybeSingle();
+          if (createdPort) {
+            portfolio = createdPort;
+          }
+        }
 
         // 2. Fetch open positions
         const { data: activePositions } = await supabase

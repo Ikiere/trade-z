@@ -15,4 +15,11 @@ export class ChatController {
       timestamp: new Date().toISOString(),
     };
   }
+
+  @Post('analysis')
+  @HttpCode(HttpStatus.OK)
+  async getAnalysis(@Body() body: { pair: string; timeframe?: string }) {
+    const result = await this.chatService.getQuickAnalysis(body.pair, body.timeframe || '4h');
+    return result;
+  }
 }

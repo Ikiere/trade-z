@@ -74,20 +74,36 @@ export class TradesController {
     @Headers('authorization') auth: string,
     @Body() body: Record<string, any>,
   ) {
-    const userId = this.extractUserId(auth);
-    if (!userId) throw new UnauthorizedException('Valid session token required');
+    try {
+      const userId = this.extractUserId(auth);
+      if (!userId) throw new UnauthorizedException('Valid session token required');
 
-    if (!body?.pair || !body?.direction) {
-      throw new BadRequestException('pair and direction are required');
+      if (!body?.pair || !body?.direction) {
+        throw new BadRequestException('pair and direction are required');
+      }
+
+      const data = await this.tradesService.createSignal(userId, body);
+      if (data && data._saved === false) {
+        return {
+          success: false,
+          error: data._error || 'Database write failed',
+          timestamp: new Date().toISOString(),
+        };
+      }
+      return {
+        success: true,
+        data,
+        message: 'Signal created successfully',
+        timestamp: new Date().toISOString(),
+      };
+    } catch (err: any) {
+      console.error('[trades.controller] createSignal error:', err.message);
+      return {
+        success: false,
+        error: err.message || 'Unknown database write error',
+        timestamp: new Date().toISOString(),
+      };
     }
-
-    const data = await this.tradesService.createSignal(userId, body);
-    return {
-      success: true,
-      data,
-      message: 'Signal created successfully',
-      timestamp: new Date().toISOString(),
-    };
   }
 
   /**
@@ -100,25 +116,34 @@ export class TradesController {
     @Headers('authorization') auth: string,
     @Body() body: Record<string, any>,
   ) {
-    const userId = this.extractUserId(auth);
-    if (!userId) throw new UnauthorizedException('Valid session token required');
+    try {
+      const userId = this.extractUserId(auth);
+      if (!userId) throw new UnauthorizedException('Valid session token required');
 
-    if (!body?.pair || !body?.direction || body?.pnl === undefined) {
-      throw new BadRequestException('pair, direction and pnl are required');
+      if (!body?.pair || !body?.direction || body?.pnl === undefined) {
+        throw new BadRequestException('pair, direction and pnl are required');
+      }
+
+      const data = await this.tradesService.logManualTrade(userId, {
+        pair: body.pair,
+        direction: body.direction,
+        lotSize: Number(body.lotSize) || 0.01,
+        pnl: Number(body.pnl),
+      });
+      return {
+        success: true,
+        data,
+        message: 'Manual trade logged successfully',
+        timestamp: new Date().toISOString(),
+      };
+    } catch (err: any) {
+      console.error('[trades.controller] logManualTrade error:', err.message);
+      return {
+        success: false,
+        error: err.message || 'Unknown database write error',
+        timestamp: new Date().toISOString(),
+      };
     }
-
-    const data = await this.tradesService.logManualTrade(userId, {
-      pair: body.pair,
-      direction: body.direction,
-      lotSize: Number(body.lotSize) || 0.01,
-      pnl: Number(body.pnl),
-    });
-    return {
-      success: true,
-      data,
-      message: 'Manual trade logged successfully',
-      timestamp: new Date().toISOString(),
-    };
   }
 
   @Patch(':id/be')
@@ -146,7 +171,6 @@ export class TradesController {
   /**
    * Decode the Supabase JWT and return the real user UUID from the `sub` claim.
    * Returns null if the token is missing, malformed, or not a real Supabase JWT.
-   * Callers must guard: if (!userId) throw new UnauthorizedException(...).
    */
   private extractUserId(authHeader: string): string | null {
     const token = authHeader?.replace('Bearer ', '').trim();
@@ -156,15 +180,15 @@ export class TradesController {
       const payloadBase64 = token.split('.')[1];
       if (!payloadBase64) return null;
 
+      // Safe cross-platform base64 URL decoding
+      const base64 = payloadBase64.replace(/-/g, '+').replace(/_/g, '/');
       const payload = JSON.parse(
-        Buffer.from(payloadBase64, 'base64url').toString('utf-8'),
+        Buffer.from(base64, 'base64').toString('utf-8'),
       );
 
-      // Supabase stores the user UUID in the `sub` claim
       const sub = payload?.sub;
       if (!sub || typeof sub !== 'string') return null;
 
-      // Basic UUID format check — prevents non-UUID strings reaching the DB
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(sub)) return null;
 

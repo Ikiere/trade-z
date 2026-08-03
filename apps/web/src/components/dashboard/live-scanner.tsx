@@ -145,7 +145,6 @@ export default function LiveScannerWidget() {
       const priceInfoBuy = getSimulatedSetup(pair, 'long');
       const priceInfoSell = getSimulatedSetup(pair, 'short');
 
-      // Write signals via NestJS proxy (bypasses RLS, uses service_role)
       const supabase = createClient();
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
@@ -169,6 +168,7 @@ export default function LiveScannerWidget() {
           tags: isApproved && direction === 'long' ? ['bullish_breakout', 'h4_orderblock'] : ['insufficient_momentum'],
         }),
       });
+      const buyBody = await sigResBuy.json().catch(() => ({}));
 
       // 2. Post SELL Signal
       const sigResSell = await fetch(`${apiBase}/api/v1/trades/signals`, {
@@ -189,6 +189,25 @@ export default function LiveScannerWidget() {
           tags: isApproved && direction === 'short' ? ['bearish_breakout', 'h4_orderblock'] : ['insufficient_momentum'],
         }),
       });
+      const sellBody = await sigResSell.json().catch(() => ({}));
+
+      // Check if both or either failed to save
+      const buySaved = sigResBuy.ok && buyBody.success !== false;
+      const sellSaved = sigResSell.ok && sellBody.success !== false;
+
+      if (!buySaved || !sellSaved) {
+        const buyErr = buyBody.error || sigResBuy.statusText || 'Unknown error';
+        const sellErr = sellBody.error || sigResSell.statusText || 'Unknown error';
+        setLogs(prev => [
+          `[ERROR] Failed to save signals to database!`,
+          `  -> BUY Error: ${buyErr}`,
+          `  -> SELL Error: ${sellErr}`,
+          `  -> Note: Make sure to execute complete_fix.sql in Supabase SQL editor.`,
+          ...prev
+        ]);
+        setActivePair(null);
+        return;
+      }
 
       // Increment today's count by 2
       setTodaySignalCount(n => n + 2);

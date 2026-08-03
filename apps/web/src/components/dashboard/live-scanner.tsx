@@ -122,6 +122,12 @@ export default function LiveScannerWidget() {
       return;
     }
 
+    if (!specificPair) {
+      if (scanIndex.current >= watchlist.length) {
+        scanIndex.current = 0;
+      }
+    }
+
     const pair = specificPair || watchlist[scanIndex.current];
     setActivePair(pair);
     setLogs(prev => [`[SCANNING] Requesting AI analysis for ${pair}...`, ...prev]);

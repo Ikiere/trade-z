@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Sparkles, RefreshCw, Terminal } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { getApiBaseUrl } from '@/lib/api';
 
 interface Message {
   id: string;
@@ -52,7 +53,7 @@ export default function ChatPage() {
     setIsTyping(true);
 
     try {
-      const apiUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/v1/chat`;
+      const apiUrl = `${getApiBaseUrl()}/api/v1/chat`;
       const res = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

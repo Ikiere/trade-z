@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
 import { Scan, TrendingUp, TrendingDown, Loader2, AlertTriangle } from 'lucide-react';
+import { getApiBaseUrl } from '@/lib/api';
 
 const getSimulatedPrice = (pair: string) => {
   const u = pair.toUpperCase();
@@ -120,7 +121,7 @@ export default function LiveScannerWidget() {
     setLogs(prev => [`[SCANNING] Requesting AI analysis for ${pair}...`, ...prev]);
 
     try {
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const apiBase = getApiBaseUrl();
       const res = await fetch(`${apiBase}/api/v1/chat/analysis`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

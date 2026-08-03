@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase';
 import { Loader2, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { getApiBaseUrl } from '@/lib/api';
 
 interface SentimentItem {
   pair: string;
@@ -21,7 +22,7 @@ export default function MarketSentimentWidget() {
   const fetchSentiment = async () => {
     const supabase = createClient();
     try {
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const apiBase = getApiBaseUrl();
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 

@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import { Calendar, Clock, AlertOctagon, RefreshCw, TrendingUp, ShieldAlert } from 'lucide-react';
 
+import { getApiBaseUrl } from '@/lib/api';
+
 export default function CalendarPage() {
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -10,7 +12,7 @@ export default function CalendarPage() {
   useEffect(() => {
     async function loadCalendar() {
       try {
-        const apiUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/v1/calendar`;
+        const apiUrl = `${getApiBaseUrl()}/api/v1/calendar`;
         const res = await fetch(apiUrl);
         if (res.ok) {
           const body = await res.json();

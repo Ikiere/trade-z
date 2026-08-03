@@ -231,7 +231,11 @@ async def fetch_twelve_data_candles(symbol: str, timeframe: str, api_key: str):
             df["high"] = df["high"].astype(float)
             df["low"] = df["low"].astype(float)
             df["close"] = df["close"].astype(float)
-            df["volume"] = df["volume"].astype(float)
+            
+            if "volume" in df.columns:
+                df["volume"] = df["volume"].astype(float)
+            else:
+                df["volume"] = 0.0
             
             print(f"Successfully fetched {len(df)} live bars from TwelveData for {symbol_to_query} ({interval})")
             return df

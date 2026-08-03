@@ -159,6 +159,10 @@ export default function LiveScannerWidget() {
       const direction = reasoning.toLowerCase().includes('sell') || reasoning.toLowerCase().includes('short') ? 'short' : 'long';
       
       const priceInfo = getSimulatedSetup(pair, direction);
+      const entryPrice = typeof info.entry_price === 'number' ? info.entry_price : priceInfo.entry;
+      const currentPrice = typeof info.current_price === 'number' ? info.current_price : priceInfo.current;
+      const stopLoss = typeof info.stop_loss === 'number' ? info.stop_loss : priceInfo.sl;
+      const takeProfit = typeof info.take_profit === 'number' ? info.take_profit : priceInfo.tp;
 
       // Post ONLY the single best setup resolved by the AI
       const sigRes = await fetch(`${apiBase}/api/v1/trades/signals`, {
@@ -168,10 +172,10 @@ export default function LiveScannerWidget() {
           pair,
           direction,
           status: isApproved ? 'active' : 'rejected',
-          entry_price: priceInfo.entry,
-          current_price: priceInfo.current,
-          stop_loss: priceInfo.sl,
-          take_profit: priceInfo.tp,
+          entry_price: entryPrice,
+          current_price: currentPrice,
+          stop_loss: stopLoss,
+          take_profit: takeProfit,
           confidence,
           ai_reasoning: reasoning,
           timeframe: '15m',
@@ -201,7 +205,7 @@ export default function LiveScannerWidget() {
         const activeDir = direction.toUpperCase();
         setLogs(prev => [
           `[SIGNAL ✅] generated best setup for ${pair}! Direction: ${activeDir}`,
-          `  -> ENTRY: ${priceInfo.entry.toFixed(5)} (SL: ${priceInfo.sl.toFixed(5)}, TP: ${priceInfo.tp.toFixed(5)})`,
+          `  -> ENTRY: ${entryPrice.toFixed(5)} (SL: ${stopLoss.toFixed(5)}, TP: ${takeProfit.toFixed(5)})`,
           `  -> Expected Trigger: ${expectedTrigger || 'Immediate'}`,
           ...prev,
         ]);
@@ -211,7 +215,7 @@ export default function LiveScannerWidget() {
           const tradeRes = await fetch(`${apiBase}/api/v1/trades`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify({ pair, direction, entryPrice: priceInfo.entry, stopLoss: priceInfo.sl, takeProfit: priceInfo.tp, riskPercent: 1.0 }),
+            body: JSON.stringify({ pair, direction, entryPrice, stopLoss, takeProfit, riskPercent: 1.0 }),
           });
           const msg = tradeRes.ok ? `Position placed for ${pair}!` : `Auto-trade failed: ${tradeRes.statusText}`;
           setLogs(prev => [`[AUTO TRADE] ${msg}`, ...prev]);

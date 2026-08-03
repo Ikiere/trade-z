@@ -83,6 +83,7 @@ async def quick_analysis(request: AnalysisRequest):
     news_safe = await check_news_filter(request.pair)
 
     # 4. Evaluate decision with feedback history learning context
+    rr = 2.5 if request.timeframe == "15m" else 3.2
     decision_result = evaluate_decision(
         pair=request.pair,
         timeframe=request.timeframe,
@@ -91,16 +92,35 @@ async def quick_analysis(request: AnalysisRequest):
         structure_score=92.0 if structure["bos_detected"] else 60.0,
         liquidity_score=95.0,
         volume_score=90.0,
-        risk_reward_ratio=2.5 if request.timeframe == "15m" else 3.2,
+        risk_reward_ratio=rr,
         news_impact_low=news_safe,
         history=request.history,
     )
+
+    # 5. Compute volatility-adjusted entry, SL, and TP targets using live ATR
+    current_price = float(df["close"].iloc[-1])
+    atr = float((df["high"] - df["low"]).tail(14).mean())
+    if atr <= 0 or pd.isna(atr):
+        atr = current_price * 0.0015
+
+    # Align directions
+    direction = "long" if structure["market_bias"] == "bullish" else "short"
+    if direction == "long":
+        sl = current_price - (atr * 1.5)
+        tp = current_price + (atr * 1.5 * rr)
+    else:
+        sl = current_price + (atr * 1.5)
+        tp = current_price - (atr * 1.5 * rr)
 
     return {
         "success": True,
         "data": {
             **decision_result,
             "rsi": float(rsi),
+            "entry_price": round(current_price, 5),
+            "current_price": round(current_price, 5),
+            "stop_loss": round(sl, 5),
+            "take_profit": round(tp, 5),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),

@@ -19,6 +19,7 @@ export class TradesController {
   @Get('open')
   async getOpenTrades(@Headers('authorization') auth: string) {
     const userId = this.extractUserId(auth);
+    if (!userId) throw new UnauthorizedException('Valid session token required');
     const data = await this.tradesService.getOpenTrades(userId);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
@@ -26,6 +27,7 @@ export class TradesController {
   @Get('history')
   async getTradeHistory(@Headers('authorization') auth: string) {
     const userId = this.extractUserId(auth);
+    if (!userId) throw new UnauthorizedException('Valid session token required');
     const data = await this.tradesService.getTradeHistory(userId);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
@@ -44,6 +46,7 @@ export class TradesController {
     },
   ) {
     const userId = this.extractUserId(auth);
+    if (!userId) throw new UnauthorizedException('Valid session token required');
     const data = await this.tradesService.executeTrade(userId, body);
     return {
       success: true,
@@ -64,6 +67,7 @@ export class TradesController {
     @Body() body: Record<string, any>,
   ) {
     const userId = this.extractUserId(auth);
+    if (!userId) throw new UnauthorizedException('Valid session token required');
 
     if (!body?.pair || !body?.direction) {
       throw new BadRequestException('pair and direction are required');
@@ -89,6 +93,7 @@ export class TradesController {
     @Body() body: Record<string, any>,
   ) {
     const userId = this.extractUserId(auth);
+    if (!userId) throw new UnauthorizedException('Valid session token required');
 
     if (!body?.pair || !body?.direction || body?.pnl === undefined) {
       throw new BadRequestException('pair, direction and pnl are required');
@@ -130,27 +135,35 @@ export class TradesController {
     };
   }
 
-  private extractUserId(authHeader: string): string {
-    const token = authHeader?.replace('Bearer ', '');
-    if (!token && process.env.NODE_ENV === 'production') {
-      throw new UnauthorizedException('Missing auth token');
-    }
+  /**
+   * Decode the Supabase JWT and return the real user UUID from the `sub` claim.
+   * Returns null if the token is missing, malformed, or not a real Supabase JWT.
+   * Callers must guard: if (!userId) throw new UnauthorizedException(...).
+   */
+  private extractUserId(authHeader: string): string | null {
+    const token = authHeader?.replace('Bearer ', '').trim();
+    if (!token || token === 'undefined' || token === 'null') return null;
 
-    // Decode Supabase JWT to read the `sub` claim (real user UUID)
     try {
-      if (token) {
-        const payloadBase64 = token.split('.')[1];
-        if (payloadBase64) {
-          const payload = JSON.parse(
-            Buffer.from(payloadBase64, 'base64').toString(),
-          );
-          if (payload?.sub) return payload.sub;
-        }
-      }
-    } catch (e: any) {
-      console.error('Error decoding JWT token:', e.message);
-    }
+      const payloadBase64 = token.split('.')[1];
+      if (!payloadBase64) return null;
 
-    return 'user-1';
+      const payload = JSON.parse(
+        Buffer.from(payloadBase64, 'base64url').toString('utf-8'),
+      );
+
+      // Supabase stores the user UUID in the `sub` claim
+      const sub = payload?.sub;
+      if (!sub || typeof sub !== 'string') return null;
+
+      // Basic UUID format check — prevents non-UUID strings reaching the DB
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(sub)) return null;
+
+      return sub;
+    } catch (e: any) {
+      console.error('[trades.controller] JWT decode error:', e.message);
+      return null;
+    }
   }
 }

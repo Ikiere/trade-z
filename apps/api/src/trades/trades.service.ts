@@ -197,14 +197,20 @@ export class TradesService {
       pnl: number;
     },
   ) {
-    // 1. Insert trade
+    // 1. Compute approximate entry/exit prices
     let entry = 1.0845;
     if (data.pair.includes('GBP')) entry = 1.2680;
     if (data.pair.includes('JPY')) entry = 154.20;
     if (data.pair.includes('XAU')) entry = 2350.50;
+    if (data.pair.includes('AUD')) entry = 0.6650;
+    if (data.pair.includes('CAD')) entry = 1.3620;
 
-    const exit = data.direction === 'long' ? entry + (data.pnl / 1000) : entry - (data.pnl / 1000);
+    const exit =
+      data.direction === 'long'
+        ? entry + data.pnl / 10000
+        : entry - data.pnl / 10000;
 
+    // 2. Insert trade row
     const { data: newTrade, error: tradeErr } = await this.supabase
       .from('trades')
       .insert({
@@ -215,8 +221,8 @@ export class TradesService {
         status: 'closed',
         entry_price: entry,
         exit_price: exit,
-        stop_loss: entry * 0.99,
-        take_profit: entry * 1.02,
+        stop_loss: parseFloat((entry * 0.99).toFixed(5)),
+        take_profit: parseFloat((entry * 1.02).toFixed(5)),
         lot_size: data.lotSize,
         pnl: data.pnl,
         opened_at: new Date(Date.now() - 3600000).toISOString(),
@@ -226,33 +232,60 @@ export class TradesService {
       .single();
 
     if (tradeErr) {
-      throw new Error(`Failed to log manual trade: ${tradeErr.message}`);
+      console.error('[logManualTrade] trade insert error:', tradeErr);
+      throw new Error(
+        `Trade insert failed [${tradeErr.code}]: ${tradeErr.message}`,
+      );
     }
 
-    // 2. Fetch and update default portfolio
-    const { data: portfolio } = await this.supabase
+    // 3. Fetch or auto-create the user's default portfolio
+    let portfolio = null;
+    const { data: existing } = await this.supabase
       .from('portfolios')
       .select('*')
       .eq('user_id', userId)
       .eq('is_default', true)
       .maybeSingle();
 
-    if (portfolio) {
-      const currentBal = Number(portfolio.balance);
-      const currentEq = Number(portfolio.equity);
-      const currentPnl = Number(portfolio.today_pnl);
+    if (existing) {
+      portfolio = existing;
+    } else {
+      // Auto-create a default portfolio if the signup trigger missed it
+      console.warn(`[logManualTrade] No default portfolio for ${userId}, creating one…`);
+      const { data: created } = await this.supabase
+        .from('portfolios')
+        .insert({
+          user_id: userId,
+          name: 'Default Portfolio',
+          balance: 10000.00,
+          equity: 10000.00,
+          free_margin: 10000.00,
+          is_default: true,
+        })
+        .select()
+        .single();
+      portfolio = created;
+    }
 
-      await this.supabase
+    // 4. Update portfolio balance
+    if (portfolio) {
+      const { error: portErr } = await this.supabase
         .from('portfolios')
         .update({
-          balance: currentBal + data.pnl,
-          equity: currentEq + data.pnl,
-          today_pnl: currentPnl + data.pnl,
+          balance: Number(portfolio.balance) + data.pnl,
+          equity: Number(portfolio.equity) + data.pnl,
+          today_pnl: Number(portfolio.today_pnl) + data.pnl,
           updated_at: new Date().toISOString(),
         })
         .eq('id', portfolio.id);
+
+      if (portErr) {
+        console.error('[logManualTrade] portfolio update error:', portErr);
+        // Non-fatal — trade was already saved, just log the warning
+      }
     }
 
     return newTrade;
   }
 }
+

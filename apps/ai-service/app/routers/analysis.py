@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pydantic import BaseModel
 from typing import Optional
 import pandas as pd
-from app.services.indicators import calculate_ema, calculate_rsi
+from app.services.indicators import calculate_ema, calculate_rsi, calculate_macd, calculate_adx
 from app.services.structure import detect_market_structure, generate_simulated_candles, fetch_twelve_data_candles
 from app.services.decision import evaluate_decision
 from app.services.calendar import fetch_tradingview_calendar, check_news_filter
@@ -76,21 +76,68 @@ async def quick_analysis(request: AnalysisRequest):
         )
 
     # 2. Run indicator check
-    rsi = calculate_rsi(df, period=14).iloc[-1]
+    rsi = float(calculate_rsi(df, period=14).iloc[-1])
     structure = detect_market_structure(df)
+    
+    # Calculate MACD crossovers
+    macd_line, signal_line, hist = calculate_macd(df)
+    macd_val = float(macd_line.iloc[-1])
+    macd_sig = float(signal_line.iloc[-1])
+    macd_hist = float(hist.iloc[-1])
+
+    # Calculate ADX trend strength
+    adx = float(calculate_adx(df).iloc[-1])
 
     # 3. Read the real economic calendar to enforce the news safety check
     news_safe = await check_news_filter(request.pair)
+
+    # Confluence scoring based on bias alignment
+    # RSI score: High confluences if price is trending and RSI is not overbought/oversold
+    rsi_score = 50.0
+    bias = structure["market_bias"]
+    
+    if bias == "bullish":
+        if rsi >= 70:
+            rsi_score = 40.0  # Overbought warning
+        elif 45 <= rsi <= 68:
+            rsi_score = 90.0  # Safe uptrend growth
+        else:
+            rsi_score = 65.0
+    elif bias == "bearish":
+        if rsi <= 30:
+            rsi_score = 40.0  # Oversold warning
+        elif 32 <= rsi <= 55:
+            rsi_score = 90.0  # Safe downtrend drop
+        else:
+            rsi_score = 65.0
+
+    # MACD score: High confluence if histogram supports the trend direction
+    macd_score = 50.0
+    macd_bullish = macd_hist > 0 and macd_val > macd_sig
+    macd_bearish = macd_hist < 0 and macd_val < macd_sig
+    
+    if bias == "bullish" and macd_bullish:
+        macd_score = 95.0
+    elif bias == "bearish" and macd_bearish:
+        macd_score = 95.0
+    else:
+        macd_score = 45.0
+
+    # ADX filter: Boost score if trend strength is high (ADX > 25)
+    adx_bonus = 5.0 if adx > 25.0 else 0.0
+
+    indicators_confluence = float((rsi_score * 0.5) + (macd_score * 0.5)) + adx_bonus
+    indicators_confluence = min(100.0, max(0.0, indicators_confluence))
 
     # 4. Evaluate decision with feedback history learning context
     rr = 2.5 if request.timeframe == "15m" else 3.2
     decision_result = evaluate_decision(
         pair=request.pair,
         timeframe=request.timeframe,
-        trend_bias=structure["market_bias"],
-        indicators_confluence=float(85.0 + (rsi - 50.0) * 0.1),
-        structure_score=92.0 if structure["bos_detected"] else 60.0,
-        liquidity_score=95.0,
+        trend_bias=bias,
+        indicators_confluence=indicators_confluence,
+        structure_score=95.0 if structure["bos_detected"] else 60.0,
+        liquidity_score=92.0 if len(structure["fvgs"]) > 0 else 70.0,
         volume_score=90.0,
         risk_reward_ratio=rr,
         news_impact_low=news_safe,

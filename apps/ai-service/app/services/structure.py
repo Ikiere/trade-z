@@ -9,14 +9,18 @@ import numpy as np
 
 def detect_market_structure(df: pd.DataFrame) -> dict:
     """
-    Scans recent price candles for market structure components.
-    Returns: dict of found support/resistance levels, order blocks, and FVGs.
+    Performs institutional-grade Smart Money Concepts (SMC) structure detection
+    and multi-timeframe EMA alignment check on actual data.
     """
-    if len(df) < 5:
-        return {"order_blocks": [], "fvgs": [], "market_bias": "neutral"}
-
-    order_blocks = []
-    fvgs = []
+    if len(df) < 15:
+        return {
+            "order_blocks": [],
+            "fvgs": [],
+            "market_bias": "neutral",
+            "bos_detected": False,
+            "choch_detected": False,
+            "latest_structure_break": "none"
+        }
 
     highs = df["high"].values
     lows = df["low"].values
@@ -24,10 +28,68 @@ def detect_market_structure(df: pd.DataFrame) -> dict:
     opens = df["open"].values
     times = df.index.astype(str) if isinstance(df.index, pd.DatetimeIndex) else [str(i) for i in range(len(df))]
 
-    # 1. Detect Fair Value Gaps (FVG)
-    # Check 3 consecutive candles (i-2, i-1, i)
+    # 1. Compute EMA Trends (9, 21, 50)
+    # EMA 9, 21, and 50 are standard institutional trend filters
+    ema9 = df["close"].ewm(span=9, adjust=False).mean().values
+    ema21 = df["close"].ewm(span=21, adjust=False).mean().values
+    ema50 = df["close"].ewm(span=50, adjust=False).mean().values
+
+    # Latest EMA values
+    last_ema9 = ema9[-1]
+    last_ema21 = ema21[-1]
+    last_ema50 = ema50[-1]
+
+    # EMA Alignment
+    ema_bullish = last_ema9 > last_ema21 > last_ema50
+    ema_bearish = last_ema9 < last_ema21 < last_ema50
+
+    # 2. Identify local swings (lookback window of 3 candles on each side)
+    swing_highs = []
+    swing_lows = []
+    
+    for i in range(3, len(df) - 3):
+        # Local Swing High
+        if highs[i] == max(highs[i-3:i+4]):
+            swing_highs.append((i, highs[i]))
+        # Local Swing Low
+        if lows[i] == min(lows[i-3:i+4]):
+            swing_lows.append((i, lows[i]))
+
+    # 3. Detect BOS (Break of Structure) and CHoCH (Change of Character)
+    bos_detected = False
+    choch_detected = False
+    latest_structure_break = "none"
+
+    if swing_highs and swing_lows:
+        # Latest swing levels
+        last_high_idx, last_high_val = swing_highs[-1]
+        last_low_idx, last_low_val = swing_lows[-1]
+        
+        # Check recent price breakouts
+        recent_close = closes[-1]
+        
+        # Bullish Breakout (BOS of latest swing high)
+        if recent_close > last_high_val:
+            bos_detected = True
+            latest_structure_break = "bullish_bos"
+        # Bearish Breakout (BOS of latest swing low)
+        elif recent_close < last_low_val:
+            bos_detected = True
+            latest_structure_break = "bearish_bos"
+            
+        # CHoCH detection: Break of the opposite swing point relative to the primary trend direction
+        # If trend is bearish but we break the latest high -> Bullish CHoCH (reversal)
+        if ema_bearish and recent_close > last_high_val:
+            choch_detected = True
+            latest_structure_break = "bullish_choch"
+        # If trend is bullish but we break the latest low -> Bearish CHoCH (reversal)
+        elif ema_bullish and recent_close < last_low_val:
+            choch_detected = True
+            latest_structure_break = "bearish_choch"
+
+    # 4. Detect FVGs (Fair Value Gaps)
+    fvgs = []
     for i in range(2, len(df)):
-        # Bullish FVG: low of current candle (i) > high of candle (i-2)
         if lows[i] > highs[i - 2] + 1e-5:
             fvgs.append({
                 "type": "bullish",
@@ -36,7 +98,6 @@ def detect_market_structure(df: pd.DataFrame) -> dict:
                 "candle_index": i - 1,
                 "timestamp": times[i - 1]
             })
-        # Bearish FVG: high of current candle (i) < low of candle (i-2)
         elif highs[i] < lows[i - 2] - 1e-5:
             fvgs.append({
                 "type": "bearish",
@@ -46,16 +107,14 @@ def detect_market_structure(df: pd.DataFrame) -> dict:
                 "timestamp": times[i - 1]
             })
 
-    # 2. Detect Order Blocks (OB)
-    # Search for sharp displacement moves breaking structural swings
+    # 5. Detect displacement Order Blocks (OB)
+    order_blocks = []
+    body_sizes = np.abs(closes - opens)
+    avg_body = np.mean(body_sizes)
+    
     for i in range(1, len(df) - 1):
-        body_size = abs(closes[i] - opens[i])
-        avg_body_size = np.mean(np.abs(closes - opens))
-
-        # Check if candle i is a reversal block (displacement)
-        if body_size > avg_body_size * 1.5:
-            # Bullish OB: strong up-candle displacing after down-candle
-            if closes[i] > opens[i] and closes[i - 1] < opens[i - 1]:
+        if body_sizes[i] > avg_body * 1.5:
+            if closes[i] > opens[i] and closes[i-1] < opens[i-1]:
                 order_blocks.append({
                     "type": "bullish",
                     "high": highs[i - 1],
@@ -63,8 +122,7 @@ def detect_market_structure(df: pd.DataFrame) -> dict:
                     "candle_index": i - 1,
                     "timestamp": times[i - 1]
                 })
-            # Bearish OB: strong down-candle displacing after up-candle
-            elif closes[i] < opens[i] and closes[i - 1] > opens[i - 1]:
+            elif closes[i] < opens[i] and closes[i-1] > opens[i-1]:
                 order_blocks.append({
                     "type": "bearish",
                     "high": highs[i - 1],
@@ -73,23 +131,20 @@ def detect_market_structure(df: pd.DataFrame) -> dict:
                     "timestamp": times[i - 1]
                 })
 
-    # 3. Detect Swing Breakouts (BOS / CHoCH mock detection)
-    # Assess overall market bias
-    bullish_count = sum(1 for ob in order_blocks if ob["type"] == "bullish")
-    bearish_count = sum(1 for ob in order_blocks if ob["type"] == "bearish")
-
+    # 6. Conclude Trend Bias
     bias = "neutral"
-    if bullish_count > bearish_count + 1:
+    if ema_bullish or latest_structure_break in ["bullish_bos", "bullish_choch"]:
         bias = "bullish"
-    elif bearish_count > bullish_count + 1:
+    elif ema_bearish or latest_structure_break in ["bearish_bos", "bearish_choch"]:
         bias = "bearish"
 
     return {
-        "order_blocks": order_blocks[-5:],  # Return 5 most recent
+        "order_blocks": order_blocks[-5:],
         "fvgs": fvgs[-5:],
         "market_bias": bias,
-        "bos_detected": len(order_blocks) > 0,
-        "choch_detected": len(fvgs) > 0,
+        "bos_detected": bos_detected,
+        "choch_detected": choch_detected,
+        "latest_structure_break": latest_structure_break
     }
 
 

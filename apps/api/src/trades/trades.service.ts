@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { RiskService } from './risk.service';
+import { EmailService } from '../email/email.service';
 
 @Injectable()
 export class TradesService {
@@ -10,6 +11,7 @@ export class TradesService {
   constructor(
     private configService: ConfigService,
     private riskService: RiskService,
+    private emailService: EmailService,
   ) {
     const supabaseUrl = this.configService.get<string>('SUPABASE_URL');
     const supabaseKey = this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY');
@@ -204,6 +206,21 @@ export class TradesService {
       console.warn('Signal insert warning (non-fatal):', error.message, '| Code:', error.code);
       return { id: `local-${Date.now()}`, ...payload, _saved: false, _error: error.message };
     }
+
+    // Trigger email dispatch in the background
+    this.supabase.auth.admin.getUserById(userId).then(({ data: userData }) => {
+      const email = userData?.user?.email;
+      if (email) {
+        // Pass the expected trigger to the email layout if present
+        const fullSignal = { ...data, expected_trigger: signalData.expected_trigger };
+        this.emailService.sendSignalAlertEmail(email, fullSignal).catch(err => {
+          console.error('Error sending signal alert email:', err.message);
+        });
+      }
+    }).catch(err => {
+      console.error('Failed to fetch user email for signal alert:', err.message);
+    });
+
     return { ...data, _saved: true };
   }
 

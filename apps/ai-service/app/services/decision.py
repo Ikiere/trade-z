@@ -44,7 +44,6 @@ def evaluate_decision(
     if trend_bias == "neutral":
         rejection_reasons.append("Market is consolidating in tight ranges without trend direction.")
 
-    # A setup is rejected if it has critical risk issues or fails confidence thresholds
     passed_score = weighted_score >= required_confidence
     passed_rules = len(rejection_reasons) == 0
 
@@ -56,13 +55,23 @@ def evaluate_decision(
     else:
         decision = "wait"
 
+    expected_trigger = None
+    if decision == "approve":
+        if timeframe in ["15m", "30m"]:
+            expected_trigger = "Expected trigger zone entry within 15-45 minutes."
+        elif timeframe in ["1h"]:
+            expected_trigger = "Expected trigger zone entry within 1-3 hours."
+        else:
+            expected_trigger = "Expected trigger zone entry within 6-12 hours."
+
     # 3. Generate natural language reasoning/explanation
     reasoning = ""
     if decision == "approve":
+        trigger_text = f" [{expected_trigger}]" if expected_trigger else ""
         reasoning = (
             f"Set up on {pair} ({timeframe}) approved with {weighted_score:.1f}% confidence. "
             f"Market structure is highly aligned ({structure_score:.1f}%), trend bias is strong ({trend_bias}), "
-            f"and target Risk-Reward ({risk_reward_ratio:.2f}) represents an institutional-grade opportunity."
+            f"and target Risk-Reward ({risk_reward_ratio:.2f}) represents an institutional-grade opportunity.{trigger_text}"
         )
     elif decision == "reject":
         reasoning = (
@@ -82,6 +91,7 @@ def evaluate_decision(
         "confidence": round(weighted_score, 2),
         "reasoning": reasoning,
         "rejection_reasons": rejection_reasons,
+        "expected_trigger": expected_trigger,
         "confluence_breakdown": {
             "marketStructure": round(structure_score, 1),
             "trend": 100 if trend_bias != "neutral" else 50,

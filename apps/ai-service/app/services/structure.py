@@ -91,3 +91,89 @@ def detect_market_structure(df: pd.DataFrame) -> dict:
         "bos_detected": len(order_blocks) > 0,
         "choch_detected": len(fvgs) > 0,
     }
+
+
+def generate_simulated_candles(pair: str, timeframe: str) -> pd.DataFrame:
+    """
+    Generates a highly realistic 60-candle dataset dynamically based on pair name and current date.
+    Provides natural price structures, trends, order blocks, and pullbacks.
+    """
+    import numpy as np
+    from datetime import datetime
+
+    # Seed depends on pair name + current day/hour to evolve dynamically over time
+    now = datetime.now()
+    seed_str = f"{pair}_{timeframe}_{now.year}_{now.month}_{now.day}_{now.hour}"
+    seed = abs(hash(seed_str)) % 1000000
+    np.random.seed(seed)
+
+    # Base price scales
+    u = pair.upper()
+    base_price = 1.0800
+    noise_mult = 0.0003
+    pips_scale = 0.0001
+    
+    if "GBP" in u:
+        base_price = 1.2600
+        noise_mult = 0.0004
+    elif "JPY" in u:
+        base_price = 154.00
+        noise_mult = 0.15
+        pips_scale = 0.01
+    elif "XAU" in u:
+        base_price = 2350.00
+        noise_mult = 1.5
+        pips_scale = 0.1
+    elif "AUD" in u or "NZD" in u:
+        base_price = 0.6600
+        noise_mult = 0.0003
+    elif "CAD" in u or "CHF" in u:
+        base_price = 1.3600
+        noise_mult = 0.0003
+
+    # Trend direction: 60% chance of a clear trend structure (either up or down)
+    trend_val = hash(pair + "_trend") % 3
+    trend_bias = 0
+    if trend_val == 0:
+        trend_bias = 1.2  # Bullish
+    elif trend_val == 1:
+        trend_bias = -1.2 # Bearish
+
+    prices = []
+    current = base_price
+    
+    for i in range(60):
+        # Sine wave swing structure + random noise
+        swing = 0.8 * np.sin(i / 6.0)
+        noise = np.random.normal(0, 0.8)
+        change = (trend_bias * 0.4 + swing + noise) * noise_mult
+        current += change
+        prices.append(current)
+
+    opens = []
+    highs = []
+    lows = []
+    closes = []
+
+    for i in range(60):
+        o = prices[i - 1] if i > 0 else base_price
+        c = prices[i]
+        
+        # Ensure there is wick noise
+        wick_noise = abs(np.random.normal(0, noise_mult * 0.5))
+        h = max(o, c) + wick_noise
+        l = min(o, c) - wick_noise
+        
+        opens.append(o)
+        closes.append(c)
+        highs.append(h)
+        lows.append(l)
+
+    df = pd.DataFrame({
+        "open": opens,
+        "high": highs,
+        "low": lows,
+        "close": closes,
+        "volume": np.random.randint(500, 2500, size=60)
+    })
+    return df

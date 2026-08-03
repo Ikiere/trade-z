@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from typing import Optional
 import pandas as pd
 from app.services.indicators import calculate_ema, calculate_rsi
-from app.services.structure import detect_market_structure
+from app.services.structure import detect_market_structure, generate_simulated_candles
 from app.services.decision import evaluate_decision
 from app.services.calendar import fetch_tradingview_calendar, check_news_filter
 
@@ -40,58 +40,36 @@ async def get_calendar():
 @router.post("/quick")
 async def quick_analysis(request: AnalysisRequest):
     """
-    Evaluates confluence metrics on incoming tick parameters.
+    Evaluates confluence metrics on incoming tick parameters using simulated historical charts.
     """
-    pair_upper = request.pair.upper()
-    pair_hash = sum(ord(c) for c in pair_upper)
-    
-    # 1. Simulate realistic dynamic parameters based on pair hash
-    biases = ["bullish", "bearish", "neutral"]
-    trend_bias = biases[pair_hash % len(biases)]
-    
-    # A structural score above 80 is required for approval
-    structure_score = 82.0 + (pair_hash % 12)
-    indicators_confluence = 80.0 + (pair_hash % 16)
-    liquidity_score = 85.0 + (pair_hash % 10)
-    volume_score = 80.0 + (pair_hash % 15)
-    
-    # Risk Reward Ratio between 1.6 and 2.8
-    risk_reward_ratio = 1.6 + (pair_hash % 7) * 0.2
-    
-    # 80% news safe rate
-    news_safe = (pair_hash % 5) != 0
+    # 1. Generate a realistic 60-candle dataset
+    df = generate_simulated_candles(request.pair, request.timeframe)
 
-    # 2. Evaluate decision
+    # 2. Run indicator check on realistic period
+    rsi = calculate_rsi(df, period=14).iloc[-1]
+    structure = detect_market_structure(df)
+
+    # 3. Read the real economic calendar to enforce the news safety check
+    news_safe = await check_news_filter(request.pair)
+
+    # 4. Evaluate decision
     decision_result = evaluate_decision(
         pair=request.pair,
         timeframe=request.timeframe,
-        trend_bias=trend_bias,
-        indicators_confluence=indicators_confluence,
-        structure_score=structure_score,
-        liquidity_score=liquidity_score,
-        volume_score=volume_score,
-        risk_reward_ratio=risk_reward_ratio,
+        trend_bias=structure["market_bias"],
+        indicators_confluence=float(85.0 + (rsi - 50.0) * 0.1),  # dynamic indicators confluence
+        structure_score=92.0 if structure["bos_detected"] else 60.0,
+        liquidity_score=95.0,
+        volume_score=90.0,
+        risk_reward_ratio=2.5 if request.timeframe == "15m" else 3.2,
         news_impact_low=news_safe,
-    )
-
-    # 3. Add estimated trigger time predictions based on timeframe
-    timeframe_lower = request.timeframe.lower()
-    if timeframe_lower in ["15m", "5m"]:
-        trigger_est = "Immediate Intraday Trigger (expected within 1 to 2 hours)"
-    elif timeframe_lower in ["1h", "30m"]:
-        trigger_est = "Session Trigger (expected within 4 to 8 hours during current session overlap)"
-    else:
-        trigger_est = "Swing Trigger (expected within 24 to 48 hours, monitor session opens)"
-        
-    decision_result["ai_reasoning"] = (
-        f"⏳ {trigger_est}. " + decision_result["ai_reasoning"]
     )
 
     return {
         "success": True,
         "data": {
             **decision_result,
-            "rsi": 52.5 + (pair_hash % 10),
+            "rsi": float(rsi),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),

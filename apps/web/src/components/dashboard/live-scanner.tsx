@@ -136,10 +136,10 @@ export default function LiveScannerWidget() {
       const body = await res.json();
       const info = body?.data;
       if (!info) return;
-
       const decision = info.decision;
       const confidence = Number(info.confidence) || 75.0;
       const reasoning = info.reasoning || '';
+      const expectedTrigger = info.expected_trigger || null;
       const isApproved = decision === 'approve';
       const direction = reasoning.toLowerCase().includes('sell') || reasoning.toLowerCase().includes('short') ? 'short' : 'long';
       
@@ -166,6 +166,7 @@ export default function LiveScannerWidget() {
           ai_reasoning: reasoning,
           timeframe: '15m',
           strategy: 'AI Intraday Scalp',
+          expected_trigger: expectedTrigger,
           tags: isApproved && direction === 'long' ? ['m15_orderblock', 'intraday_liquidity'] : ['insufficient_momentum'],
         }),
       });
@@ -187,6 +188,7 @@ export default function LiveScannerWidget() {
           ai_reasoning: reasoning,
           timeframe: '15m',
           strategy: 'AI Intraday Scalp',
+          expected_trigger: expectedTrigger,
           tags: isApproved && direction === 'short' ? ['m15_orderblock', 'intraday_liquidity'] : ['insufficient_momentum'],
         }),
       });

@@ -9,40 +9,11 @@ async function bootstrap() {
   const prefix = process.env.API_PREFIX || 'api/v1';
   app.setGlobalPrefix(prefix);
 
-  // CORS
-  const corsOrigin = process.env.CORS_ORIGIN;
-  const allowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:3001',
-    'https://trade-z-web.vercel.app',
-    'https://trade-z-web-production.up.railway.app',
-    'https://trade-z-production-9a14.up.railway.app',
-  ];
-  if (corsOrigin) {
-    allowedOrigins.push(corsOrigin);
-  }
-
   app.enableCors({
-    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-      // Allow requests with no origin (like mobile apps, curl, or server-to-server)
-      if (!origin) return callback(null, true);
-      
-      const isAllowed = allowedOrigins.some(allowed => 
-        origin === allowed || 
-        origin.startsWith(allowed)
-      );
-
-      if (isAllowed) {
-        callback(null, true);
-      } else {
-        callback(new Error(`Origin ${origin} not allowed by CORS`));
-      }
-    },
+    origin: true,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
   });
 
   // Global validation pipe

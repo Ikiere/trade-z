@@ -1,11 +1,17 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { useCountdown } from '@trade-z/hooks';
 import { Brain, ScanLine, AlertCircle, RefreshCw } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function AIStatusWidget() {
-  const { minutes, seconds } = useCountdown(new Date(Date.now() + 5 * 60 * 1000)); // mock scan reload
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
+  const { minutes: rawMin, seconds: rawSec } = useCountdown(new Date(Date.now() + 5 * 60 * 1000)); // mock scan reload
+  const minutes = mounted ? rawMin : 5;
+  const seconds = mounted ? rawSec : 0;
 
   return (
     <div className="card p-5 relative overflow-hidden">

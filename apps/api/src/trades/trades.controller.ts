@@ -16,6 +16,14 @@ import { TradesService } from './trades.service';
 export class TradesController {
   constructor(private readonly tradesService: TradesService) {}
 
+  @Get('sentiment')
+  async getSentiment(@Headers('authorization') auth: string) {
+    const userId = this.extractUserId(auth);
+    if (!userId) throw new UnauthorizedException('Valid session token required');
+    const data = await this.tradesService.getSentiment(userId);
+    return { success: true, data, timestamp: new Date().toISOString() };
+  }
+
   @Get('open')
   async getOpenTrades(@Headers('authorization') auth: string) {
     const userId = this.extractUserId(auth);

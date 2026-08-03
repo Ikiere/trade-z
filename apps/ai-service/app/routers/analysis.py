@@ -11,7 +11,44 @@ from app.services.decision import evaluate_decision
 from app.services.calendar import fetch_tradingview_calendar, check_news_filter
 from app.config import settings
 
+# Modular pipeline imports
+from app.services.market_data import MarketDataService
+from app.engines.eligibility import EligibilityEngine
+from app.engines.higher_timeframe import HigherTimeframeEngine
+from app.engines.structure import MarketStructureEngine
+from app.engines.liquidity import LiquidityEngine
+from app.engines.zones import InstitutionalZonesEngine
+from app.engines.trend_quality import TrendQualityEngine
+from app.engines.momentum import MomentumEngine
+from app.engines.volume import VolumeEngine
+from app.engines.volatility import VolatilityEngine
+from app.engines.correlation import CorrelationEngine
+from app.engines.fundamentals import FundamentalEngine
+from app.engines.historical_pattern import HistoricalPatternEngine
+from app.engines.risk import RiskEngine
+from app.engines.confidence import ConfidenceEngine
+from app.engines.decision import DecisionEngine
+
 router = APIRouter()
+
+# Instantiate central data service and pipeline engines
+market_data_service = MarketDataService()
+
+eligibility_engine = EligibilityEngine()
+higher_tf_engine = HigherTimeframeEngine()
+structure_engine = MarketStructureEngine()
+liquidity_engine = LiquidityEngine()
+zones_engine = InstitutionalZonesEngine()
+trend_quality_engine = TrendQualityEngine()
+momentum_engine = MomentumEngine()
+volume_engine = VolumeEngine()
+volatility_engine = VolatilityEngine()
+correlation_engine = CorrelationEngine()
+fundamentals_engine = FundamentalEngine()
+history_engine = HistoricalPatternEngine()
+risk_engine = RiskEngine()
+confidence_engine = ConfidenceEngine()
+decision_engine = DecisionEngine()
 
 
 class AnalysisRequest(BaseModel):
@@ -21,6 +58,8 @@ class AnalysisRequest(BaseModel):
     include_structure: bool = True
     api_key: Optional[str] = None
     history: Optional[list] = None
+    today_signal_count: Optional[int] = 0
+    daily_signal_limit: Optional[int] = 100
 
 
 class ChatQueryRequest(BaseModel):
@@ -43,7 +82,7 @@ async def get_calendar():
 @router.post("/quick")
 async def quick_analysis(request: AnalysisRequest):
     """
-    Evaluates confluence metrics using live TwelveData chart feeds strictly.
+    Evaluates confluence metrics using live TwelveData chart feeds strictly via the 15-layer pipeline.
     """
     # Read API Key from settings (.env) first, fall back to request body payload
     api_key = settings.market_data_api_key
@@ -56,121 +95,154 @@ async def quick_analysis(request: AnalysisRequest):
             detail="TwelveData API Key is missing. Please set the AI_MARKET_DATA_API_KEY environment variable in your .env file or Railway console settings."
         )
 
-    # 1. Fetch real chart data strictly
-    try:
-        df = await fetch_twelve_data_candles(request.pair, request.timeframe, api_key)
-        if df is None:
-            raise HTTPException(
-                status_code=400,
-                detail="TwelveData API returned no chart data for this symbol/timeframe."
-            )
-    except ValueError as val_err:
-        raise HTTPException(
-            status_code=400,
-            detail=str(val_err)
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"TwelveData Connection Failed: {str(e)}"
-        )
-
-    # 2. Run indicator check
-    rsi = float(calculate_rsi(df, period=14).iloc[-1])
-    structure = detect_market_structure(df)
-    
-    # Calculate MACD crossovers
-    macd_line, signal_line, hist = calculate_macd(df)
-    macd_val = float(macd_line.iloc[-1])
-    macd_sig = float(signal_line.iloc[-1])
-    macd_hist = float(hist.iloc[-1])
-
-    # Calculate ADX trend strength
-    adx = float(calculate_adx(df).iloc[-1])
-
-    # 3. Read the real economic calendar to enforce the news safety check
+    # 1. Fetch economic calendar news safety
     news_safe = await check_news_filter(request.pair)
 
-    # Confluence scoring based on bias alignment
-    # RSI score: High confluences if price is trending and RSI is not overbought/oversold
-    rsi_score = 50.0
-    bias = structure["market_bias"]
-    
-    if bias == "bullish":
-        if rsi >= 70:
-            rsi_score = 40.0  # Overbought warning
-        elif 45 <= rsi <= 68:
-            rsi_score = 90.0  # Safe uptrend growth
-        else:
-            rsi_score = 65.0
-    elif bias == "bearish":
-        if rsi <= 30:
-            rsi_score = 40.0  # Oversold warning
-        elif 32 <= rsi <= 55:
-            rsi_score = 90.0  # Safe downtrend drop
-        else:
-            rsi_score = 65.0
+    # 2. Get normalized market data snapshot
+    try:
+        snapshot = await market_data_service.get_market_snapshot(
+            symbol=request.pair,
+            timeframe=request.timeframe,
+            api_key=api_key,
+            news_safe=news_safe
+        )
+    except ValueError as val_err:
+        # Market data unavailable fails safely with NO TRADE
+        return {
+            "success": True,
+            "data": {
+                "pair": request.pair,
+                "timeframe": request.timeframe,
+                "decision": "no_trade",
+                "confidence": 0.0,
+                "reasoning": f"NO TRADE: {str(val_err)}",
+                "rejection_reasons": [str(val_err)],
+                "expected_trigger": None,
+                "confluence_breakdown": {
+                    "marketStructure": 0,
+                    "trend": 0,
+                    "momentum": 0,
+                    "liquidity": 0,
+                    "economicNews": 0,
+                    "riskReward": 0,
+                    "overall": 0
+                },
+                "entry_price": 0.0,
+                "current_price": 0.0,
+                "stop_loss": 0.0,
+                "take_profit": 0.0,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
 
-    # MACD score: High confluence if histogram supports the trend direction
-    macd_score = 50.0
-    macd_bullish = macd_hist > 0 and macd_val > macd_sig
-    macd_bearish = macd_hist < 0 and macd_val < macd_sig
-    
-    if bias == "bullish" and macd_bullish:
-        macd_score = 95.0
-    elif bias == "bearish" and macd_bearish:
-        macd_score = 95.0
-    else:
-        macd_score = 45.0
-
-    # ADX filter: Boost score if trend strength is high (ADX > 25)
-    adx_bonus = 5.0 if adx > 25.0 else 0.0
-
-    indicators_confluence = float((rsi_score * 0.5) + (macd_score * 0.5)) + adx_bonus
-    indicators_confluence = min(100.0, max(0.0, indicators_confluence))
-
-    # 4. Evaluate decision with feedback history learning context
+    # 3. Construct pipeline execution context
     rr = 2.5 if request.timeframe == "15m" else 3.2
-    decision_result = evaluate_decision(
-        pair=request.pair,
-        timeframe=request.timeframe,
-        trend_bias=bias,
-        indicators_confluence=indicators_confluence,
-        structure_score=95.0 if structure["bos_detected"] else 60.0,
-        liquidity_score=92.0 if len(structure["fvgs"]) > 0 else 70.0,
-        volume_score=90.0,
-        risk_reward_ratio=rr,
-        news_impact_low=news_safe,
-        history=request.history,
-    )
+    context = {
+        "today_signal_count": request.today_signal_count or 0,
+        "daily_signal_limit": request.daily_signal_limit or 100,
+        "history": request.history or [],
+        "risk_reward_ratio": rr,
+        "engine_results": {}
+    }
 
-    # 5. Compute volatility-adjusted entry, SL, and TP targets using live ATR
-    current_price = float(df["close"].iloc[-1])
-    atr = float((df["high"] - df["low"]).tail(14).mean())
-    if atr <= 0 or pd.isna(atr):
-        atr = current_price * 0.0015
+    # 4. Sequentially execute individual pipeline engines (L1 -> L15)
+    # L1: Eligibility
+    elig_res = eligibility_engine.analyze(snapshot, context)
+    context["engine_results"]["eligibility"] = elig_res
+    
+    # L2: Higher Timeframe Bias
+    htf_res = higher_tf_engine.analyze(snapshot, context)
+    context["engine_results"]["higher_timeframe"] = htf_res
 
-    # Align directions
-    direction = "long" if structure["market_bias"] == "bullish" else "short"
-    if direction == "long":
-        sl = current_price - (atr * 1.5)
-        tp = current_price + (atr * 1.5 * rr)
-    else:
-        sl = current_price + (atr * 1.5)
-        tp = current_price - (atr * 1.5 * rr)
+    # L3: Market Structure
+    struct_res = structure_engine.analyze(snapshot, context)
+    context["engine_results"]["structure"] = struct_res
+
+    # L4: Liquidity
+    liq_res = liquidity_engine.analyze(snapshot, context)
+    context["engine_results"]["liquidity"] = liq_res
+
+    # L5: Institutional Zones
+    zones_res = zones_engine.analyze(snapshot, context)
+    context["engine_results"]["zones"] = zones_res
+
+    # L6: Trend Quality
+    trend_res = trend_quality_engine.analyze(snapshot, context)
+    context["engine_results"]["trend_quality"] = trend_res
+
+    # L7: Momentum
+    mom_res = momentum_engine.analyze(snapshot, context)
+    context["engine_results"]["momentum"] = mom_res
+
+    # L8: Volume
+    vol_res = volume_engine.analyze(snapshot, context)
+    context["engine_results"]["volume"] = vol_res
+
+    # L9: Volatility
+    vlt_res = volatility_engine.analyze(snapshot, context)
+    context["engine_results"]["volatility"] = vlt_res
+
+    # L10: Correlation
+    corr_res = correlation_engine.analyze(snapshot, context)
+    context["engine_results"]["correlation"] = corr_res
+
+    # L11: Fundamentals
+    funds_res = fundamentals_engine.analyze(snapshot, context)
+    context["engine_results"]["fundamentals"] = funds_res
+
+    # L12: History Pattern
+    hist_res = history_engine.analyze(snapshot, context)
+    context["engine_results"]["historical_pattern"] = hist_res
+
+    # L13: Risk
+    risk_res = risk_engine.analyze(snapshot, context)
+    context["engine_results"]["risk"] = risk_res
+
+    # L14: Confidence Aggregation
+    conf_res = confidence_engine.analyze(snapshot, context)
+    context["engine_results"]["confidence"] = conf_res
+
+    # L15: Final Decision & Trade Certificate Compilation
+    dec_res = decision_engine.analyze(snapshot, context)
+    cert = dec_res.metrics.get("certificate", {})
+
+    # 5. Extract rejection warnings
+    rejection_reasons = []
+    for key, res in context["engine_results"].items():
+        if res.validation_status in ["invalid", "limit_breached", "closed"]:
+            rejection_reasons.append(res.explanation)
+
+    # 6. Map to backwards-compatible JSON schema
+    confluence_breakdown = {
+        "marketStructure": float(struct_res.confidence),
+        "trend": 100 if htf_res.result != "neutral" else 50,
+        "momentum": float(mom_res.confidence),
+        "liquidity": float(liq_res.confidence),
+        "economicNews": 100 if news_safe else 10,
+        "riskReward": 100 if rr >= 2.0 else 50,
+        "overall": float(conf_res.confidence)
+    }
 
     return {
         "success": True,
         "data": {
-            **decision_result,
-            "rsi": float(rsi),
-            "entry_price": round(current_price, 5),
-            "current_price": round(current_price, 5),
-            "stop_loss": round(sl, 5),
-            "take_profit": round(tp, 5),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "pair": request.pair,
+            "timeframe": request.timeframe,
+            "decision": dec_res.result,
+            "confidence": float(dec_res.confidence),
+            "reasoning": dec_res.explanation,
+            "rejection_reasons": rejection_reasons,
+            "expected_trigger": cert.get("expected_trigger"),
+            "confluence_breakdown": confluence_breakdown,
+            "entry_price": cert.get("entry_price", 0.0),
+            "current_price": cert.get("entry_price", 0.0),
+            "stop_loss": cert.get("stop_loss", 0.0),
+            "take_profit": cert.get("take_profit", 0.0),
+            "certificate": cert,
+            "timestamp": datetime.now(timezone.utc).isoformat()
         },
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 

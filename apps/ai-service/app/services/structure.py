@@ -209,17 +209,19 @@ async def fetch_twelve_data_candles(symbol: str, timeframe: str, api_key: str):
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(url)
             if response.status_code != 200:
-                print(f"TwelveData HTTP {response.status_code} for {symbol}")
-                return None
+                raise ValueError(f"TwelveData Server returned HTTP {response.status_code}.")
             
             data = response.json()
+            if data.get("status") == "error":
+                err_msg = data.get("message", "Unknown error from TwelveData API.")
+                raise ValueError(f"TwelveData API: {err_msg}")
+                
             if "values" not in data:
-                print(f"TwelveData response missing values: {data}")
-                return None
+                raise ValueError("TwelveData response missing values field.")
                 
             values = data["values"]
             if not values:
-                return None
+                raise ValueError(f"No chart bars returned for {symbol_to_query}.")
                 
             # TwelveData returns most recent values first; reverse to chronological order
             values = list(reversed(values))
@@ -233,6 +235,7 @@ async def fetch_twelve_data_candles(symbol: str, timeframe: str, api_key: str):
             
             print(f"Successfully fetched {len(df)} live bars from TwelveData for {symbol_to_query} ({interval})")
             return df
+    except ValueError:
+        raise
     except Exception as e:
-        print(f"TwelveData connection failed for {symbol}: {e}")
-        return None
+        raise ValueError(f"TwelveData Connection Failed: {str(e)}")

@@ -142,7 +142,9 @@ export default function LiveScannerWidget() {
       });
  
       if (!res.ok) {
-        setLogs(prev => [`[ERROR] AI gateway returned ${res.status}`, ...prev]);
+        const errBody = await res.json().catch(() => ({}));
+        const errMsg = errBody?.message || errBody?.detail || `HTTP ${res.status}`;
+        setLogs(prev => [`[ERROR] ${errMsg}`, ...prev]);
         return;
       }
  

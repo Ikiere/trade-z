@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, Headers, UnauthorizedException } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, Headers, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { IsString, IsOptional } from 'class-validator';
 
@@ -35,8 +35,12 @@ export class ChatController {
     const userId = this.extractUserId(auth);
     if (!userId) throw new UnauthorizedException('Valid session token required');
 
-    const result = await this.chatService.getQuickAnalysis(userId, body.pair, body.timeframe || '4h');
-    return result;
+    try {
+      const result = await this.chatService.getQuickAnalysis(userId, body.pair, body.timeframe || '4h');
+      return result;
+    } catch (err: any) {
+      throw new BadRequestException(err.message);
+    }
   }
 
   /**

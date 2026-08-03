@@ -1,6 +1,6 @@
 """Market analysis router connecting indicators, structure, and decision services."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from datetime import datetime, timezone
 from pydantic import BaseModel
 from typing import Optional
@@ -42,15 +42,32 @@ async def get_calendar():
 @router.post("/quick")
 async def quick_analysis(request: AnalysisRequest):
     """
-    Evaluates confluence metrics using live TwelveData chart feeds or simulated parameters.
+    Evaluates confluence metrics using live TwelveData chart feeds strictly.
     """
-    # 1. Fetch real chart data or fall back to simulation
-    df = None
-    if request.api_key and request.api_key not in ["", "placeholder", "your_api_key"]:
-        df = await fetch_twelve_data_candles(request.pair, request.timeframe, request.api_key)
+    if not request.api_key or request.api_key in ["", "placeholder", "your_api_key"]:
+        raise HTTPException(
+            status_code=400,
+            detail="TwelveData API Key is missing. Please go to Settings -> Broker API Integrations and sync a valid TwelveData API key."
+        )
 
-    if df is None:
-        df = generate_simulated_candles(request.pair, request.timeframe)
+    # 1. Fetch real chart data strictly
+    try:
+        df = await fetch_twelve_data_candles(request.pair, request.timeframe, request.api_key)
+        if df is None:
+            raise HTTPException(
+                status_code=400,
+                detail="TwelveData API returned no chart data for this symbol/timeframe."
+            )
+    except ValueError as val_err:
+        raise HTTPException(
+            status_code=400,
+            detail=str(val_err)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"TwelveData Connection Failed: {str(e)}"
+        )
 
     # 2. Run indicator check
     rsi = calculate_rsi(df, period=14).iloc[-1]

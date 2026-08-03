@@ -73,31 +73,15 @@ export class ChatService {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to query AI quick analysis');
+        const errData: any = await response.json().catch(() => ({}));
+        const errMsg = errData?.detail || 'Failed to query AI quick analysis';
+        throw new Error(errMsg);
       }
 
       return await response.json();
     } catch (error: any) {
       console.error('Error in NestJS ChatService getQuickAnalysis:', error.message);
-      return {
-        success: true,
-        data: {
-          pair,
-          timeframe,
-          decision: 'approve',
-          confidence: 88.5,
-          reasoning: `Analysis of ${pair} on ${timeframe} completed. Technical structures indicate a bullish order block confirmation.`,
-          confluence_breakdown: {
-            marketStructure: 90,
-            trend: 85,
-            momentum: 80,
-            liquidity: 90,
-            economicNews: 100,
-            riskReward: 100,
-            overall: 88.5
-          }
-        }
-      };
+      throw error;
     }
   }
 }

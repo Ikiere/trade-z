@@ -116,6 +116,12 @@ export default function LatestSignalsWidget() {
                       </span>
                     </div>
                     <p className="text-[10px] text-[#64748b] font-mono mt-0.5">{signal.strategy}</p>
+                    <div className="flex items-center gap-1 mt-1 font-mono text-[8px] font-bold tracking-wider uppercase">
+                      <span className={`w-1.5 h-1.5 rounded-full ${isRejected ? 'bg-red-400 animate-pulse' : 'bg-emerald-400'}`} />
+                      <span className={isRejected ? 'text-red-400' : 'text-emerald-400'}>
+                        {isRejected ? 'RISKY SETUP (AVOID)' : 'GOOD TRADE (VALID)'}
+                      </span>
+                    </div>
                   </div>
                 </div>
 

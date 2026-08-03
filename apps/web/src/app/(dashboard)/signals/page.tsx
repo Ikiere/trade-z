@@ -305,6 +305,16 @@ export default function SignalsPage() {
                     </div>
                   </div>
 
+                  {/* Setup Quality Badge */}
+                  <div className={`px-2.5 py-1.5 rounded-lg border text-[9px] font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 ${
+                    isRejected
+                      ? 'bg-red-500/10 border-red-500/20 text-red-400'
+                      : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                  }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${isRejected ? 'bg-red-400 animate-pulse' : 'bg-emerald-400'}`} />
+                    {isRejected ? '🔴 RISKY SETUP (AVOID)' : '🟢 GOOD TRADE SETUP (VALID)'}
+                  </div>
+
                   {/* AI Reasoning Preview */}
                   {sig.ai_reasoning && (
                     <p className="text-[10px] text-[#64748b] font-mono leading-relaxed line-clamp-2 bg-bg-secondary/40 rounded-lg px-2.5 py-2 border border-[#1e293b]/50">

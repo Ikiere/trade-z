@@ -6,13 +6,13 @@ import { Scan, TrendingUp, TrendingDown, Loader2, AlertTriangle } from 'lucide-r
 
 const getSimulatedPrice = (pair: string) => {
   const u = pair.toUpperCase();
-  if (u.includes('EURUSD')) return { entry: 1.0845, sl: 1.0815, tp: 1.0905 };
-  if (u.includes('GBPUSD')) return { entry: 1.2680, sl: 1.2640, tp: 1.2760 };
-  if (u.includes('USDJPY')) return { entry: 154.20, sl: 154.80, tp: 153.00 };
-  if (u.includes('XAUUSD')) return { entry: 2350.50, sl: 2340.00, tp: 2371.50 };
-  if (u.includes('AUDUSD')) return { entry: 0.6650, sl: 0.6620, tp: 0.6710 };
-  if (u.includes('USDCAD')) return { entry: 1.3620, sl: 1.3660, tp: 1.3540 };
-  return { entry: 1.0000, sl: 0.9970, tp: 1.0060 };
+  if (u.includes('EURUSD')) return { entry: 1.0845, sl: 1.0833, tp: 1.0869 }; // 12 pip SL, 24 pip TP (Intraday)
+  if (u.includes('GBPUSD')) return { entry: 1.2680, sl: 1.2665, tp: 1.2710 }; // 15 pip SL, 30 pip TP (Intraday)
+  if (u.includes('USDJPY')) return { entry: 154.20, sl: 154.02, tp: 154.56 }; // 18 pip SL, 36 pip TP (Intraday)
+  if (u.includes('XAUUSD')) return { entry: 2350.50, sl: 2346.50, tp: 2358.50 }; // $4 SL, $8 TP (Intraday)
+  if (u.includes('AUDUSD')) return { entry: 0.6650, sl: 0.6638, tp: 0.6674 }; // 12 pip SL, 24 pip TP (Intraday)
+  if (u.includes('USDCAD')) return { entry: 1.3620, sl: 1.3605, tp: 1.3650 }; // 15 pip SL, 30 pip TP (Intraday)
+  return { entry: 1.0000, sl: 0.9985, tp: 1.0030 };
 };
 
 const getSimulatedSetup = (pair: string, direction: 'long' | 'short') => {
@@ -24,7 +24,7 @@ const getSimulatedSetup = (pair: string, direction: 'long' | 'short') => {
       entry,
       sl: base.sl,
       tp: base.tp,
-      current: entry - 0.0005 // current < entry -> buy limit
+      current: entry - 0.0002 // current slightly below entry -> buy limit
     };
   } else {
     const risk = Math.abs(entry - base.sl);
@@ -33,7 +33,7 @@ const getSimulatedSetup = (pair: string, direction: 'long' | 'short') => {
       entry,
       sl: entry + risk,
       tp: entry - reward,
-      current: entry + 0.0005 // current > entry -> sell limit
+      current: entry + 0.0002 // current slightly above entry -> sell limit
     };
   }
 };
@@ -124,7 +124,7 @@ export default function LiveScannerWidget() {
       const res = await fetch(`${apiBase}/api/v1/chat/analysis`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pair, timeframe: '4h' }),
+        body: JSON.stringify({ pair, timeframe: '15m' }),
       });
 
       if (!res.ok) {
@@ -163,9 +163,9 @@ export default function LiveScannerWidget() {
           take_profit: priceInfoBuy.tp,
           confidence,
           ai_reasoning: reasoning,
-          timeframe: '4h',
-          strategy: 'AI Confluence Buy Flow',
-          tags: isApproved && direction === 'long' ? ['bullish_breakout', 'h4_orderblock'] : ['insufficient_momentum'],
+          timeframe: '15m',
+          strategy: 'AI Intraday Scalp',
+          tags: isApproved && direction === 'long' ? ['m15_orderblock', 'intraday_liquidity'] : ['insufficient_momentum'],
         }),
       });
       const buyBody = await sigResBuy.json().catch(() => ({}));
@@ -184,9 +184,9 @@ export default function LiveScannerWidget() {
           take_profit: priceInfoSell.tp,
           confidence,
           ai_reasoning: reasoning,
-          timeframe: '4h',
-          strategy: 'AI Confluence Sell Flow',
-          tags: isApproved && direction === 'short' ? ['bearish_breakout', 'h4_orderblock'] : ['insufficient_momentum'],
+          timeframe: '15m',
+          strategy: 'AI Intraday Scalp',
+          tags: isApproved && direction === 'short' ? ['m15_orderblock', 'intraday_liquidity'] : ['insufficient_momentum'],
         }),
       });
       const sellBody = await sigResSell.json().catch(() => ({}));

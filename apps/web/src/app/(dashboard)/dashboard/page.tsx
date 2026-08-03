@@ -110,7 +110,35 @@ export default function DashboardPage() {
         }
 
         if (activePositions) {
-          setOpenTrades(activePositions as unknown as Trade[]);
+          const mapped = activePositions.map((trade: any) => ({
+            id: trade.id,
+            userId: trade.user_id,
+            signalId: trade.signal_id,
+            brokerId: trade.broker_id,
+            pair: trade.pair,
+            type: trade.type,
+            direction: trade.direction,
+            status: trade.status,
+            entryPrice: Number(trade.entry_price) || 0,
+            stopLoss: Number(trade.stop_loss) || 0,
+            takeProfit: Number(trade.take_profit) || 0,
+            currentPrice: Number(trade.current_price || trade.entry_price) || 0,
+            exitPrice: Number(trade.exit_price) || 0,
+            lotSize: Number(trade.lot_size) || 0.01,
+            riskAmount: Number(trade.risk_amount) || 0,
+            riskReward: Number(trade.risk_reward) || 0,
+            riskPercent: Number(trade.risk_percent) || 0,
+            pnl: Number(trade.pnl) || 0,
+            pnlPercent: Number(trade.pnl_percent) || 0,
+            pips: Number(trade.pips) || 0,
+            aiConfidence: Number(trade.ai_confidence) || 0,
+            aiReasoning: trade.ai_reasoning || '',
+            openedAt: trade.opened_at,
+            closedAt: trade.closed_at,
+            createdAt: trade.created_at,
+            updatedAt: trade.updated_at,
+          }));
+          setOpenTrades(mapped);
         }
       } catch (err) {
         console.error('Error fetching dashboard data:', err);

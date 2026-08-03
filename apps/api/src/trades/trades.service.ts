@@ -157,22 +157,41 @@ export class TradesService {
   }
 
   async createSignal(userId: string, signalData: any) {
+    const entryPrice = Number(signalData.entry_price) || 0;
+    const currentPrice = Number(signalData.current_price) || entryPrice;
+    const direction = signalData.direction;
+    let orderType = signalData.order_type;
+
+    if (!orderType) {
+      if (entryPrice && currentPrice) {
+        if (direction === 'long') {
+          orderType = entryPrice < currentPrice ? 'buy limit' : 'buy stop';
+        } else {
+          orderType = entryPrice > currentPrice ? 'sell limit' : 'sell stop';
+        }
+      } else {
+        orderType = direction === 'long' ? 'buy limit' : 'sell limit';
+      }
+    }
+
     const payload: Record<string, any> = {
       user_id: userId,
       pair: signalData.pair,
       direction: signalData.direction,
       status: signalData.status || 'pending',
-      entry_price: Number(signalData.entry_price) || 0,
+      entry_price: entryPrice,
       stop_loss: Number(signalData.stop_loss) || 0,
       take_profit: Number(signalData.take_profit) || 0,
       confidence: Number(signalData.confidence) || 50,
       timeframe: signalData.timeframe || '4h',
+      order_type: orderType,
     };
 
     // Optional fields
     if (signalData.ai_reasoning) payload.ai_reasoning = signalData.ai_reasoning;
     if (signalData.strategy) payload.strategy = signalData.strategy;
     if (Array.isArray(signalData.tags)) payload.tags = signalData.tags;
+    if (signalData.current_price) payload.current_price = Number(signalData.current_price);
 
     const { data, error } = await this.supabase
       .from('signals')

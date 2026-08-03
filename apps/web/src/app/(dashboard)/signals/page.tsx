@@ -44,6 +44,7 @@ interface DbSignal {
   strategy: string | null;
   tags: string[] | null;
   created_at: string;
+  order_type?: string;
 }
 
 const STATUS_CONFIG = {
@@ -268,11 +269,16 @@ export default function SignalsPage() {
                       </div>
                       <div>
                         <span className="font-bold text-white text-sm font-mono">{sig.pair}</span>
-                        <div className="flex items-center gap-1.5 mt-0.5">
+                        <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
                           <span className="text-[9px] bg-bg-elevated px-1.5 py-0.5 rounded text-[#64748b] font-mono">{sig.timeframe}</span>
                           <span className={`text-[9px] font-mono font-bold uppercase ${isLong ? 'text-emerald-400' : 'text-red-400'}`}>
                             {isLong ? '▲ LONG' : '▼ SHORT'}
                           </span>
+                          {sig.order_type && (
+                            <span className="text-[9px] bg-brand-500/10 text-brand-400 border border-brand-500/20 px-1.5 py-0.5 rounded font-mono font-bold uppercase">
+                              {sig.order_type}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -389,12 +395,13 @@ export default function SignalsPage() {
               <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto no-scrollbar">
 
                 {/* Overview grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono text-center">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 font-mono text-center">
                   {[
                     { label: 'ASSET',      value: selected.pair,                                  color: 'text-white' },
                     { label: 'DIRECTION',  value: selected.direction.toUpperCase(),               color: selected.direction === 'long' ? 'text-emerald-400' : 'text-red-400' },
                     { label: 'CONFIDENCE', value: `${Number(selected.confidence).toFixed(1)}%`,  color: selected.status === 'rejected' ? 'text-red-400' : 'text-emerald-400' },
                     { label: 'RISK/REWARD',value: calcRR(Number(selected.entry_price), Number(selected.stop_loss), Number(selected.take_profit)), color: 'text-amber-400' },
+                    { label: 'ORDER TYPE', value: (selected.order_type || 'buy limit').toUpperCase(), color: 'text-brand-400' },
                   ].map(({ label, value, color }) => (
                     <div key={label} className="bg-bg-card border border-[#1e293b] rounded-xl p-3">
                       <span className="text-[9px] text-[#64748b] block mb-1">{label}</span>

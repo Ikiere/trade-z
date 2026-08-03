@@ -15,6 +15,29 @@ const getSimulatedPrice = (pair: string) => {
   return { entry: 1.0000, sl: 0.9970, tp: 1.0060 };
 };
 
+const getSimulatedSetup = (pair: string, direction: 'long' | 'short') => {
+  const base = getSimulatedPrice(pair);
+  const entry = base.entry;
+  
+  if (direction === 'long') {
+    return {
+      entry,
+      sl: base.sl,
+      tp: base.tp,
+      current: entry - 0.0005 // current < entry -> buy limit
+    };
+  } else {
+    const risk = Math.abs(entry - base.sl);
+    const reward = Math.abs(base.tp - entry);
+    return {
+      entry,
+      sl: entry + risk,
+      tp: entry - reward,
+      current: entry + 0.0005 // current > entry -> sell limit
+    };
+  }
+};
+
 export default function LiveScannerWidget() {
   const [watchlist, setWatchlist] = useState<string[]>([]);
   const [activePair, setActivePair] = useState<string | null>(null);
@@ -118,50 +141,74 @@ export default function LiveScannerWidget() {
       const reasoning = info.reasoning || '';
       const isApproved = decision === 'approve';
       const direction = reasoning.toLowerCase().includes('sell') || reasoning.toLowerCase().includes('short') ? 'short' : 'long';
-      const priceInfo = getSimulatedPrice(pair);
+      
+      const priceInfoBuy = getSimulatedSetup(pair, 'long');
+      const priceInfoSell = getSimulatedSetup(pair, 'short');
 
-      // Write signal via NestJS proxy (bypasses RLS, uses service_role)
+      // Write signals via NestJS proxy (bypasses RLS, uses service_role)
       const supabase = createClient();
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
-      const sigRes = await fetch(`${apiBase}/api/v1/trades/signals`, {
+      // 1. Post BUY Signal
+      const sigResBuy = await fetch(`${apiBase}/api/v1/trades/signals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
           pair,
-          direction,
-          status: isApproved ? 'active' : 'rejected',
-          entry_price: priceInfo.entry,
-          stop_loss: priceInfo.sl,
-          take_profit: priceInfo.tp,
+          direction: 'long',
+          status: isApproved && direction === 'long' ? 'active' : 'rejected',
+          entry_price: priceInfoBuy.entry,
+          current_price: priceInfoBuy.current,
+          stop_loss: priceInfoBuy.sl,
+          take_profit: priceInfoBuy.tp,
           confidence,
           ai_reasoning: reasoning,
           timeframe: '4h',
-          strategy: 'AI Confluence Flow',
-          tags: isApproved ? ['bullish_breakout', 'h4_orderblock'] : ['insufficient_momentum'],
+          strategy: 'AI Confluence Buy Flow',
+          tags: isApproved && direction === 'long' ? ['bullish_breakout', 'h4_orderblock'] : ['insufficient_momentum'],
         }),
       });
 
-      // Increment today's count regardless of save result
-      setTodaySignalCount(n => n + 1);
+      // 2. Post SELL Signal
+      const sigResSell = await fetch(`${apiBase}/api/v1/trades/signals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          pair,
+          direction: 'short',
+          status: isApproved && direction === 'short' ? 'active' : 'rejected',
+          entry_price: priceInfoSell.entry,
+          current_price: priceInfoSell.current,
+          stop_loss: priceInfoSell.sl,
+          take_profit: priceInfoSell.tp,
+          confidence,
+          ai_reasoning: reasoning,
+          timeframe: '4h',
+          strategy: 'AI Confluence Sell Flow',
+          tags: isApproved && direction === 'short' ? ['bearish_breakout', 'h4_orderblock'] : ['insufficient_momentum'],
+        }),
+      });
 
-      if (!sigRes.ok) {
-        const sigBody = await sigRes.json().catch(() => ({}));
-        setLogs(prev => [`[WARN] Signal analysis done but save failed: ${sigBody?.message || sigRes.statusText}`, ...prev]);
-      }
+      // Increment today's count by 2
+      setTodaySignalCount(n => n + 2);
 
       if (isApproved) {
+        const activeDir = direction.toUpperCase();
         setLogs(prev => [
-          `[SIGNAL ✅] ${pair} ${direction.toUpperCase()} approved! Conf: ${confidence.toFixed(1)}% · SL: ${priceInfo.sl} · TP: ${priceInfo.tp}`,
+          `[SIGNAL ✅] generated BUY & SELL setups for ${pair}! Approved direction: ${activeDir}`,
+          `  -> BUY: Entry ${priceInfoBuy.entry.toFixed(5)} (SL: ${priceInfoBuy.sl.toFixed(5)}, TP: ${priceInfoBuy.tp.toFixed(5)})`,
+          `  -> SELL: Entry ${priceInfoSell.entry.toFixed(5)} (SL: ${priceInfoSell.sl.toFixed(5)}, TP: ${priceInfoSell.tp.toFixed(5)})`,
           ...prev,
         ]);
+        
         if (tradingMode === 'fully_automatic') {
-          setLogs(prev => [`[AUTO TRADE] Placing position for ${pair}...`, ...prev]);
+          setLogs(prev => [`[AUTO TRADE] Placing position for ${pair} (${direction})...`, ...prev]);
+          const activeSetup = direction === 'long' ? priceInfoBuy : priceInfoSell;
           const tradeRes = await fetch(`${apiBase}/api/v1/trades`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify({ pair, direction, entryPrice: priceInfo.entry, stopLoss: priceInfo.sl, takeProfit: priceInfo.tp, riskPercent: 1.0 }),
+            body: JSON.stringify({ pair, direction, entryPrice: activeSetup.entry, stopLoss: activeSetup.sl, takeProfit: activeSetup.tp, riskPercent: 1.0 }),
           });
           const msg = tradeRes.ok ? `Position placed for ${pair}!` : `Auto-trade failed: ${tradeRes.statusText}`;
           setLogs(prev => [`[AUTO TRADE] ${msg}`, ...prev]);

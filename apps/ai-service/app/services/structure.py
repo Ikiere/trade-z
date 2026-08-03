@@ -198,10 +198,10 @@ async def fetch_twelve_data_candles(symbol: str, timeframe: str, api_key: str):
     elif timeframe == "1d":
         interval = "1day"
 
-    # Normalize Spot Gold symbol (XAUUSD -> XAU/USD)
+    # Normalize currency pairs and Spot Gold (e.g., EURUSD -> EUR/USD, XAUUSD -> XAU/USD)
     symbol_to_query = symbol.upper()
-    if "XAUUSD" in symbol_to_query:
-        symbol_to_query = "XAU/USD"
+    if len(symbol_to_query) == 6:
+        symbol_to_query = f"{symbol_to_query[:3]}/{symbol_to_query[3:]}"
 
     url = f"https://api.twelvedata.com/time_series?symbol={symbol_to_query}&interval={interval}&outputsize=60&apikey={api_key}"
 

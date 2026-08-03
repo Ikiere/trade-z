@@ -212,10 +212,22 @@ export default function SignalsPage() {
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <div className="card p-12 text-center space-y-3">
-          <Sparkles className="w-8 h-8 text-[#334155] mx-auto" />
-          <p className="text-sm text-[#64748b] font-mono">No signals yet for this filter.</p>
-          <p className="text-xs text-[#475569] font-mono">Start the AI scanner on the Dashboard to generate signals.</p>
+        <div className="card p-12 text-center space-y-4">
+          <Sparkles className="w-10 h-10 text-[#334155] mx-auto" />
+          <div>
+            <p className="text-sm font-semibold text-white font-mono">No signals yet{filter !== 'all' ? ` for filter: ${filter}` : ''}</p>
+            <p className="text-xs text-[#64748b] font-mono mt-1">
+              {filter !== 'all'
+                ? 'Try switching the filter to "all" to see all your signals.'
+                : 'Go to the Dashboard and start the AI Scanner to generate signals. They will appear here in real time.'}
+            </p>
+            {filter !== 'all' && (
+              <button onClick={() => setFilter('all')}
+                className="mt-3 px-4 py-1.5 rounded-lg bg-brand-600/20 text-brand-400 border border-brand-500/20 text-xs font-mono hover:bg-brand-600/30 transition-colors">
+                Show All Signals
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <motion.div layout className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

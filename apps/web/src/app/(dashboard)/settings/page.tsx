@@ -1,301 +1,468 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
-import { User, Shield, Zap, Key, Loader2, CheckCircle } from 'lucide-react';
+import {
+  User, Shield, Key, Loader2, Plus, Trash2,
+  FileSpreadsheet, Wallet, BellRing, ListChecks,
+  CheckCircle2, AlertTriangle,
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+
+const SUPPORTED_PAIRS = [
+  'EURUSD','GBPUSD','USDJPY','XAUUSD','AUDUSD',
+  'USDCAD','EURGBP','GBPJPY','USDCHF','NZDUSD',
+];
+
+// ─── small reusable section card ───────────────────────────────────────────
+function Section({ icon: Icon, title, children }: {
+  icon: React.ElementType; title: string; children: React.ReactNode;
+}) {
+  return (
+    <div className="card p-5 space-y-4">
+      <div className="flex items-center gap-2 border-b border-[#1e293b] pb-3">
+        <Icon className="w-4 h-4 text-brand-400" />
+        <h3 className="text-sm font-semibold text-white">{title}</h3>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function SaveMsg({ msg }: { msg: string }) {
+  if (!msg) return null;
+  const ok = msg.toLowerCase().includes('success') || msg.toLowerCase().includes('saved') || msg.toLowerCase().includes('logged') || msg.toLowerCase().includes('updated') || msg.toLowerCase().includes('configured');
+  return (
+    <motion.p
+      initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}
+      className={`text-[10px] font-semibold font-mono flex items-center gap-1 ${ok ? 'text-emerald-400' : 'text-red-400'}`}
+    >
+      {ok ? <CheckCircle2 className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
+      {msg}
+    </motion.p>
+  );
+}
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
-  const [updatingProfile, setUpdatingProfile] = useState(false);
-  const [updatingSettings, setUpdatingSettings] = useState(false);
-  const [msgProfile, setMsgProfile] = useState('');
-  const [msgSettings, setMsgSettings] = useState('');
+  const [userId, setUserId] = useState<string | null>(null);
 
+  // ── Profile ─────────────────────────────────────────────
   const [profileName, setProfileName] = useState('');
   const [email, setEmail] = useState('');
-  
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [msgProfile, setMsgProfile] = useState('');
+
+  // ── Trading settings ─────────────────────────────────────
   const [mode, setMode] = useState('manual');
   const [lotSize, setLotSize] = useState(0.01);
   const [riskReward, setRiskReward] = useState(2.0);
   const [maxLoss, setMaxLoss] = useState(5.0);
-  const [maxTrades, setMaxTrades] = useState(5);
-  
-  const [apiKey, setApiKey] = useState('••••••••••••••••••••••••');
+  const [dailySignalLimit, setDailySignalLimit] = useState(2);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [msgSettings, setMsgSettings] = useState('');
 
-  useEffect(() => {
-    async function loadData() {
-      const supabase = createClient();
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+  // ── Watchlist ────────────────────────────────────────────
+  const [watchlist, setWatchlist] = useState<string[]>([]);
+  const [newPair, setNewPair] = useState('EURUSD');
+  const [savingWatch, setSavingWatch] = useState(false);
+  const [msgWatch, setMsgWatch] = useState('');
 
-        setEmail(user.email || '');
+  // ── Journal / Manual Trade Log ───────────────────────────
+  const [logPair, setLogPair] = useState('EURUSD');
+  const [logDirection, setLogDirection] = useState<'long' | 'short'>('long');
+  const [logLot, setLogLot] = useState('0.1');
+  const [logPnl, setLogPnl] = useState('50.00');
+  const [isLogging, setIsLogging] = useState(false);
+  const [msgLog, setMsgLog] = useState('');
 
-        // 1. Fetch Profile
-        const { data: profile } = await supabase
-          .from('user_profiles')
-          .select('*')
-          .eq('user_id', user.id)
-          .maybeSingle();
+  // ── Account Balance ──────────────────────────────────────
+  const [newBalance, setNewBalance] = useState('10000.00');
+  const [savingBalance, setSavingBalance] = useState(false);
+  const [msgBalance, setMsgBalance] = useState('');
 
-        if (profile) {
-          setProfileName(profile.display_name || '');
-        }
+  const [apiKey, setApiKey] = useState('');
 
-        // 2. Fetch Settings
-        const { data: settings } = await supabase
-          .from('user_settings')
-          .select('*')
-          .eq('user_id', user.id)
-          .maybeSingle();
+  // ────────────────────────────────────────────────────────
+  const loadData = useCallback(async () => {
+    const supabase = createClient();
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      setUserId(user.id);
+      setEmail(user.email || '');
 
-        if (settings) {
-          setMode(settings.trading_mode || 'manual');
-          setLotSize(Number(settings.default_lot_size) || 0.01);
-          setRiskReward(Number(settings.default_risk_per_trade) || 2.0);
-          setMaxLoss(Number(settings.max_daily_loss) || 5.0);
-          setMaxTrades(Number(settings.max_open_trades) || 5);
+      // Profile
+      const { data: profile } = await supabase
+        .from('user_profiles').select('*').eq('user_id', user.id).maybeSingle();
+      if (profile) setProfileName(profile.display_name || '');
+
+      // Settings
+      const { data: s } = await supabase
+        .from('user_settings').select('*').eq('user_id', user.id).maybeSingle();
+      if (s) {
+        setMode(s.trading_mode || 'manual');
+        setLotSize(Number(s.default_lot_size) || 0.01);
+        setRiskReward(Number(s.default_risk_per_trade) || 2.0);
+        setMaxLoss(Number(s.max_daily_loss) || 5.0);
+        setDailySignalLimit(Number(s.daily_signal_limit) || 2);
+        if (Array.isArray(s.watchlist) && s.watchlist.length > 0) {
+          setWatchlist(s.watchlist);
+          setLogPair(s.watchlist[0]);
         } else {
-          // Auto-insert default settings if missing
-          await supabase.from('user_settings').insert({
-            user_id: user.id,
-            trading_mode: 'manual',
-            default_lot_size: 0.01,
-            default_risk_per_trade: 2.00,
-            max_daily_loss: 5.00,
-            max_open_trades: 5
-          });
+          const def = ['EURUSD','GBPUSD','USDJPY','XAUUSD'];
+          setWatchlist(def);
         }
-      } catch (err) {
-        console.error('Error loading configuration details:', err);
-      } finally {
-        setLoading(false);
+      } else {
+        // Auto-create defaults
+        await supabase.from('user_settings').upsert({
+          user_id: user.id,
+          trading_mode: 'manual',
+          default_lot_size: 0.01,
+          default_risk_per_trade: 2.00,
+          max_daily_loss: 5.00,
+          max_open_trades: 5,
+          daily_signal_limit: 2,
+          watchlist: ['EURUSD','GBPUSD','USDJPY','XAUUSD'],
+        }, { onConflict: 'user_id' });
+        setWatchlist(['EURUSD','GBPUSD','USDJPY','XAUUSD']);
       }
-    }
 
-    loadData();
+      // Portfolio balance
+      const { data: port } = await supabase
+        .from('portfolios').select('balance').eq('user_id', user.id).eq('is_default', true).maybeSingle();
+      if (port) setNewBalance(Number(port.balance).toFixed(2));
+
+    } catch (err) {
+      console.error('Settings load error:', err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const handleUpdateProfile = async (e: React.FormEvent) => {
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // ── Profile save ─────────────────────────────────────────
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    setUpdatingProfile(true);
-    setMsgProfile('');
+    setSavingProfile(true); setMsgProfile('');
     const supabase = createClient();
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { error } = await supabase
-        .from('user_profiles')
-        .update({
-          display_name: profileName,
-          updated_at: new Date().toISOString()
-        })
-        .eq('user_id', user.id);
-
+      const { error } = await supabase.from('user_profiles')
+        .update({ display_name: profileName, updated_at: new Date().toISOString() })
+        .eq('user_id', userId);
       if (error) throw error;
       setMsgProfile('Profile updated successfully!');
-      setTimeout(() => setMsgProfile(''), 3000);
-    } catch (err: any) {
-      console.error('Error updating profile:', err.message);
-      setMsgProfile('Failed to update profile.');
-    } finally {
-      setUpdatingProfile(false);
-    }
+    } catch (err: any) { setMsgProfile(`Error: ${err.message}`); }
+    finally { setSavingProfile(false); setTimeout(() => setMsgProfile(''), 4000); }
   };
 
-  const handleUpdateSettings = async (e: React.FormEvent) => {
+  // ── Trading settings save ────────────────────────────────
+  const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    setUpdatingSettings(true);
-    setMsgSettings('');
+    setSavingSettings(true); setMsgSettings('');
     const supabase = createClient();
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { error } = await supabase
-        .from('user_settings')
+      const { error } = await supabase.from('user_settings')
         .update({
           trading_mode: mode,
           default_lot_size: lotSize,
           default_risk_per_trade: riskReward,
           max_daily_loss: maxLoss,
-          max_open_trades: maxTrades,
-          updated_at: new Date().toISOString()
+          daily_signal_limit: dailySignalLimit,
+          updated_at: new Date().toISOString(),
         })
-        .eq('user_id', user.id);
-
+        .eq('user_id', userId);
       if (error) throw error;
-      setMsgSettings('Trading configuration saved!');
-      setTimeout(() => setMsgSettings(''), 3000);
-    } catch (err: any) {
-      console.error('Error updating settings:', err.message);
-      setMsgSettings('Failed to save configuration.');
-    } finally {
-      setUpdatingSettings(false);
-    }
+      setMsgSettings('Trading rules saved!');
+    } catch (err: any) { setMsgSettings(`Error: ${err.message}`); }
+    finally { setSavingSettings(false); setTimeout(() => setMsgSettings(''), 4000); }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center p-24 text-xs font-mono text-[#64748b] gap-2">
-        <Loader2 className="w-4 h-4 animate-spin text-brand-400" />
-        Syncing system configuration...
-      </div>
-    );
-  }
+  // ── Watchlist save ───────────────────────────────────────
+  const saveWatchlist = async (updated: string[]) => {
+    setWatchlist(updated);
+    setSavingWatch(true);
+    const supabase = createClient();
+    try {
+      const { error } = await supabase.from('user_settings')
+        .update({ watchlist: updated, updated_at: new Date().toISOString() })
+        .eq('user_id', userId);
+      if (error) throw error;
+      setMsgWatch('Watchlist saved!');
+    } catch (err: any) { setMsgWatch(`Error: ${err.message}`); }
+    finally { setSavingWatch(false); setTimeout(() => setMsgWatch(''), 3000); }
+  };
+
+  const handleAddPair = () => {
+    if (watchlist.includes(newPair)) { setMsgWatch(`${newPair} already in watchlist.`); return; }
+    saveWatchlist([...watchlist, newPair]);
+  };
+
+  const handleRemovePair = (pair: string) => {
+    saveWatchlist(watchlist.filter(p => p !== pair));
+  };
+
+  // ── Journal trade log ────────────────────────────────────
+  const handleLogTrade = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId) return;
+    setIsLogging(true); setMsgLog('');
+    const supabase = createClient();
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      const res = await fetch(`${apiBase}/api/v1/trades/log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ pair: logPair, direction: logDirection, lotSize: parseFloat(logLot), pnl: parseFloat(logPnl) }),
+      });
+
+      if (!res.ok) { const e = await res.json(); throw new Error(e?.message || res.statusText); }
+      setMsgLog(`Trade logged! ${logDirection === 'long' ? '▲' : '▼'} ${logPair} · P&L: $${parseFloat(logPnl).toFixed(2)}`);
+      setLogPnl('0.00');
+    } catch (err: any) { setMsgLog(`Error: ${err.message}`); }
+    finally { setIsLogging(false); setTimeout(() => setMsgLog(''), 5000); }
+  };
+
+  // ── Balance update ───────────────────────────────────────
+  const handleUpdateBalance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId) return;
+    setSavingBalance(true); setMsgBalance('');
+    const supabase = createClient();
+    try {
+      const balanceVal = parseFloat(newBalance);
+      const { data: port } = await supabase
+        .from('portfolios').select('id').eq('user_id', userId).eq('is_default', true).maybeSingle();
+      if (!port) throw new Error('No default portfolio found. Please reload the dashboard first.');
+
+      const { error } = await supabase.from('portfolios')
+        .update({ balance: balanceVal, equity: balanceVal, free_margin: balanceVal, today_pnl: 0, updated_at: new Date().toISOString() })
+        .eq('id', port.id);
+      if (error) throw error;
+      setMsgBalance(`Account balance set to $${balanceVal.toLocaleString()}`);
+    } catch (err: any) { setMsgBalance(`Error: ${err.message}`); }
+    finally { setSavingBalance(false); setTimeout(() => setMsgBalance(''), 5000); }
+  };
+
+  // ────────────────────────────────────────────────────────
+  if (loading) return (
+    <div className="flex items-center justify-center p-24 text-xs font-mono text-[#64748b] gap-2">
+      <Loader2 className="w-4 h-4 animate-spin text-brand-400" /> Syncing configuration...
+    </div>
+  );
 
   return (
     <div className="p-4 md:p-6 space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-xl md:text-2xl font-bold text-white tracking-tight">Configuration Settings</h1>
-        <p className="text-xs text-[#94a3b8] mt-1 font-mono">
-          PROFILE PARAMETERS, RISK POLICIES & API CREDENTIALS
+        <h1 className="text-xl md:text-2xl font-bold text-white tracking-tight">Settings & Configuration</h1>
+        <p className="text-xs text-[#64748b] mt-1 font-mono">
+          PROFILE · WATCHLIST · JOURNAL · RISK POLICIES · SIGNAL LIMITS
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Profile Settings */}
-        <div className="card p-5 space-y-4">
-          <div className="flex items-center gap-2 border-b border-[#1e293b] pb-3">
-            <User className="w-4.5 h-4.5 text-brand-400" />
-            <h3 className="text-sm font-semibold text-white">Profile Details</h3>
-          </div>
-          <form className="space-y-4 text-xs" onSubmit={handleUpdateProfile}>
+      {/* ── Row 1: Profile + Trading Rules ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        {/* Profile */}
+        <Section icon={User} title="Profile Details">
+          <form className="space-y-4 text-xs" onSubmit={handleSaveProfile}>
             <div>
-              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase">Full Name</label>
-              <input
-                type="text"
-                value={profileName}
-                onChange={(e) => setProfileName(e.target.value)}
-                className="input text-xs"
-                placeholder="Chief Trader"
-                required
-              />
+              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">Display Name</label>
+              <input type="text" value={profileName} onChange={e => setProfileName(e.target.value)}
+                className="input text-xs" placeholder="Chief Trader" required />
             </div>
             <div>
-              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase">Email Address</label>
-              <input
-                type="email"
-                value={email}
-                disabled
-                className="input opacity-50 cursor-not-allowed text-xs"
-              />
+              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">Email</label>
+              <input type="email" value={email} disabled className="input opacity-50 cursor-not-allowed text-xs" />
             </div>
-
-            {msgProfile && (
-              <p className={`text-[10px] font-semibold font-mono ${msgProfile.includes('success') ? 'text-emerald-400' : 'text-red-400'}`}>
-                {msgProfile}
-              </p>
-            )}
-
-            <button type="submit" disabled={updatingProfile} className="btn btn-primary w-full text-xs">
-              {updatingProfile ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto" /> : 'Update Profile'}
+            <SaveMsg msg={msgProfile} />
+            <button type="submit" disabled={savingProfile} className="btn btn-primary w-full text-xs">
+              {savingProfile ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto" /> : 'Update Profile'}
             </button>
           </form>
-        </div>
+        </Section>
 
-        {/* Risk & Automation Settings */}
-        <div className="card p-5 space-y-4">
-          <div className="flex items-center gap-2 border-b border-[#1e293b] pb-3">
-            <Shield className="w-4.5 h-4.5 text-brand-400" />
-            <h3 className="text-sm font-semibold text-white">Risk & Automation Rules</h3>
-          </div>
-          <form className="space-y-4 text-xs" onSubmit={handleUpdateSettings}>
-            {/* Mode selection */}
+        {/* Trading Rules */}
+        <Section icon={Shield} title="Risk & Automation Rules">
+          <form className="space-y-4 text-xs" onSubmit={handleSaveSettings}>
             <div>
-              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase">Trading Mode</label>
-              <select
-                value={mode}
-                onChange={(e) => setMode(e.target.value)}
-                className="input font-mono text-xs select-dark"
-              >
+              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">Trading Mode</label>
+              <select value={mode} onChange={e => setMode(e.target.value)} className="input font-mono text-xs select-dark">
                 <option value="manual">MANUAL EXECUTION</option>
                 <option value="semi_automatic">SEMI AUTOMATIC (ONE-TAP)</option>
                 <option value="fully_automatic">FULLY AUTOMATIC (AUTONOMOUS)</option>
               </select>
             </div>
-
-            {/* Default lot size */}
-            <div>
-              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase">Default Lot Size</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0.01"
-                max="10.0"
-                value={lotSize}
-                onChange={(e) => setLotSize(Number(e.target.value))}
-                className="input font-mono text-xs"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">Default Lot Size</label>
+                <input type="number" step="0.01" min="0.01" max="10.0" value={lotSize}
+                  onChange={e => setLotSize(Number(e.target.value))} className="input font-mono text-xs" />
+              </div>
+              <div>
+                <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">Target R:R</label>
+                <input type="number" step="0.1" min="1.0" value={riskReward}
+                  onChange={e => setRiskReward(Number(e.target.value))} className="input font-mono text-xs" />
+              </div>
             </div>
-
-            {/* Default Risk RR */}
-            <div>
-              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase">Target Risk-Reward (R:R)</label>
-              <input
-                type="number"
-                step="0.1"
-                min="1.0"
-                value={riskReward}
-                onChange={(e) => setRiskReward(Number(e.target.value))}
-                className="input font-mono text-xs"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">Max Daily Loss (%)</label>
+                <input type="number" step="0.5" min="0.5" value={maxLoss}
+                  onChange={e => setMaxLoss(Number(e.target.value))} className="input font-mono text-xs" />
+              </div>
+              <div>
+                <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">
+                  Daily Signal Limit
+                </label>
+                <input type="number" step="1" min="1" max="50" value={dailySignalLimit}
+                  onChange={e => setDailySignalLimit(Number(e.target.value))} className="input font-mono text-xs" />
+                <p className="text-[9px] text-[#475569] font-mono mt-1">Default: 2 signals/day</p>
+              </div>
             </div>
-
-            {/* Max daily loss */}
-            <div>
-              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase">Max Daily Loss Limit (%)</label>
-              <input
-                type="number"
-                step="0.5"
-                min="0.5"
-                value={maxLoss}
-                onChange={(e) => setMaxLoss(Number(e.target.value))}
-                className="input font-mono text-xs"
-              />
-            </div>
-
-            {msgSettings && (
-              <p className={`text-[10px] font-semibold font-mono ${msgSettings.includes('saved') ? 'text-emerald-400' : 'text-red-400'}`}>
-                {msgSettings}
-              </p>
-            )}
-
-            <button type="submit" disabled={updatingSettings} className="btn btn-primary w-full text-xs">
-              {updatingSettings ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto" /> : 'Save Rules'}
+            <SaveMsg msg={msgSettings} />
+            <button type="submit" disabled={savingSettings} className="btn btn-primary w-full text-xs">
+              {savingSettings ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto" /> : 'Save Rules'}
             </button>
           </form>
-        </div>
+        </Section>
+      </div>
 
-        {/* External Broker Credentials API */}
-        <div className="card p-5 space-y-4">
-          <div className="flex items-center gap-2 border-b border-[#1e293b] pb-3">
-            <Key className="w-4.5 h-4.5 text-brand-400" />
-            <h3 className="text-sm font-semibold text-white">Broker API Integrations</h3>
+      {/* ── Row 2: Watchlist + Account Balance ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        {/* Watchlist */}
+        <Section icon={ListChecks} title="Scanner Watchlist">
+          <p className="text-[10px] text-[#64748b] font-mono -mt-1">
+            These pairs are scanned by the AI engine on the dashboard.
+          </p>
+
+          {/* Active pairs */}
+          <div className="flex flex-wrap gap-2 min-h-[40px]">
+            {watchlist.length === 0 && (
+              <span className="text-[10px] text-[#475569] font-mono">No pairs added yet.</span>
+            )}
+            {watchlist.map(pair => (
+              <div key={pair}
+                className="px-2.5 py-1.5 rounded-lg border border-[#1e293b] bg-bg-secondary text-xs font-semibold font-mono flex items-center gap-2 text-white">
+                {pair}
+                <button onClick={() => handleRemovePair(pair)} title="Remove"
+                  className="text-[#475569] hover:text-red-400 transition-colors">
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
           </div>
-          <form className="space-y-4 text-xs" onSubmit={(e) => e.preventDefault()}>
+
+          {/* Add pair row */}
+          <div className="flex gap-2">
+            <select value={newPair} onChange={e => setNewPair(e.target.value)}
+              className="input text-xs font-mono select-dark flex-1">
+              {SUPPORTED_PAIRS.filter(p => !watchlist.includes(p)).map(p => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+            <button onClick={handleAddPair} disabled={savingWatch}
+              className="btn btn-primary px-3 text-xs flex items-center gap-1">
+              {savingWatch ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><Plus className="w-4 h-4" /> Watch</>}
+            </button>
+          </div>
+          <SaveMsg msg={msgWatch} />
+        </Section>
+
+        {/* Account Balance */}
+        <Section icon={Wallet} title="Account Balance">
+          <p className="text-[10px] text-[#64748b] font-mono -mt-1">
+            Set your real starting balance so the AI tracks your actual equity and expected lot sizing.
+          </p>
+          <form className="space-y-4 text-xs" onSubmit={handleUpdateBalance}>
             <div>
-              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase">Twelve Data API Key</label>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                className="input text-xs"
-              />
+              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">Account Balance (USD)</label>
+              <input type="number" step="0.01" min="1" placeholder="10000.00" value={newBalance}
+                onChange={e => setNewBalance(e.target.value)} className="input font-mono text-xs" required />
+            </div>
+            <SaveMsg msg={msgBalance} />
+            <button type="submit" disabled={savingBalance} className="btn btn-primary w-full text-xs">
+              {savingBalance ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto" /> : 'Update Core Balance'}
+            </button>
+          </form>
+        </Section>
+      </div>
+
+      {/* ── Row 3: Trade Journal + API Keys ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        {/* Manual Trade Journal */}
+        <Section icon={FileSpreadsheet} title="Journal Manual Trade">
+          <p className="text-[10px] text-[#64748b] font-mono -mt-1">
+            Log trades you placed manually in your broker so the system can track your P&amp;L.
+          </p>
+          <form className="space-y-4 text-xs" onSubmit={handleLogTrade}>
+            <div className="grid grid-cols-2 gap-3 font-mono">
+              <div>
+                <label className="block text-[#94a3b8] mb-1.5 uppercase text-[10px]">Pair</label>
+                <select value={logPair} onChange={e => setLogPair(e.target.value)} className="input text-xs select-dark">
+                  {(watchlist.length > 0 ? watchlist : SUPPORTED_PAIRS).map(p => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[#94a3b8] mb-1.5 uppercase text-[10px]">Direction</label>
+                <select value={logDirection} onChange={e => setLogDirection(e.target.value as 'long' | 'short')}
+                  className="input text-xs select-dark">
+                  <option value="long">▲ BUY (LONG)</option>
+                  <option value="short">▼ SELL (SHORT)</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 font-mono">
+              <div>
+                <label className="block text-[#94a3b8] mb-1.5 uppercase text-[10px]">Lot Size</label>
+                <input type="number" step="0.01" min="0.01" value={logLot}
+                  onChange={e => setLogLot(e.target.value)} className="input text-xs" required />
+              </div>
+              <div>
+                <label className="block text-[#94a3b8] mb-1.5 uppercase text-[10px]">Profit / Loss ($)</label>
+                <input type="number" step="0.01" placeholder="+150.00 or -45.00" value={logPnl}
+                  onChange={e => setLogPnl(e.target.value)} className="input text-xs" required />
+              </div>
+            </div>
+            <SaveMsg msg={msgLog} />
+            <button type="submit" disabled={isLogging} className="btn btn-primary w-full text-xs">
+              {isLogging ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto" /> : 'Confirm & Log Trade'}
+            </button>
+          </form>
+        </Section>
+
+        {/* API Keys / Broker */}
+        <Section icon={Key} title="Broker API Integrations">
+          <p className="text-[10px] text-[#64748b] font-mono -mt-1">
+            Connect external broker or data provider APIs for live execution.
+          </p>
+          <form className="space-y-4 text-xs" onSubmit={e => e.preventDefault()}>
+            <div>
+              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">Twelve Data API Key</label>
+              <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+                placeholder="Enter your API key" className="input text-xs" />
             </div>
             <div>
-              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase">MetaTrader server</label>
-              <input
-                type="text"
-                placeholder="MetaQuotes-Demo"
-                className="input text-xs"
-              />
+              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">MetaTrader Server</label>
+              <input type="text" placeholder="MetaQuotes-Demo" className="input text-xs" />
+            </div>
+            <div>
+              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">OpenRouter AI Key</label>
+              <input type="password" placeholder="sk-or-..." className="input text-xs" />
+              <p className="text-[9px] text-[#475569] font-mono mt-1">Used for AI signal generation. Stored server-side only.</p>
             </div>
             <button className="btn btn-primary w-full text-xs">Sync Connections</button>
           </form>
-        </div>
+        </Section>
       </div>
     </div>
   );

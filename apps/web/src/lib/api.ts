@@ -12,10 +12,12 @@ export function getApiBaseUrl(): string {
   // 2. If running in client browser, inspect the active hostname
   if (typeof window !== 'undefined') {
     const host = window.location.hostname;
+    // If not localhost or local network IP, resolve to the deployed production API
     if (
-      host.includes('railway.app') || 
-      host.includes('vercel.app') || 
-      host.includes('trade-z-web')
+      host !== 'localhost' && 
+      host !== '127.0.0.1' && 
+      !host.startsWith('192.168.') &&
+      !host.startsWith('10.')
     ) {
       return 'https://trade-z-production-9a14.up.railway.app';
     }

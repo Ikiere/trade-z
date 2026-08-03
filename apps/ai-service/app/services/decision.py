@@ -16,13 +16,46 @@ def evaluate_decision(
     volume_score: float,
     risk_reward_ratio: float,
     news_impact_low: bool,
-    required_confidence: float = 85.0
+    required_confidence: float = 85.0,
+    history: Optional[list] = None
 ) -> Dict[str, Any]:
     """
     Evaluates a setup against institutional rules.
     Returns: dict representing decision, confidence level, and rationale.
     """
-    # 1. Calculate weighted confidence scoring
+    # 1. Calculate feedback loop modifiers from trade history
+    history_adjust = 0.0
+    history_reasons = []
+    
+    if history and len(history) > 0:
+        active_direction = 'long' if trend_bias == 'bullish' else 'short'
+        consecutive_losses = 0
+        consecutive_wins = 0
+        
+        for trade in history:
+            trade_dir = str(trade.get("direction", "")).lower()
+            pnl = float(trade.get("pnl", 0.0) or 0.0)
+            status = str(trade.get("status", "")).lower()
+            
+            # Loss count
+            if pnl < 0 or status == 'stopped_out':
+                if trade_dir == active_direction:
+                    consecutive_losses += 1
+                consecutive_wins = 0
+            # Win count
+            elif pnl > 0 or status == 'take_profit':
+                if trade_dir == active_direction:
+                    consecutive_wins += 1
+                consecutive_losses = 0
+                
+        if consecutive_losses >= 2:
+            history_adjust = -12.0
+            history_reasons.append(f"Avoid repeat structures: protected after {consecutive_losses} consecutive losses on {pair} {active_direction.upper()}.")
+        elif consecutive_wins >= 2:
+            history_adjust = +6.0
+            history_reasons.append(f"Strategy reinforced: {consecutive_wins} consecutive winning {active_direction.upper()} trades on {pair} detected.")
+
+    # 2. Calculate weighted confidence scoring
     # Structure (25%), Trend (20%), Momentum/Indicators (15%), Liquidity (15%), Volume (15%), Risk/Reward (10%)
     weighted_score = (
         (structure_score * 0.25) +
@@ -31,10 +64,12 @@ def evaluate_decision(
         (liquidity_score * 0.15) +
         (volume_score * 0.15) +
         ((100 if risk_reward_ratio >= 2.0 else 50) * 0.10)
-    )
+    ) + history_adjust
 
-    # 2. Risk safeguard modifiers
+    # 3. Risk safeguard modifiers
     rejection_reasons = []
+    if history_reasons and history_adjust < 0:
+        rejection_reasons.extend(history_reasons)
 
     if risk_reward_ratio < 1.5:
         rejection_reasons.append("Risk reward ratio is below 1:1.5 threshold.")

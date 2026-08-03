@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from typing import Optional
 import pandas as pd
 from app.services.indicators import calculate_ema, calculate_rsi
-from app.services.structure import detect_market_structure, generate_simulated_candles
+from app.services.structure import detect_market_structure, generate_simulated_candles, fetch_twelve_data_candles
 from app.services.decision import evaluate_decision
 from app.services.calendar import fetch_tradingview_calendar, check_news_filter
 
@@ -18,6 +18,8 @@ class AnalysisRequest(BaseModel):
     timeframe: str = "4h"
     include_indicators: bool = True
     include_structure: bool = True
+    api_key: Optional[str] = None
+    history: Optional[list] = None
 
 
 class ChatQueryRequest(BaseModel):
@@ -40,29 +42,35 @@ async def get_calendar():
 @router.post("/quick")
 async def quick_analysis(request: AnalysisRequest):
     """
-    Evaluates confluence metrics on incoming tick parameters using simulated historical charts.
+    Evaluates confluence metrics using live TwelveData chart feeds or simulated parameters.
     """
-    # 1. Generate a realistic 60-candle dataset
-    df = generate_simulated_candles(request.pair, request.timeframe)
+    # 1. Fetch real chart data or fall back to simulation
+    df = None
+    if request.api_key and request.api_key not in ["", "placeholder", "your_api_key"]:
+        df = await fetch_twelve_data_candles(request.pair, request.timeframe, request.api_key)
 
-    # 2. Run indicator check on realistic period
+    if df is None:
+        df = generate_simulated_candles(request.pair, request.timeframe)
+
+    # 2. Run indicator check
     rsi = calculate_rsi(df, period=14).iloc[-1]
     structure = detect_market_structure(df)
 
     # 3. Read the real economic calendar to enforce the news safety check
     news_safe = await check_news_filter(request.pair)
 
-    # 4. Evaluate decision
+    # 4. Evaluate decision with feedback history learning context
     decision_result = evaluate_decision(
         pair=request.pair,
         timeframe=request.timeframe,
         trend_bias=structure["market_bias"],
-        indicators_confluence=float(85.0 + (rsi - 50.0) * 0.1),  # dynamic indicators confluence
+        indicators_confluence=float(85.0 + (rsi - 50.0) * 0.1),
         structure_score=92.0 if structure["bos_detected"] else 60.0,
         liquidity_score=95.0,
         volume_score=90.0,
         risk_reward_ratio=2.5 if request.timeframe == "15m" else 3.2,
         news_impact_low=news_safe,
+        history=request.history,
     )
 
     return {

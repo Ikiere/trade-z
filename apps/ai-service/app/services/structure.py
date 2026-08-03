@@ -177,3 +177,62 @@ def generate_simulated_candles(pair: str, timeframe: str) -> pd.DataFrame:
         "volume": np.random.randint(500, 2500, size=60)
     })
     return df
+
+
+async def fetch_twelve_data_candles(symbol: str, timeframe: str, api_key: str):
+    """
+    Fetches real historical price candles from the TwelveData REST API.
+    Maps XAUUSD -> XAU/USD (Spot Gold) for standard currency conversion.
+    """
+    import httpx
+    import pandas as pd
+
+    # Map timeframe standard to TwelveData intervals
+    interval = "15min"
+    if timeframe == "30m":
+        interval = "30min"
+    elif timeframe == "1h":
+        interval = "1h"
+    elif timeframe == "4h":
+        interval = "4h"
+    elif timeframe == "1d":
+        interval = "1day"
+
+    # Normalize Spot Gold symbol (XAUUSD -> XAU/USD)
+    symbol_to_query = symbol.upper()
+    if "XAUUSD" in symbol_to_query:
+        symbol_to_query = "XAU/USD"
+
+    url = f"https://api.twelvedata.com/time_series?symbol={symbol_to_query}&interval={interval}&outputsize=60&apikey={api_key}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            if response.status_code != 200:
+                print(f"TwelveData HTTP {response.status_code} for {symbol}")
+                return None
+            
+            data = response.json()
+            if "values" not in data:
+                print(f"TwelveData response missing values: {data}")
+                return None
+                
+            values = data["values"]
+            if not values:
+                return None
+                
+            # TwelveData returns most recent values first; reverse to chronological order
+            values = list(reversed(values))
+            
+            df = pd.DataFrame(values)
+            df["open"] = df["open"].astype(float)
+            df["high"] = df["high"].astype(float)
+            df["low"] = df["low"].astype(float)
+            df["close"] = df["close"].astype(float)
+            df["volume"] = df["volume"].astype(float)
+            
+            print(f"Successfully fetched {len(df)} live bars from TwelveData for {symbol_to_query} ({interval})")
+            return df
+    except Exception as e:
+        print(f"TwelveData connection failed for {symbol}: {e}")
+        return None

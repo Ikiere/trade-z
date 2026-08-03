@@ -83,6 +83,27 @@ export default function SettingsPage() {
   const [msgBalance, setMsgBalance] = useState('');
 
   const [apiKey, setApiKey] = useState('');
+  const [savingKeys, setSavingKeys] = useState(false);
+  const [msgKeys, setMsgKeys] = useState('');
+
+  const handleSaveKeys = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userId) return;
+    setSavingKeys(true); setMsgKeys('');
+    const supabase = createClient();
+    try {
+      const { error } = await supabase
+        .from('user_settings')
+        .update({ twelve_data_api_key: apiKey })
+        .eq('user_id', userId);
+      if (error) throw error;
+      setMsgKeys('Broker API integrations synced successfully!');
+    } catch (err: any) {
+      setMsgKeys(`Failed to sync: ${err.message}`);
+    } finally {
+      setSavingKeys(false);
+    }
+  };
 
   // ────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
@@ -107,6 +128,7 @@ export default function SettingsPage() {
         setRiskReward(Number(s.default_risk_per_trade) || 2.0);
         setMaxLoss(Number(s.max_daily_loss) || 5.0);
         setDailySignalLimit(Number(s.daily_signal_limit) || 2);
+        setApiKey(s.twelve_data_api_key || '');
         if (Array.isArray(s.watchlist) && s.watchlist.length > 0) {
           setWatchlist(s.watchlist);
           setLogPair(s.watchlist[0]);
@@ -446,7 +468,7 @@ export default function SettingsPage() {
           <p className="text-[10px] text-[#64748b] font-mono -mt-1">
             Connect external broker or data provider APIs for live execution.
           </p>
-          <form className="space-y-4 text-xs" onSubmit={e => e.preventDefault()}>
+          <form className="space-y-4 text-xs" onSubmit={handleSaveKeys}>
             <div>
               <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">Twelve Data API Key</label>
               <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
@@ -461,7 +483,12 @@ export default function SettingsPage() {
               <input type="password" placeholder="sk-or-..." className="input text-xs" />
               <p className="text-[9px] text-[#475569] font-mono mt-1">Used for AI signal generation. Stored server-side only.</p>
             </div>
-            <button className="btn btn-primary w-full text-xs">Sync Connections</button>
+            
+            <SaveMsg msg={msgKeys} />
+
+            <button type="submit" disabled={savingKeys} className="btn btn-primary w-full text-xs">
+              {savingKeys ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto" /> : 'Sync Connections'}
+            </button>
           </form>
         </Section>
       </div>

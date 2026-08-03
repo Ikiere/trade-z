@@ -54,6 +54,13 @@ export default function LiveScannerWidget() {
 
   // Today's signal count (enforced limit)
   const [todaySignalCount, setTodaySignalCount] = useState(0);
+  const [selectedSinglePair, setSelectedSinglePair] = useState('EURUSD');
+
+  useEffect(() => {
+    if (watchlist.length > 0) {
+      setSelectedSinglePair(watchlist[0]);
+    }
+  }, [watchlist]);
 
   const scanIndex = useRef(0);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -102,9 +109,9 @@ export default function LiveScannerWidget() {
   useEffect(() => { loadConfig(); }, [loadConfig]);
 
   // The main scanning execution sequence
-  const runSingleScan = useCallback(async () => {
+  const runSingleScan = useCallback(async (specificPair?: string) => {
     if (watchlist.length === 0 || !userId) return;
-
+ 
     // Enforce daily signal limit
     if (todaySignalCount >= dailySignalLimit) {
       setLogs(prev => [
@@ -115,24 +122,30 @@ export default function LiveScannerWidget() {
       return;
     }
 
-    if (scanIndex.current >= watchlist.length) scanIndex.current = 0;
-    const pair = watchlist[scanIndex.current];
+    const pair = specificPair || watchlist[scanIndex.current];
     setActivePair(pair);
     setLogs(prev => [`[SCANNING] Requesting AI analysis for ${pair}...`, ...prev]);
-
+ 
     try {
       const apiBase = getApiBaseUrl();
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
       const res = await fetch(`${apiBase}/api/v1/chat/analysis`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ pair, timeframe: '15m' }),
       });
-
+ 
       if (!res.ok) {
         setLogs(prev => [`[ERROR] AI gateway returned ${res.status}`, ...prev]);
         return;
       }
-
+ 
       const body = await res.json();
       const info = body?.data;
       if (!info) return;
@@ -143,25 +156,20 @@ export default function LiveScannerWidget() {
       const isApproved = decision === 'approve';
       const direction = reasoning.toLowerCase().includes('sell') || reasoning.toLowerCase().includes('short') ? 'short' : 'long';
       
-      const priceInfoBuy = getSimulatedSetup(pair, 'long');
-      const priceInfoSell = getSimulatedSetup(pair, 'short');
+      const priceInfo = getSimulatedSetup(pair, direction);
 
-      const supabase = createClient();
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-
-      // 1. Post BUY Signal
-      const sigResBuy = await fetch(`${apiBase}/api/v1/trades/signals`, {
+      // Post ONLY the single best setup resolved by the AI
+      const sigRes = await fetch(`${apiBase}/api/v1/trades/signals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
           pair,
-          direction: 'long',
-          status: isApproved && direction === 'long' ? 'active' : 'rejected',
-          entry_price: priceInfoBuy.entry,
-          current_price: priceInfoBuy.current,
-          stop_loss: priceInfoBuy.sl,
-          take_profit: priceInfoBuy.tp,
+          direction,
+          status: isApproved ? 'active' : 'rejected',
+          entry_price: priceInfo.entry,
+          current_price: priceInfo.current,
+          stop_loss: priceInfo.sl,
+          take_profit: priceInfo.tp,
           confidence,
           ai_reasoning: reasoning,
           timeframe: '15m',
@@ -170,74 +178,45 @@ export default function LiveScannerWidget() {
           tags: isApproved && direction === 'long' ? ['m15_orderblock', 'intraday_liquidity'] : ['insufficient_momentum'],
         }),
       });
-      const buyBody = await sigResBuy.json().catch(() => ({}));
-
-      // 2. Post SELL Signal
-      const sigResSell = await fetch(`${apiBase}/api/v1/trades/signals`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({
-          pair,
-          direction: 'short',
-          status: isApproved && direction === 'short' ? 'active' : 'rejected',
-          entry_price: priceInfoSell.entry,
-          current_price: priceInfoSell.current,
-          stop_loss: priceInfoSell.sl,
-          take_profit: priceInfoSell.tp,
-          confidence,
-          ai_reasoning: reasoning,
-          timeframe: '15m',
-          strategy: 'AI Intraday Scalp',
-          expected_trigger: expectedTrigger,
-          tags: isApproved && direction === 'short' ? ['m15_orderblock', 'intraday_liquidity'] : ['insufficient_momentum'],
-        }),
-      });
-      const sellBody = await sigResSell.json().catch(() => ({}));
-
-      // Check if both or either failed to save
-      const buySaved = sigResBuy.ok && buyBody.success !== false;
-      const sellSaved = sigResSell.ok && sellBody.success !== false;
-
-      if (!buySaved || !sellSaved) {
-        const buyErr = buyBody.error || sigResBuy.statusText || 'Unknown error';
-        const sellErr = sellBody.error || sigResSell.statusText || 'Unknown error';
+      const resBody = await sigRes.json().catch(() => ({}));
+      const saved = sigRes.ok && resBody.success !== false;
+ 
+      if (!saved) {
+        const err = resBody.error || sigRes.statusText || 'Unknown error';
         setLogs(prev => [
-          `[ERROR] Failed to save signals to database!`,
-          `  -> BUY Error: ${buyErr}`,
-          `  -> SELL Error: ${sellErr}`,
-          `  -> Note: Make sure to execute complete_fix.sql in Supabase SQL editor.`,
+          `[ERROR] Failed to save signal to database!`,
+          `  -> Error: ${err}`,
           ...prev
         ]);
         setActivePair(null);
         return;
       }
-
-      // Increment today's count by 2
-      setTodaySignalCount(n => n + 2);
-
+ 
+      // Increment today's count by 1
+      setTodaySignalCount(n => n + 1);
+ 
       if (isApproved) {
         const activeDir = direction.toUpperCase();
         setLogs(prev => [
-          `[SIGNAL ✅] generated BUY & SELL setups for ${pair}! Approved direction: ${activeDir}`,
-          `  -> BUY: Entry ${priceInfoBuy.entry.toFixed(5)} (SL: ${priceInfoBuy.sl.toFixed(5)}, TP: ${priceInfoBuy.tp.toFixed(5)})`,
-          `  -> SELL: Entry ${priceInfoSell.entry.toFixed(5)} (SL: ${priceInfoSell.sl.toFixed(5)}, TP: ${priceInfoSell.tp.toFixed(5)})`,
+          `[SIGNAL ✅] generated best setup for ${pair}! Direction: ${activeDir}`,
+          `  -> ENTRY: ${priceInfo.entry.toFixed(5)} (SL: ${priceInfo.sl.toFixed(5)}, TP: ${priceInfo.tp.toFixed(5)})`,
+          `  -> Expected Trigger: ${expectedTrigger || 'Immediate'}`,
           ...prev,
         ]);
         
         if (tradingMode === 'fully_automatic') {
           setLogs(prev => [`[AUTO TRADE] Placing position for ${pair} (${direction})...`, ...prev]);
-          const activeSetup = direction === 'long' ? priceInfoBuy : priceInfoSell;
           const tradeRes = await fetch(`${apiBase}/api/v1/trades`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify({ pair, direction, entryPrice: activeSetup.entry, stopLoss: activeSetup.sl, takeProfit: activeSetup.tp, riskPercent: 1.0 }),
+            body: JSON.stringify({ pair, direction, entryPrice: priceInfo.entry, stopLoss: priceInfo.sl, takeProfit: priceInfo.tp, riskPercent: 1.0 }),
           });
           const msg = tradeRes.ok ? `Position placed for ${pair}!` : `Auto-trade failed: ${tradeRes.statusText}`;
           setLogs(prev => [`[AUTO TRADE] ${msg}`, ...prev]);
         }
       } else {
         setLogs(prev => [
-          `[REJECTED ❌] ${pair} confluence insufficient. Conf: ${confidence.toFixed(1)}%`,
+          `[REJECTED ❌] ${pair} setup risky: ${reasoning}`,
           ...prev,
         ]);
       }
@@ -246,7 +225,9 @@ export default function LiveScannerWidget() {
       setLogs(prev => [`[EXCEPTION] ${err.message}`, ...prev]);
     } finally {
       setActivePair(null);
-      scanIndex.current += 1;
+      if (!specificPair) {
+        scanIndex.current += 1;
+      }
     }
   }, [watchlist, userId, tradingMode, dailySignalLimit, todaySignalCount]);
 
@@ -291,6 +272,35 @@ export default function LiveScannerWidget() {
             }`}
           >
             {isScanningActive ? '⬛ Stop Scan' : '▶ Start Scan'}
+          </button>
+        </div>
+
+        {/* Single Pair Manual Analyzer Panel */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#1e293b]/50 pb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono text-[#94a3b8]">Select Asset:</span>
+            <select
+              value={selectedSinglePair}
+              onChange={e => setSelectedSinglePair(e.target.value)}
+              className="bg-bg-secondary border border-[#1e293b] rounded px-2.5 py-1 text-xs text-white font-mono focus:outline-none focus:border-brand-505"
+            >
+              {watchlist.map(p => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          </div>
+          
+          <button
+            onClick={() => runSingleScan(selectedSinglePair)}
+            disabled={isScanningActive || limitReached || watchlist.length === 0}
+            className="btn bg-bg-secondary hover:text-white text-[#94a3b8] border-[#1e293b] text-[10px] py-1 px-3 font-mono font-bold uppercase flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed border"
+          >
+            {activePair === selectedSinglePair ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-400" />
+            ) : (
+              <Scan className="w-3.5 h-3.5" />
+            )}
+            Analyze Single
           </button>
         </div>
 

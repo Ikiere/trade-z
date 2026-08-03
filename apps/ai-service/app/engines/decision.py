@@ -44,33 +44,37 @@ class DecisionEngine(BaseEngine):
 
         # Decision Matrix
         if failed_layer:
-            decision = "no_trade"
+            decision = "reject"
             explanation = f"NO TRADE: Hard fail at layer '{failed_layer[0]}'. Reason: {failed_layer[1]}"
         elif final_confidence < 85.0:
             if final_confidence >= 70.0:
                 decision = "wait"
                 explanation = f"WAIT: Setup is promising but confidence ({final_confidence:.1f}%) is below 85% threshold."
             else:
-                decision = "no_trade"
+                decision = "reject"
                 explanation = f"NO TRADE: Low quality confluence score ({final_confidence:.1f}%)."
         else:
             if direction == "bullish":
-                decision = "buy"
+                decision = "approve"
                 explanation = f"BUY setup approved with {final_confidence:.1f}% confidence."
             elif direction == "bearish":
-                decision = "sell"
+                decision = "approve"
                 explanation = f"SELL setup approved with {final_confidence:.1f}% confidence."
+            else:
+                decision = "reject"
+                explanation = f"NO TRADE: Setup direction is neutral."
 
         # Target targets
         rr = context.get("risk_reward_ratio", 2.5)
         entry = current_price
         
-        if decision == "buy":
-            sl = current_price - (atr * 1.5)
-            tp = current_price + (atr * 1.5 * rr)
-        elif decision == "sell":
-            sl = current_price + (atr * 1.5)
-            tp = current_price - (atr * 1.5 * rr)
+        if decision == "approve":
+            if direction == "bullish":
+                sl = current_price - (atr * 1.5)
+                tp = current_price + (atr * 1.5 * rr)
+            else:
+                sl = current_price + (atr * 1.5)
+                tp = current_price - (atr * 1.5 * rr)
         else:
             sl = 0.0
             tp = 0.0
@@ -80,7 +84,7 @@ class DecisionEngine(BaseEngine):
         certificate = {
             "trade_id": cert_id,
             "symbol": snapshot.symbol,
-            "direction": decision.upper(),
+            "direction": "BUY" if direction == "bullish" else ("SELL" if direction == "bearish" else "NEUTRAL"),
             "entry_price": round(entry, 5),
             "stop_loss": round(sl, 5),
             "take_profit": round(tp, 5),

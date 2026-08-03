@@ -42,16 +42,7 @@ export class ChatService {
 
   async getQuickAnalysis(userId: string, pair: string, timeframe: string): Promise<any> {
     try {
-      // 1. Fetch user's TwelveData API Key from user_settings
-      const { data: settings } = await this.supabase
-        .from('user_settings')
-        .select('twelve_data_api_key')
-        .eq('user_id', userId)
-        .maybeSingle();
-
-      const apiKey = settings?.twelve_data_api_key || null;
-
-      // 2. Fetch last 5 closed trades matching this pair for learning context
+      // 1. Fetch last 5 closed trades matching this pair for learning context
       const { data: closedTrades } = await this.supabase
         .from('trades')
         .select('direction, pnl, status, entry_price')
@@ -67,7 +58,7 @@ export class ChatService {
         body: JSON.stringify({ 
           pair, 
           timeframe,
-          api_key: apiKey,
+          api_key: null,
           history: closedTrades || []
         }),
       });

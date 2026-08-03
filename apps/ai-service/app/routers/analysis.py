@@ -9,6 +9,7 @@ from app.services.indicators import calculate_ema, calculate_rsi
 from app.services.structure import detect_market_structure, generate_simulated_candles, fetch_twelve_data_candles
 from app.services.decision import evaluate_decision
 from app.services.calendar import fetch_tradingview_calendar, check_news_filter
+from app.config import settings
 
 router = APIRouter()
 
@@ -44,15 +45,20 @@ async def quick_analysis(request: AnalysisRequest):
     """
     Evaluates confluence metrics using live TwelveData chart feeds strictly.
     """
-    if not request.api_key or request.api_key in ["", "placeholder", "your_api_key"]:
+    # Read API Key from settings (.env) first, fall back to request body payload
+    api_key = settings.market_data_api_key
+    if not api_key or api_key in ["", "placeholder", "your_api_key"]:
+        api_key = request.api_key
+
+    if not api_key or api_key in ["", "placeholder", "your_api_key"]:
         raise HTTPException(
             status_code=400,
-            detail="TwelveData API Key is missing. Please go to Settings -> Broker API Integrations and sync a valid TwelveData API key."
+            detail="TwelveData API Key is missing. Please set the AI_MARKET_DATA_API_KEY environment variable in your .env file or Railway console settings."
         )
 
     # 1. Fetch real chart data strictly
     try:
-        df = await fetch_twelve_data_candles(request.pair, request.timeframe, request.api_key)
+        df = await fetch_twelve_data_candles(request.pair, request.timeframe, api_key)
         if df is None:
             raise HTTPException(
                 status_code=400,

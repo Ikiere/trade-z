@@ -468,11 +468,10 @@ export default function SettingsPage() {
           <p className="text-[10px] text-[#64748b] font-mono -mt-1">
             Connect external broker or data provider APIs for live execution.
           </p>
-          <form className="space-y-4 text-xs" onSubmit={handleSaveKeys}>
-            <div>
-              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">Twelve Data API Key</label>
-              <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
-                placeholder="Enter your API key" className="input text-xs" />
+          <form className="space-y-4 text-xs" onSubmit={e => e.preventDefault()}>
+            <div className="p-3 bg-[#060810] border border-[#1e293b] rounded-lg text-[10px] font-mono text-[#94a3b8] leading-relaxed">
+              ⚡ TwelveData Spot Market feeds are now managed directly via the server environment key (<code className="text-[#3b82f6]">AI_MARKET_DATA_API_KEY</code>). 
+              No client-side synchronization is required.
             </div>
             <div>
               <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">MetaTrader Server</label>
@@ -484,11 +483,7 @@ export default function SettingsPage() {
               <p className="text-[9px] text-[#475569] font-mono mt-1">Used for AI signal generation. Stored server-side only.</p>
             </div>
             
-            <SaveMsg msg={msgKeys} />
-
-            <button type="submit" disabled={savingKeys} className="btn btn-primary w-full text-xs">
-              {savingKeys ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto" /> : 'Sync Connections'}
-            </button>
+            <button className="btn btn-primary w-full text-xs">Sync Connections</button>
           </form>
         </Section>
       </div>

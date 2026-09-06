@@ -19,7 +19,7 @@ export function getApiBaseUrl(): string {
       !host.startsWith('192.168.') &&
       !host.startsWith('10.')
     ) {
-      return 'https://trade-z-production-9a14.up.railway.app';
+      return 'https://trade-z-api.onrender.com';
     }
   }
 

@@ -16,6 +16,7 @@
     "dev:ai": "turbo dev --filter=@trade-z/ai-service",
     "build:web": "turbo build --filter=@trade-z/web",
     "build:api": "turbo build --filter=@trade-z/api",
+    "start:api": "node apps/api/dist/main.js",
     "start": "node node_modules/next/dist/bin/next start apps/web",
     "star": "node node_modules/next/dist/bin/next start apps/web"
   },

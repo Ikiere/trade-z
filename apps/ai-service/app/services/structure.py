@@ -175,9 +175,17 @@ def generate_simulated_candles(pair: str, timeframe: str) -> pd.DataFrame:
         base_price = 154.00
         noise_mult = 0.15
         pips_scale = 0.01
-    elif "XAU" in u:
-        base_price = 2350.00
-        noise_mult = 1.5
+    elif "XAU" in u or "GOLD" in u:
+        base_price = 2860.00
+        noise_mult = 2.5
+        pips_scale = 0.1
+    elif "BTC" in u:
+        base_price = 88000.00
+        noise_mult = 120.0
+        pips_scale = 1.0
+    elif "ETH" in u:
+        base_price = 2800.00
+        noise_mult = 8.0
         pips_scale = 0.1
     elif "AUD" in u or "NZD" in u:
         base_price = 0.6600

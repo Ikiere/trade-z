@@ -159,33 +159,76 @@ export class TradesService {
   }
 
   async createSignal(userId: string, signalData: any) {
-    const entryPrice = Number(signalData.entry_price) || 0;
-    const currentPrice = Number(signalData.current_price) || entryPrice;
-    const direction = signalData.direction;
-    let orderType = signalData.order_type;
+    const pair = String(signalData.pair || 'EURUSD').toUpperCase();
+    const isJpy = pair.includes('JPY');
+    const isGold = pair.includes('XAU') || pair.includes('GOLD');
+    const isCrypto = pair.includes('BTC') || pair.includes('ETH');
+    const decimals = isJpy ? 3 : isGold || isCrypto ? 2 : 5;
+    const pipScale = isJpy ? 0.01 : isGold ? 1.0 : isCrypto ? 10.0 : 0.0001;
 
+    let entryPrice = Number(signalData.entry_price) || 0;
+    if (entryPrice <= 0) {
+      if (pair.includes('EUR')) entryPrice = 1.0845;
+      else if (pair.includes('GBP')) entryPrice = 1.2680;
+      else if (isJpy) entryPrice = 154.20;
+      else if (isGold) entryPrice = 2850.50;
+      else if (pair.includes('BTC')) entryPrice = 88500.0;
+      else if (pair.includes('ETH')) entryPrice = 2820.0;
+      else entryPrice = 1.0000;
+    }
+    entryPrice = Number(entryPrice.toFixed(decimals));
+
+    const currentPrice = Number(Number(signalData.current_price || entryPrice).toFixed(decimals));
+    const direction: 'long' | 'short' = String(signalData.direction).toLowerCase() === 'short' ? 'short' : 'long';
+
+    let stopLoss = Number(signalData.stop_loss) || 0;
+    let takeProfit = Number(signalData.take_profit) || 0;
+
+    const defaultSlDist = isGold ? 6.0 : isJpy ? 0.25 : isCrypto ? 100.0 : 0.0015;
+    const defaultTpDist = defaultSlDist * 2.5;
+
+    // Validate and enforce institutional SL & TP levels
+    if (direction === 'long') {
+      if (stopLoss <= 0 || stopLoss >= entryPrice) {
+        stopLoss = entryPrice - defaultSlDist;
+      }
+      if (takeProfit <= 0 || takeProfit <= entryPrice) {
+        const risk = Math.abs(entryPrice - stopLoss);
+        takeProfit = entryPrice + (risk * 2.5);
+      }
+    } else {
+      if (stopLoss <= 0 || stopLoss <= entryPrice) {
+        stopLoss = entryPrice + defaultSlDist;
+      }
+      if (takeProfit <= 0 || takeProfit >= entryPrice) {
+        const risk = Math.abs(stopLoss - entryPrice);
+        takeProfit = entryPrice - (risk * 2.5);
+      }
+    }
+
+    stopLoss = Number(stopLoss.toFixed(decimals));
+    takeProfit = Number(takeProfit.toFixed(decimals));
+
+    let orderType = signalData.order_type;
     if (!orderType) {
-      if (entryPrice && currentPrice) {
-        if (direction === 'long') {
-          orderType = entryPrice < currentPrice ? 'buy limit' : 'buy stop';
-        } else {
-          orderType = entryPrice > currentPrice ? 'sell limit' : 'sell stop';
-        }
+      if (direction === 'long') {
+        orderType = entryPrice < currentPrice ? 'buy limit' : 'buy';
       } else {
-        orderType = direction === 'long' ? 'buy limit' : 'sell limit';
+        orderType = entryPrice > currentPrice ? 'sell limit' : 'sell';
       }
     }
 
     const payload: Record<string, any> = {
       user_id: userId,
       pair: signalData.pair,
-      direction: signalData.direction,
+      direction,
       status: signalData.status || 'pending',
       entry_price: entryPrice,
-      stop_loss: Number(signalData.stop_loss) || 0,
-      take_profit: Number(signalData.take_profit) || 0,
-      confidence: Number(signalData.confidence) || 50,
-      timeframe: signalData.timeframe || '4h',
+      current_price: currentPrice,
+      stop_loss: stopLoss,
+      take_profit: takeProfit,
+      confidence: Number(signalData.confidence) || 75,
+      timeframe: signalData.timeframe || '15m',
       order_type: orderType,
     };
 
@@ -193,7 +236,6 @@ export class TradesService {
     if (signalData.ai_reasoning) payload.ai_reasoning = signalData.ai_reasoning;
     if (signalData.strategy) payload.strategy = signalData.strategy;
     if (Array.isArray(signalData.tags)) payload.tags = signalData.tags;
-    if (signalData.current_price) payload.current_price = Number(signalData.current_price);
 
     const { data, error } = await this.supabase
       .from('signals')

@@ -20,12 +20,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Shield,
+  FlaskConical,
 } from 'lucide-react';
 
 const MENU_ITEMS = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Market Scanner', href: '/scanner', icon: ScanEye },
   { label: 'Signals', href: '/signals', icon: TrendingUp },
+  { label: 'AI Backtester', href: '/backtest', icon: FlaskConical },
   { label: 'Portfolio', href: '/portfolio', icon: Briefcase },
   { label: 'Trades', href: '/trades', icon: Zap },
   { label: 'Trade History', href: '/history', icon: History },

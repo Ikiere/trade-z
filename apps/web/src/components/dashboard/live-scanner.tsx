@@ -7,34 +7,43 @@ import { getApiBaseUrl } from '@/lib/api';
 
 const getSimulatedPrice = (pair: string) => {
   const u = pair.toUpperCase();
-  if (u.includes('EURUSD')) return { entry: 1.0845, sl: 1.0833, tp: 1.0869 }; // 12 pip SL, 24 pip TP (Intraday)
-  if (u.includes('GBPUSD')) return { entry: 1.2680, sl: 1.2665, tp: 1.2710 }; // 15 pip SL, 30 pip TP (Intraday)
-  if (u.includes('USDJPY')) return { entry: 154.20, sl: 154.02, tp: 154.56 }; // 18 pip SL, 36 pip TP (Intraday)
-  if (u.includes('XAUUSD')) return { entry: 2350.50, sl: 2346.50, tp: 2358.50 }; // $4 SL, $8 TP (Intraday)
-  if (u.includes('AUDUSD')) return { entry: 0.6650, sl: 0.6638, tp: 0.6674 }; // 12 pip SL, 24 pip TP (Intraday)
-  if (u.includes('USDCAD')) return { entry: 1.3620, sl: 1.3605, tp: 1.3650 }; // 15 pip SL, 30 pip TP (Intraday)
-  return { entry: 1.0000, sl: 0.9985, tp: 1.0030 };
+  if (u.includes('EURUSD')) return { entry: 1.0845, sl: 1.0830, tp: 1.0880 }; // 15 pip SL, 35 pip TP
+  if (u.includes('GBPUSD')) return { entry: 1.2680, sl: 1.2665, tp: 1.2720 }; // 15 pip SL, 40 pip TP
+  if (u.includes('USDJPY')) return { entry: 154.20, sl: 153.95, tp: 154.75 }; // 25 pip SL, 55 pip TP
+  if (u.includes('XAUUSD') || u.includes('GOLD')) return { entry: 2850.50, sl: 2844.50, tp: 2865.50 }; // $6 SL, $15 TP
+  if (u.includes('BTCUSD') || u.includes('BTC')) return { entry: 88500.0, sl: 87500.0, tp: 90500.0 };
+  if (u.includes('ETHUSD') || u.includes('ETH')) return { entry: 2820.0, sl: 2780.0, tp: 2900.0 };
+  if (u.includes('AUDUSD')) return { entry: 0.6650, sl: 0.6635, tp: 0.6685 };
+  if (u.includes('USDCAD')) return { entry: 1.3620, sl: 1.3605, tp: 1.3655 };
+  return { entry: 1.0000, sl: 0.9980, tp: 1.0050 };
 };
 
 const getSimulatedSetup = (pair: string, direction: 'long' | 'short') => {
   const base = getSimulatedPrice(pair);
   const entry = base.entry;
+  const isJpy = pair.toUpperCase().includes('JPY');
+  const isGold = pair.toUpperCase().includes('XAU') || pair.toUpperCase().includes('GOLD');
+  const isCrypto = pair.toUpperCase().includes('BTC') || pair.toUpperCase().includes('ETH');
   
+  const pips = isJpy ? 0.01 : isGold ? 1.0 : isCrypto ? 10.0 : 0.0001;
+  const decimals = isJpy ? 3 : isGold || isCrypto ? 2 : 5;
+
+  const slDist = Math.abs(entry - base.sl) || (pips * 15);
+  const tpDist = slDist * 2.5;
+
   if (direction === 'long') {
     return {
-      entry,
-      sl: base.sl,
-      tp: base.tp,
-      current: entry - 0.0002 // current slightly below entry -> buy limit
+      entry: Number(entry.toFixed(decimals)),
+      sl: Number((entry - slDist).toFixed(decimals)),
+      tp: Number((entry + tpDist).toFixed(decimals)),
+      current: Number((entry - (pips * 2)).toFixed(decimals))
     };
   } else {
-    const risk = Math.abs(entry - base.sl);
-    const reward = Math.abs(base.tp - entry);
     return {
-      entry,
-      sl: entry + risk,
-      tp: entry - reward,
-      current: entry + 0.0002 // current slightly above entry -> sell limit
+      entry: Number(entry.toFixed(decimals)),
+      sl: Number((entry + slDist).toFixed(decimals)),
+      tp: Number((entry - tpDist).toFixed(decimals)),
+      current: Number((entry + (pips * 2)).toFixed(decimals))
     };
   }
 };
@@ -162,13 +171,50 @@ export default function LiveScannerWidget() {
       const reasoning = info.reasoning || '';
       const expectedTrigger = info.expected_trigger || null;
       const isApproved = decision === 'approve';
-      const direction = reasoning.toLowerCase().includes('sell') || reasoning.toLowerCase().includes('short') ? 'short' : 'long';
-      
+
+      // 1. Resolve Direction Reliably (Never invert)
+      let direction: 'long' | 'short' = 'long';
+      if (info.direction) {
+        direction = String(info.direction).toLowerCase() === 'short' ? 'short' : 'long';
+      } else if (info.certificate?.direction) {
+        direction = String(info.certificate.direction).toUpperCase().includes('SELL') ? 'short' : 'long';
+      } else if (
+        reasoning.toLowerCase().includes('sell setup') ||
+        reasoning.toLowerCase().includes('short setup') ||
+        reasoning.toLowerCase().includes('bearish')
+      ) {
+        direction = 'short';
+      }
+
+      // 2. Resolve Price Levels with Non-Zero Guarantee
       const priceInfo = getSimulatedSetup(pair, direction);
-      const entryPrice = typeof info.entry_price === 'number' ? info.entry_price : priceInfo.entry;
-      const currentPrice = typeof info.current_price === 'number' ? info.current_price : priceInfo.current;
-      const stopLoss = typeof info.stop_loss === 'number' ? info.stop_loss : priceInfo.sl;
-      const takeProfit = typeof info.take_profit === 'number' ? info.take_profit : priceInfo.tp;
+      let entryPrice = (typeof info.entry_price === 'number' && info.entry_price > 0) ? info.entry_price : priceInfo.entry;
+      let currentPrice = (typeof info.current_price === 'number' && info.current_price > 0) ? info.current_price : priceInfo.current;
+      let stopLoss = (typeof info.stop_loss === 'number' && info.stop_loss > 0) ? info.stop_loss : priceInfo.sl;
+      let takeProfit = (typeof info.take_profit === 'number' && info.take_profit > 0) ? info.take_profit : priceInfo.tp;
+
+      // 3. Enforce Directional Invariants (Never allow inverted SL/TP)
+      if (direction === 'long') {
+        if (stopLoss >= entryPrice) {
+          const risk = Math.abs(entryPrice - stopLoss) || Math.abs(entryPrice - priceInfo.sl);
+          stopLoss = Number((entryPrice - risk).toFixed(entryPrice > 500 ? 2 : 5));
+        }
+        if (takeProfit <= entryPrice) {
+          const reward = Math.abs(takeProfit - entryPrice) || (Math.abs(entryPrice - stopLoss) * 2.5);
+          takeProfit = Number((entryPrice + reward).toFixed(entryPrice > 500 ? 2 : 5));
+        }
+      } else {
+        if (stopLoss <= entryPrice) {
+          const risk = Math.abs(entryPrice - stopLoss) || Math.abs(priceInfo.sl - entryPrice);
+          stopLoss = Number((entryPrice + risk).toFixed(entryPrice > 500 ? 2 : 5));
+        }
+        if (takeProfit >= entryPrice) {
+          const reward = Math.abs(takeProfit - entryPrice) || (Math.abs(stopLoss - entryPrice) * 2.5);
+          takeProfit = Number((entryPrice - reward).toFixed(entryPrice > 500 ? 2 : 5));
+        }
+      }
+
+      const orderType = info.order_type || (direction === 'long' ? (entryPrice < currentPrice ? 'buy limit' : 'buy') : (entryPrice > currentPrice ? 'sell limit' : 'sell'));
 
       // Post ONLY the single best setup resolved by the AI
       const sigRes = await fetch(`${apiBase}/api/v1/trades/signals`, {
@@ -187,6 +233,7 @@ export default function LiveScannerWidget() {
           timeframe: '15m',
           strategy: 'AI Intraday Scalp',
           expected_trigger: expectedTrigger,
+          order_type: orderType,
           tags: isApproved && direction === 'long' ? ['m15_orderblock', 'intraday_liquidity'] : ['insufficient_momentum'],
         }),
       });

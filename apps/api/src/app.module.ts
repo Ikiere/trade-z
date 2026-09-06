@@ -10,6 +10,7 @@ import { BillingModule } from './billing/billing.module';
 import { EmailModule } from './email/email.module';
 import { AdminModule } from './admin/admin.module';
 import { CalendarModule } from './calendar/calendar.module';
+import { BacktestModule } from './backtest/backtest.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { CalendarModule } from './calendar/calendar.module';
     EmailModule,
     AdminModule,
     CalendarModule,
+    BacktestModule,
   ],
 })
 export class AppModule {}

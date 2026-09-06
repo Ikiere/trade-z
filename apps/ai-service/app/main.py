@@ -5,11 +5,11 @@ Market analysis, confidence scoring, pattern recognition, and signal generation.
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import health, analysis
+from app.routers import health, analysis, backtest
 
 app = FastAPI(
     title="Trade-Z AI Service",
-    description="AI-powered market analysis and signal generation engine",
+    description="AI-powered market analysis, backtesting, and signal generation engine",
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
@@ -27,6 +27,7 @@ app.add_middleware(
 # Routers
 app.include_router(health.router, prefix="/health", tags=["Health"])
 app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
+app.include_router(backtest.router, prefix="/api/v1/backtest", tags=["Backtest"])
 
 
 @app.get("/")

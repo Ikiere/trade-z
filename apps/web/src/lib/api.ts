@@ -6,7 +6,7 @@
 export function getApiBaseUrl(): string {
   // 1. If explicit env variable is compile-time populated, use it
   if (process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL;
+    return process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, '');
   }
 
   // 2. If running in client browser, inspect the active hostname

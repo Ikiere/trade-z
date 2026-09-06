@@ -6,7 +6,8 @@ export class BacktestService {
   private aiServiceUrl: string;
 
   constructor(private configService: ConfigService) {
-    this.aiServiceUrl = this.configService.get<string>('AI_SERVICE_URL') || 'https://trade-z-ai-service.onrender.com';
+    const rawUrl = this.configService.get<string>('AI_SERVICE_URL') || 'https://trade-z-ai-service.onrender.com';
+    this.aiServiceUrl = rawUrl.replace(/\/+$/, '');
   }
 
   async runBacktest(params: {

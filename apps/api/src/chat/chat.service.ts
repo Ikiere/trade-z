@@ -8,7 +8,8 @@ export class ChatService {
   private supabase: SupabaseClient;
 
   constructor(private configService: ConfigService) {
-    this.aiServiceUrl = this.configService.get<string>('AI_SERVICE_URL') || 'https://trade-z-ai-service.onrender.com';
+    const rawUrl = this.configService.get<string>('AI_SERVICE_URL') || 'https://trade-z-ai-service.onrender.com';
+    this.aiServiceUrl = rawUrl.replace(/\/+$/, '');
     const supabaseUrl = this.configService.get<string>('SUPABASE_URL') || 'https://invyoijtyfridyumlgqr.supabase.co';
     const supabaseKey = this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY') || 'placeholder';
     this.supabase = createClient(supabaseUrl, supabaseKey);
@@ -52,7 +53,8 @@ export class ChatService {
         .order('closed_at', { ascending: false })
         .limit(5);
 
-      const response = await fetch(`${this.aiServiceUrl}/api/v1/analysis/quick`, {
+      const targetUrl = `${this.aiServiceUrl}/api/v1/analysis/quick`;
+      const response = await fetch(targetUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -65,8 +67,9 @@ export class ChatService {
 
       if (!response.ok) {
         const errData: any = await response.json().catch(() => ({}));
-        const errMsg = errData?.detail || 'Failed to query AI quick analysis';
-        throw new Error(errMsg);
+        const errMsg = errData?.detail || errData?.message || `AI service returned HTTP ${response.status}`;
+        console.error(`[chat.service] AI analysis call to ${targetUrl} failed:`, errMsg);
+        throw new Error(`AI Service: ${errMsg}`);
       }
 
       return await response.json();

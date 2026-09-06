@@ -15,6 +15,16 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+import re
+from starlette.requests import Request
+
+# Normalize URL paths (e.g. //api/v1/... -> /api/v1/...) to prevent 404s
+@app.middleware("http")
+async def normalize_path_middleware(request: Request, call_next):
+    if request.scope.get("type") == "http" and "//" in request.scope.get("path", ""):
+        request.scope["path"] = re.sub(r"/+", "/", request.scope["path"])
+    return await call_next(request)
+
 # CORS
 app.add_middleware(
     CORSMiddleware,

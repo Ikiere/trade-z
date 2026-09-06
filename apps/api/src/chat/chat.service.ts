@@ -8,7 +8,7 @@ export class ChatService {
   private supabase: SupabaseClient;
 
   constructor(private configService: ConfigService) {
-    this.aiServiceUrl = this.configService.get<string>('AI_SERVICE_URL') || 'https://trade-z-production.up.railway.app';
+    this.aiServiceUrl = this.configService.get<string>('AI_SERVICE_URL') || 'https://trade-z-ai-service.onrender.com';
     const supabaseUrl = this.configService.get<string>('SUPABASE_URL') || 'https://invyoijtyfridyumlgqr.supabase.co';
     const supabaseKey = this.configService.get<string>('SUPABASE_SERVICE_ROLE_KEY') || 'placeholder';
     this.supabase = createClient(supabaseUrl, supabaseKey);

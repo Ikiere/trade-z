@@ -6,7 +6,7 @@ export class BacktestService {
   private aiServiceUrl: string;
 
   constructor(private configService: ConfigService) {
-    this.aiServiceUrl = this.configService.get<string>('AI_SERVICE_URL') || 'https://trade-z-production.up.railway.app';
+    this.aiServiceUrl = this.configService.get<string>('AI_SERVICE_URL') || 'https://trade-z-ai-service.onrender.com';
   }
 
   async runBacktest(params: {

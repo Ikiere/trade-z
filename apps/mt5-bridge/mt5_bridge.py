@@ -7,7 +7,7 @@ Provides a local REST API on port 5001 for real-time account sync and auto-execu
 import sys
 import json
 import traceback
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta, timezone
 
@@ -134,7 +134,10 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         self.end_headers()
-        self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+        try:
+            self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            pass
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -851,7 +854,7 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
 
 def run_bridge():
     server_address = ('127.0.0.1', PORT)
-    httpd = HTTPServer(server_address, MT5BridgeHandler)
+    httpd = ThreadingHTTPServer(server_address, MT5BridgeHandler)
     print(f"=========================================================")
     print(f"  Trade-Z MetaTrader 5 (MT5) Desktop Bridge")
     print(f"  Listening on: http://127.0.0.1:{PORT}")

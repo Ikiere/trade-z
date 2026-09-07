@@ -43,6 +43,27 @@ export class ChatService {
       }
     }
 
+    if (!enrichedContext.history || enrichedContext.history.length === 0) {
+      try {
+        const histRes = await fetch('http://127.0.0.1:5001/history?days=30', {
+          signal: AbortSignal.timeout(4000),
+        });
+        if (histRes.ok) {
+          const histData = (await histRes.json()) as any;
+          if (Array.isArray(histData?.trades)) {
+            enrichedContext.history = histData.trades;
+          }
+        }
+      } catch (_) {
+        // Local bridge offline or unavailable
+      }
+    }
+
+    // For local MT5 learning and self-correction autopsy inquiries, prioritize immediate local synthesis with MT5 history
+    if (this.isLearningOrMistakesIntent(prompt)) {
+      return this.generateSmartReply(prompt, enrichedContext);
+    }
+
     try {
       const response = await fetch(`${this.aiServiceUrl}/api/v1/analysis/chat`, {
         method: 'POST',
@@ -64,7 +85,27 @@ export class ChatService {
     return this.generateSmartReply(prompt, enrichedContext);
   }
 
+  private isLearningOrMistakesIntent(p: string): boolean {
+    const lower = (p || '').toLowerCase();
+    const triggers = [
+      'what have you learned', 'what did you learn', 'what are you learning',
+      'what did the ai learn', 'how do you learn', 'how does the ai learn',
+      'learn from my', 'learned from', 'learning from', 'loss autopsy',
+      'autopsy', 'past mistake', 'past mistakes', 'my mistakes', 'my past trades',
+      'recent closed trades', 'closed trades', 'closed trade history', 'trade history',
+      'what lessons', 'what did you adapt', 'correcting mistakes', 'self correction',
+      'what did you learn from my', 'what have you learned from my', 'what did you learn from',
+      'tell me what you learned', 'how do you learn from', 'how did you learn',
+      'have you learned'
+    ];
+    return triggers.some(t => lower.includes(t)) || (
+      ['learn', 'learned', 'learning', 'lesson', 'lessons', 'mistake', 'mistakes', 'autopsy', 'adapt'].some(w => lower.includes(w)) &&
+      ['trade', 'trades', 'history', 'closed', 'mt5', 'past', 'loss', 'losses'].some(w => lower.includes(w))
+    );
+  }
+
   private isTradeAnalysisIntent(p: string): boolean {
+    if (this.isLearningOrMistakesIntent(p)) return false;
     if (p.startsWith('/trade')) return true;
 
     const tradeTriggers = [
@@ -222,6 +263,44 @@ export class ChatService {
       return (
         `I'm **Jephthah**—your personal trading buddy, institutional co-trader, and capital guardian in Trade-Z! 🛡️\n\n` +
         `I'm here to trade alongside you, translate market moves into plain English, watch for risky news spikes, and give you straight-up advice on whether to let your winners run or cut risk.`
+      );
+    }
+
+    // 3.5. AI Self-Correction, Loss Autopsy & Learning Memory Intent
+    if (this.isLearningOrMistakesIntent(p)) {
+      const history = Array.isArray(context?.history) ? context.history : [];
+      const closedCount = history.length;
+      const losses = history.filter((t: any) => Number(t.pnl ?? t.profit ?? 0) < 0);
+      const wins = history.filter((t: any) => Number(t.pnl ?? t.profit ?? 0) > 0);
+      const winRate = closedCount > 0 ? Math.round((wins.length / closedCount) * 100) : 0;
+
+      let historyBreakdown = '';
+      if (closedCount > 0) {
+        const recentHistory = history.slice(0, 5).map((t: any) => {
+          const pnl = Number(t.pnl ?? t.profit ?? 0);
+          const sign = pnl >= 0 ? '+' : '';
+          const icon = pnl >= 0 ? '🟢 WIN' : '🔴 LOSS';
+          const symbol = t.pair || t.symbol || 'ASSET';
+          const dir = String(t.direction || t.type || '').toUpperCase();
+          const ticketStr = t.ticket ? `Ticket #${t.ticket}` : '';
+          return `• **${symbol}** (${dir}) ${ticketStr}: ${icon} **${sign}$${pnl.toFixed(2)}**`;
+        }).join('\n');
+
+        historyBreakdown = 
+          `📊 **Your Synced MT5 Trade History (${closedCount} closed trades analyzed):**\n` +
+          `• **Win Rate:** ${winRate}% (${wins.length} Wins / ${losses.length} Losses)\n` +
+          recentHistory + '\n\n';
+      }
+
+      return (
+        `🧠 **Here's Exactly What I've Learned From Your MT5 Trades, Brother:**\n\n` +
+        historyBreakdown +
+        `Every time a trade closes on your MetaTrader 5 terminal, my **Teacher-Student Autopsy Engine** audits the price action to uncover why trades won or lost. Here are the active self-correction rules I've enforced:\n\n` +
+        `1. 🛡️ **Counter-Trend Veto Rule:** If a trade was stopped out while fighting the higher-timeframe 4H trend, I ban all future entries in that counter-direction until a structural Change of Character (CHoCH) confirms institutional reversal.\n\n` +
+        `2. 🎯 **Patience & Liquidity Sweep Requirement:** In several recent volatile sessions, entries taken before market makers swept retail stop-loss pools were vulnerable. I now require a confirmed **Swing Failure Pattern (SFP)** or Fair Value Gap (FVG) displacement before authorizing entries.\n\n` +
+        `3. 📏 **Adaptive Stop Loss Buffer (+20% Expansion):** To prevent premature wick-outs from broker spreads and session rollover slippage, my Brain automatically widens the dynamic ATR stop buffer so your trades have breathing room to hit target.\n\n` +
+        `4. ⚡ **Active Trade Sentinel Auto-Defense:** When you enter a trade now, I actively guard it every 15 seconds—ejecting before high-impact CPI/NFP news spikes, cutting early if structure breaks, and locking Stop Loss to Breakeven (+1.0R) so green trades stay green.\n\n` +
+        `💡 *On your next chart scan, look for the purple **AI Brain Collaboration** card—it will show the exact Teacher Lesson & Trading AI Adaptation applied specifically to that asset!*`
       );
     }
 

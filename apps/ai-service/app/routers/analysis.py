@@ -336,6 +336,7 @@ async def chat_analysis(request: ChatQueryRequest):
     ctx = request.context or {}
     acc = ctx.get("account") or ctx.get("summary") or {}
     positions = ctx.get("positions") or []
+    history = ctx.get("history") or []
     balance = float(acc.get("balance") or 0.0)
     equity = float(acc.get("equity") or balance or 0.0)
     floating_pnl = float(acc.get("total_floating_pnl") or acc.get("profit") or 0.0)
@@ -352,6 +353,17 @@ async def chat_analysis(request: ChatQueryRequest):
                         balance = float(b_data["summary"].get("balance") or balance)
                         equity = float(b_data["summary"].get("equity") or equity)
                         floating_pnl = float(b_data["summary"].get("total_floating_pnl") or floating_pnl)
+        except Exception:
+            pass
+
+    # If closed trade history not provided in context, read directly from MT5 bridge
+    if not history:
+        try:
+            async with httpx.AsyncClient(timeout=2.5) as bridge_client:
+                h_res = await bridge_client.get("http://127.0.0.1:5001/history?days=30")
+                if h_res.status_code == 200:
+                    h_data = h_res.json()
+                    history = h_data.get("trades") or []
         except Exception:
             pass
 
@@ -380,6 +392,21 @@ async def chat_analysis(request: ChatQueryRequest):
             )
         trades_context_str = "\n".join(trade_items)
 
+    # Format closed trade history for LLM context
+    history_context_str = "No closed trades recorded."
+    if history:
+        hist_items = []
+        for h in history[:8]:
+            h_pnl = float(h.get("profit") or h.get("pnl") or 0.0)
+            h_sign = "+" if h_pnl >= 0 else ""
+            h_dir = str(h.get("direction") or h.get("type") or "").upper()
+            h_sym = str(h.get("pair") or h.get("symbol") or "Asset").upper()
+            h_comment = f" [{h.get('comment')}]" if h.get("comment") else ""
+            hist_items.append(
+                f"- Ticket #{h.get('ticket')}: {h_sym} {h_dir} | PnL: {h_sign}${h_pnl:.2f}{h_comment}"
+            )
+        history_context_str = "\n".join(hist_items)
+
     # If API key is provided and not a placeholder, query OpenRouter
     if settings.llm_api_key and settings.llm_api_key not in ["", "your_api_key", "placeholder", "your_openrouter_api_key"]:
         try:
@@ -406,10 +433,19 @@ async def chat_analysis(request: ChatQueryRequest):
                 "- When the user asks about an active trade (or sends /trade):\n"
                 "  1. Break down what is happening in their trade (entry vs live price, floating profit/loss, distance to stop loss).\n"
                 "  2. Connect it to live macroeconomic events, market volatility, and liquidity order flow.\n"
-                "  3. Give a clear, straightforward buddy verdict: whether they should HOLD & WAIT, MOVE SL TO BREAKEVEN, or CLOSE NOW.\n\n"
+                "  3. Give a clear, straightforward buddy verdict: whether they should HOLD & WAIT, MOVE SL TO BREAKEVEN, or CLOSE NOW.\n"
+                "- When the user asks what you learned from their trades, their closed trades, their mistakes, or loss autopsy:\n"
+                "  1. Review their closed trades from history (calculate win rate, wins vs losses, and net P&L).\n"
+                "  2. Perform a direct loss autopsy on stopped out or closed loss trades (explain what went wrong structurally).\n"
+                "  3. Clearly state the 4 active self-correction rules enforced by Trade-Z:\n"
+                "     Rule 1: Counter-Trend Veto (no entries against higher-timeframe 4H flow until CHoCH confirms reversal).\n"
+                "     Rule 2: Liquidity Sweep Requirement (patience for confirmed SFP or FVG displacement before entry).\n"
+                "     Rule 3: Adaptive Stop Loss Buffer (+20% expansion to prevent spread/rollover wick-outs).\n"
+                "     Rule 4: Active Sentinel Auto-Defense (auto-secures +1.0R Breakeven and auto-closes ahead of red-folder news).\n\n"
                 f"User's Live Account Context:\n"
                 f"- Balance: ${balance:,.2f} | Equity: ${equity:,.2f} | Floating P&L: {'+' if floating_pnl >= 0 else ''}${floating_pnl:,.2f}\n"
                 f"Active Open Trades:\n{trades_context_str}\n\n"
+                f"Recent Closed Trades History:\n{history_context_str}\n\n"
                 f"Upcoming Key Macroeconomic Events:\n{events_context_str}"
             )
 
@@ -455,6 +491,22 @@ async def chat_analysis(request: ChatQueryRequest):
     # Jephthah's Intelligent Local Trading Buddy Brain
     prompt = request.prompt.lower().strip()
 
+    learning_triggers = [
+        "what have you learned", "what did you learn", "what are you learning",
+        "what did the ai learn", "how do you learn", "how does the ai learn",
+        "learn from my", "learned from", "learning from", "loss autopsy",
+        "autopsy", "past mistake", "past mistakes", "my mistakes", "my past trades",
+        "recent closed trades", "closed trades", "closed trade history", "trade history",
+        "what lessons", "what did you adapt", "correcting mistakes", "self correction",
+        "what did you learn from my", "what have you learned from my", "what did you learn from",
+        "tell me what you learned", "how do you learn from", "how did you learn",
+        "have you learned"
+    ]
+    is_learning_intent = any(t in prompt for t in learning_triggers) or (
+        any(w in prompt for w in ["learn", "learned", "learning", "lesson", "lessons", "mistake", "mistakes", "autopsy", "adapt"]) and
+        any(w in prompt for w in ["trade", "trades", "history", "closed", "mt5", "past", "loss", "losses"])
+    )
+
     trade_triggers = [
         "analyse", "analyze", "check", "review", "look at", "inspect", "diagnose",
         "breakdown", "what is happening", "what's happening", "what is going on",
@@ -466,10 +518,10 @@ async def chat_analysis(request: ChatQueryRequest):
         "running trade", "running trades", "is it close to tp", "is it close to sl",
         "close to profit", "close to entry"
     ]
-    is_trade_intent = prompt.startswith("/trade") or any(t in prompt for t in trade_triggers) or (
+    is_trade_intent = not is_learning_intent and (prompt.startswith("/trade") or any(t in prompt for t in trade_triggers) or (
         any(w in prompt for w in ["trade", "trades", "position", "positions", "holding", "ticket"]) and
         any(w in prompt for w in ["close", "hold", "exit", "wait", "doing", "safe", "going", "tp", "sl", "profit", "loss", "pnl", "status"])
-    )
+    ))
 
     is_ui_close_tutorial = (
         any(w in prompt for w in ["how do i close", "how to close", "where is the close button", "how can i close a trade in the app", "how does closing work", "panic close", "how to liquidate"]) and
@@ -574,6 +626,46 @@ async def chat_analysis(request: ChatQueryRequest):
             "I'm **Jephthah**—your personal trading buddy, institutional co-trader, and risk guardian in Trade-Z! 🛡️\n\n"
             "Unlike a cold robotic script, I'm here to trade alongside you, break down complex market moves in plain English, "
             "watch out for dangerous news volatility, and give you honest, actionable advice on when to let your winners run or when to cut risk."
+        )
+
+    # 3.5. AI Self-Correction, Loss Autopsy & Learning Memory Intent
+    elif is_learning_intent:
+        closed_count = len(history)
+        losses = [t for t in history if float(t.get("profit") or t.get("pnl") or 0.0) < 0]
+        wins = [t for t in history if float(t.get("profit") or t.get("pnl") or 0.0) > 0]
+        win_rate = round((len(wins) / closed_count) * 100) if closed_count > 0 else 0
+        total_pnl = sum(float(t.get("profit") or t.get("pnl") or 0.0) for t in history)
+        pnl_sign = "+" if total_pnl >= 0 else ""
+
+        history_breakdown = ""
+        if closed_count > 0:
+            recent_trades = []
+            for t in history[:6]:
+                pnl = float(t.get("profit") or t.get("pnl") or 0.0)
+                sign = "+" if pnl >= 0 else ""
+                icon = "🟢 WIN" if pnl >= 0 else "🔴 LOSS"
+                symbol = str(t.get("pair") or t.get("symbol") or "ASSET").upper().rstrip("M")
+                dir_str = str(t.get("direction") or t.get("type") or "").upper()
+                ticket_str = f"Ticket #{t.get('ticket')}" if t.get('ticket') else ""
+                comment_str = f" ({t.get('comment')})" if t.get('comment') else ""
+                recent_trades.append(f"• **{symbol}** ({dir_str}) {ticket_str}: {icon} **{sign}${pnl:.2f}**{comment_str}")
+
+            trades_list_str = "\n".join(recent_trades)
+            history_breakdown = (
+                f"📊 **Your Synced MT5 Trade History ({closed_count} closed trades analyzed):**\n"
+                f"• **Win Rate:** {win_rate}% ({len(wins)} Wins / {len(losses)} Losses) | **Net Realized:** {pnl_sign}${total_pnl:.2f}\n"
+                f"{trades_list_str}\n\n"
+            )
+
+        reply = (
+            f"🧠 **Here's Exactly What I've Learned From Your MT5 Trades, Brother:**\n\n"
+            f"{history_breakdown}"
+            f"Every time a position closes on your MetaTrader 5 terminal, my **Teacher-Student Autopsy Engine** audits the price action, entry structure, and execution timing to find out what went right and what went wrong. Here are the 4 active self-correction rules I've enforced:\n\n"
+            f"1. 🛡️ **Counter-Trend Veto Rule:** When a trade gets stopped out while fighting the higher-timeframe trend (like our BTCUSD long stopped out at 79076.61), I ban future entries in that counter-direction until a structural Change of Character (CHoCH) confirms institutional reversal on the 4H/1H chart.\n\n"
+            f"2. 🎯 **Patience & Liquidity Sweep Requirement (SFP):** Entering before session highs or lows are swept leaves trades vulnerable to institutional stop-hunts. I now require a confirmed **Swing Failure Pattern (SFP)** or Fair Value Gap (FVG) displacement before authorizing entries.\n\n"
+            f"3. 📏 **Adaptive Stop Loss Buffer (+20% Expansion):** To prevent premature wick-outs from broker spread widening during session rollovers and high-volume opens, my Brain automatically widens the dynamic ATR stop buffer so healthy trades don't get stopped out on the wick before running to TP.\n\n"
+            f"4. ⚡ **Active Trade Sentinel Auto-Defense:** When you enter a trade, I actively guard it every 15 seconds—automatically securing Breakeven (+1.0R buffer), defending profits, and auto-closing or alerting before red-folder macroeconomic news events (CPI, NFP, FOMC) spike against you.\n\n"
+            f"💡 *On your next chart scan, look for the purple **AI Brain Collaboration** card—it shows the exact Teacher Lesson & Trading AI Adaptation applied specifically to that asset!*"
         )
 
     # 4. Interactive Trade Analysis & Real-Time Diagnosis

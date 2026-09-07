@@ -43,15 +43,15 @@ export class ChatService {
 
   async getQuickAnalysis(userId: string, pair: string, timeframe: string): Promise<any> {
     try {
-      // 1. Fetch last 5 closed trades matching this pair for learning context
+      // 1. Fetch last 10 closed trades matching this pair for AI loss autopsy & pattern learning
       const { data: closedTrades } = await this.supabase
         .from('trades')
-        .select('direction, pnl, status, entry_price')
+        .select('id, pair, direction, pnl, pips, status, entry_price, stop_loss, take_profit, opened_at, closed_at')
         .eq('user_id', userId)
         .eq('pair', pair)
         .in('status', ['closed', 'stopped_out', 'take_profit'])
         .order('closed_at', { ascending: false })
-        .limit(5);
+        .limit(10);
 
       const targetUrl = `${this.aiServiceUrl}/api/v1/analysis/quick`;
       const response = await fetch(targetUrl, {

@@ -185,6 +185,8 @@ class DecisionEngine(BaseEngine):
             "fundamental_summary": results.get("fundamentals").explanation if results.get("fundamentals") else "",
             "correlation_summary": results.get("correlation").explanation if results.get("correlation") else "",
             "historical_pattern_summary": results.get("historical_pattern").explanation if results.get("historical_pattern") else "",
+            "pattern_memory_verdict": results.get("historical_pattern").metrics.get("verdict", "APPROVED") if results.get("historical_pattern") else "APPROVED",
+            "loss_autopsy_count": results.get("historical_pattern").metrics.get("diagnosed_failures", 0) if results.get("historical_pattern") else 0,
             "decision": decision.upper(),
             "expected_trigger": expected_trigger,
             "full_explanation": explanation,

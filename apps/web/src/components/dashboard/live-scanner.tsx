@@ -256,10 +256,20 @@ export default function LiveScannerWidget() {
  
       if (isApproved) {
         const activeDir = direction.toUpperCase();
-        setLogs(prev => [
+        const histSummary = info.certificate?.historical_pattern_summary || '';
+        const hasLesson = histSummary.includes('Lesson Applied') || histSummary.includes('AI Lesson');
+
+        const successLogs = [
           `[SIGNAL ✅] generated best setup for ${pair}! Direction: ${activeDir}`,
           `  -> ENTRY: ${entryPrice.toFixed(5)} (SL: ${stopLoss.toFixed(5)}, TP: ${takeProfit.toFixed(5)})`,
           `  -> Expected Trigger: ${expectedTrigger || 'Immediate'}`,
+        ];
+        if (hasLesson) {
+          successLogs.push(`  -> [AI LESSON 💡] Setup applied lessons from previous trades to avoid traps.`);
+        }
+
+        setLogs(prev => [
+          ...successLogs,
           ...prev,
         ]);
         
@@ -274,10 +284,19 @@ export default function LiveScannerWidget() {
           setLogs(prev => [`[AUTO TRADE] ${msg}`, ...prev]);
         }
       } else {
-        setLogs(prev => [
-          `[REJECTED ❌] ${pair} setup risky: ${reasoning}`,
-          ...prev,
-        ]);
+        const isMemoryVeto = reasoning.includes('AI MEMORY') || reasoning.includes('AI Memory') || reasoning.includes('Pattern memory') || reasoning.includes('stopped-out');
+        if (isMemoryVeto) {
+          setLogs(prev => [
+            `[AI MEMORY 🧠] Vetoed ${pair} ${direction.toUpperCase()} setup to avoid repeating past loss pattern:`,
+            `  -> ${reasoning}`,
+            ...prev,
+          ]);
+        } else {
+          setLogs(prev => [
+            `[REJECTED ❌] ${pair} setup risky: ${reasoning}`,
+            ...prev,
+          ]);
+        }
       }
     } catch (err: any) {
       console.error('Scanner error:', err);

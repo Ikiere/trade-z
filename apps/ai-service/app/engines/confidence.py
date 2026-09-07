@@ -35,6 +35,17 @@ class ConfidenceEngine(BaseEngine):
                 validation_status="invalid"
             )
 
+        # L12: Historical Pattern Memory (Loss Autopsy Veto)
+        hist = results.get("historical_pattern")
+        if hist and hist.validation_status in ["invalid", "pattern_blocked"]:
+            return EngineResult(
+                result="hard_fail",
+                confidence=hist.confidence,
+                explanation=f"Hard Fail Triggered: {hist.explanation}",
+                metrics=hist.metrics,
+                validation_status="invalid"
+            )
+
         # L13: Risk
         risk = results.get("risk")
         if risk and risk.result == "rejected":
@@ -70,10 +81,9 @@ class ConfidenceEngine(BaseEngine):
 
         final_score = (weighted_sum / total_weight) if total_weight > 0 else 50.0
 
-        # Incorporate historical bias boost/drag
-        hist = results.get("historical_pattern")
-        if hist and hist.result == "stat_compiled":
-            final_score += (hist.confidence - 50.0) * 0.2
+        # Incorporate historical bias boost/drag and learned lesson rewards
+        if hist and hist.result in ["stat_compiled", "pattern_reinforced", "lesson_applied"]:
+            final_score += (hist.confidence - 50.0) * 0.25
             final_score = max(0.0, min(100.0, final_score))
 
         explanation = f"Confidence Engine aggregates a weighted score of {final_score:.1f}%."

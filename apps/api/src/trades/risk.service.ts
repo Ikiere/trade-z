@@ -34,6 +34,17 @@ export class RiskService {
       throw new BadRequestException('Stop Loss distance must be greater than zero pips.');
     }
 
+    // 4. Small Account Dollar Risk Guard (<$150 balance)
+    if (balance > 0 && balance < 150) {
+      const dollarRiskAt001 = stopLossDistancePips * 0.01 * 10.0;
+      const maxAllowedRisk = Math.min(3.50, Math.max(1.50, balance * 0.05));
+      if (dollarRiskAt001 > maxAllowedRisk) {
+        throw new BadRequestException(
+          `AI Capital Shield: Stop loss risk (~$${dollarRiskAt001.toFixed(2)}) exceeds safe 5% risk ($${maxAllowedRisk.toFixed(2)}) for your $${balance.toFixed(2)} balance. Trade Major Forex pairs (EURUSD, GBPUSD) with tighter stops.`,
+        );
+      }
+    }
+
     return true;
   }
 

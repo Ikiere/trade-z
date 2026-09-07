@@ -67,16 +67,16 @@ class RiskEngine(BaseEngine):
         if equity > 0:
             if equity < 150.0:
                 # Small account (<$150): Enforce strict capital preservation.
-                # If 0.01 lot risk is greater than 30% of the account (or >$15), block the trade!
-                max_allowable_loss = max(15.0, equity * 0.30)
+                # Strictly cap risk to maximum 5.0% of balance (or $3.50 max).
+                max_allowable_loss = min(3.50, max(1.50, equity * 0.05))
                 if loss_at_001 > max_allowable_loss:
                     return EngineResult(
                         result="rejected",
                         confidence=0.0,
                         explanation=(
-                            f"AI Capital Shield Veto: Stop loss risk (${loss_at_001:.2f}) exceeds safe tolerance "
-                            f"(${max_allowable_loss:.2f}) on your ${equity:.2f} MT5 balance. Trade vetoed to prevent "
-                            f"burning small capital on high-volatility wide stops."
+                            f"AI Capital Shield Veto: Stop loss dollar risk (${loss_at_001:.2f}) exceeds safe 5% risk "
+                            f"(${max_allowable_loss:.2f}) on your ${equity:.2f} MT5 balance. Trade vetoed to protect small "
+                            f"capital from wide-stop wicks. Scan Major Forex pairs (EURUSD, GBPUSD, AUDUSD) where 0.01 lot stop is only ~$2.00."
                         ),
                         metrics={
                             "risk_reward_ratio": target_rr,

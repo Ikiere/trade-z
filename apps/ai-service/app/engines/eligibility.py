@@ -43,6 +43,30 @@ class EligibilityEngine(BaseEngine):
                 validation_status="limit_breached"
             )
 
+        # ── DAILY LOSS CIRCUIT BREAKER ─────────────────────────────────────
+        # If 2 or more losses occurred today on MT5, halt all new trade authorizations
+        history = context.get("history") or []
+        today_utc_date = now.strftime("%Y-%m-%d")
+        losses_today = [
+            t for t in history
+            if float(t.get("profit") or t.get("pnl") or 0.0) < 0
+            and (
+                str(t.get("closed_at") or "").startswith(today_utc_date)
+                or str(t.get("time_close") or "").startswith(today_utc_date)
+            )
+        ]
+        if len(losses_today) >= 2:
+            return EngineResult(
+                result="NO TRADE",
+                confidence=0.0,
+                explanation=(
+                    f"Daily Loss Circuit Breaker Active: {len(losses_today)} closed losses recorded today. "
+                    f"Capital Preservation Mode is locked to prevent drawdown spirals. Trading halted for today."
+                ),
+                metrics={"losses_today": len(losses_today), "circuit_breaker": "active"},
+                validation_status="limit_breached"
+            )
+
         from app.services.asset_classifier import classify_asset
         asset_info = classify_asset(snapshot.symbol)
         sym = asset_info["symbol"]
@@ -78,37 +102,54 @@ class EligibilityEngine(BaseEngine):
                 validation_status="closed"
             )
 
-        # 3. Intraday Session Hour Check
+        # 3. Institutional Session Kill Zones
+        # Prime high-probability institutional volume windows:
+        # - London Open Kill Zone: 07:00 - 10:30 UTC (420m to 630m)
+        # - New York Open / London Overlap Kill Zone: 12:30 - 16:30 UTC (750m to 990m)
         is_gold = "XAU" in sym or "GOLD" in sym
         is_asian = any(a in sym for a in ["JPY", "AUD", "NZD"])
 
+        in_london_kz = (7 * 60 <= utc_minutes < 10 * 60 + 30)
+        in_ny_kz = (12 * 60 + 30 <= utc_minutes < 16 * 60 + 30)
+        in_tokyo_kz = (0 <= utc_minutes < 9 * 60)
+
         if is_gold:
-            # Gold active London & NY: 08:00 to 21:00 UTC
-            if not (8 * 60 <= utc_minutes < 21 * 60):
+            # Gold demands institutional London or NY volume; off-hours are retail traps
+            if not (in_london_kz or in_ny_kz):
                 return EngineResult(
                     result="NO TRADE",
                     confidence=0.0,
-                    explanation=f"Session Shield Veto: XAUUSD is outside London/NY active session (08:00-21:00 UTC). Current time: {now.strftime('%H:%M')} UTC. Wait for London open.",
+                    explanation=(
+                        f"Session Shield Veto: XAUUSD is outside prime institutional Kill Zones "
+                        f"(London 07:00-10:30 UTC, NY 12:30-16:30 UTC). Current time: {now.strftime('%H:%M')} UTC. "
+                        f"Wait for London or New York open to avoid low-liquidity fakeouts."
+                    ),
                     metrics={"session": "gold_off_hours", "current_utc": now.strftime("%H:%M")},
                     validation_status="session_closed"
                 )
         elif is_asian:
-            # Asian pairs active 00:00 to 21:00 UTC (dead zone between 21:00 and 00:00 UTC)
-            if utc_minutes >= 21 * 60:
+            # Asian pairs active during Tokyo session or NY overlap
+            if not (in_tokyo_kz or in_london_kz or in_ny_kz):
                 return EngineResult(
                     result="NO TRADE",
                     confidence=0.0,
-                    explanation=f"Session Shield Veto: {sym} is in the daily inter-session rollover gap (21:00-00:00 UTC). Spreads widened.",
-                    metrics={"session": "rollover_gap", "current_utc": now.strftime("%H:%M")},
+                    explanation=(
+                        f"Session Shield Veto: {sym} is in the inter-session dead zone (current: {now.strftime('%H:%M')} UTC). "
+                        f"Broker spreads widened. Wait for Tokyo (00:00 UTC) or London Open."
+                    ),
+                    metrics={"session": "asian_off_hours", "current_utc": now.strftime("%H:%M")},
                     validation_status="session_closed"
                 )
         else:
-            # European/US Forex: London through NY (08:00 to 21:00 UTC)
-            if not (8 * 60 <= utc_minutes < 21 * 60):
+            # European/US Forex majors: restrict to London and New York Kill Zones
+            if not (in_london_kz or in_ny_kz):
                 return EngineResult(
                     result="NO TRADE",
                     confidence=0.0,
-                    explanation=f"Session Shield Veto: {sym} is outside London/NY session hours (08:00-21:00 UTC). Low liquidity chop.",
+                    explanation=(
+                        f"Session Shield Veto: {sym} is outside London/NY Kill Zones (07:00-10:30 UTC / 12:30-16:30 UTC). "
+                        f"Current time: {now.strftime('%H:%M')} UTC is off-hours chop."
+                    ),
                     metrics={"session": "forex_off_hours", "current_utc": now.strftime("%H:%M")},
                     validation_status="session_closed"
                 )

@@ -150,63 +150,86 @@ class DecisionEngine(BaseEngine):
             explanation = f"REJECTED: Low confluence score ({final_confidence:.1f}%) for {direction.upper()} setup."
 
         # Risk-to-Reward ratio
-        rr = float(context.get("risk_reward_ratio", 2.5) or 2.5)
-        if rr < 1.5:
-            rr = 2.0
-
-        entry = current_price
+        rr = float(context.get("risk_reward_ratio", 3.0) or 3.0)
+        if rr < 2.0:
+            rr = 2.5
 
         # Structural levels from StructureEngine
-        swing_high = struct_res.metrics.get("swing_high") if struct_res else None
-        swing_low = struct_res.metrics.get("swing_low") if struct_res else None
+        swing_high = float(struct_res.metrics.get("swing_high")) if (struct_res and struct_res.metrics.get("swing_high")) else None
+        swing_low = float(struct_res.metrics.get("swing_low")) if (struct_res and struct_res.metrics.get("swing_low")) else None
+        equilibrium = float(struct_res.metrics.get("equilibrium")) if (struct_res and struct_res.metrics.get("equilibrium")) else None
 
         # Precision-engineered Stop Loss and Take Profit levels
         directive = context.get("brain_directive")
         sl_buffer_val = (directive.recommended_sl_buffer_pips * pip_unit) if (directive and directive.recommended_sl_buffer_pips > 0) else 0.0
 
+        # Institutional Retracement Entry Resolution:
+        # Instead of market-chasing at candle close, place limit orders at discount/premium wholesale levels
         if direction == "bullish":
-            # Institutional SL below swing low with buffer
-            if swing_low and float(swing_low) < entry:
-                raw_dist = (entry - float(swing_low)) + (atr * 0.2)
-                sl_dist = max(atr * 1.0, min(atr * 2.8, raw_dist))
+            # Wholesale discount entry: target equilibrium (50% retracement) or nearest discount block
+            if equilibrium and equilibrium < current_price:
+                # If current price is within tight proximity of equilibrium (within 0.15 ATR), execute market
+                if (current_price - equilibrium) <= (atr * 0.15):
+                    entry = current_price
+                    order_type = "market"
+                else:
+                    # Place a Buy Limit waiting for institutional retracement into discount
+                    entry = round(equilibrium, decimals)
+                    order_type = "buy limit"
             else:
-                sl_dist = atr * 1.5
+                entry = current_price
+                order_type = "market"
 
-            # Apply Brain-guided SL safety buffer if recommended from loss autopsy
+            # Institutional SL below swing low with buffer
+            if swing_low and swing_low < entry:
+                raw_dist = (entry - swing_low) + (atr * 0.2)
+                sl_dist = max(atr * 0.8, min(atr * 2.5, raw_dist))
+            else:
+                sl_dist = atr * 1.2
+
             if sl_buffer_val > 0:
                 sl_dist += sl_buffer_val
 
-            sl = entry - sl_dist
-            tp = entry + (sl_dist * rr)
-            spread_buffer = atr * 0.05
-            if abs(entry - current_price) <= spread_buffer:
-                order_type = "market"
-            elif entry < current_price:
-                order_type = "buy limit"
+            sl = round(entry - sl_dist, decimals)
+            # Target external liquidity pool (swing_high) or minimum 1:3 RR
+            target_proj = entry + (sl_dist * rr)
+            if swing_high and swing_high > entry:
+                tp = round(max(swing_high, target_proj), decimals)
             else:
-                order_type = "buy stop"
+                tp = round(target_proj, decimals)
 
         else:  # bearish
-            # Institutional SL above swing high with buffer
-            if swing_high and float(swing_high) > entry:
-                raw_dist = (float(swing_high) - entry) + (atr * 0.2)
-                sl_dist = max(atr * 1.0, min(atr * 2.8, raw_dist))
+            # Wholesale premium entry: target equilibrium (50% retracement) or nearest premium block
+            if equilibrium and equilibrium > current_price:
+                # If current price is within tight proximity of equilibrium, execute market
+                if (equilibrium - current_price) <= (atr * 0.15):
+                    entry = current_price
+                    order_type = "market"
+                else:
+                    # Place a Sell Limit waiting for institutional retracement into premium
+                    entry = round(equilibrium, decimals)
+                    order_type = "sell limit"
             else:
-                sl_dist = atr * 1.5
+                entry = current_price
+                order_type = "market"
 
-            # Apply Brain-guided SL safety buffer if recommended from loss autopsy
+            # Institutional SL above swing high with buffer
+            if swing_high and swing_high > entry:
+                raw_dist = (swing_high - entry) + (atr * 0.2)
+                sl_dist = max(atr * 0.8, min(atr * 2.5, raw_dist))
+            else:
+                sl_dist = atr * 1.2
+
             if sl_buffer_val > 0:
                 sl_dist += sl_buffer_val
 
-            sl = entry + sl_dist
-            tp = entry - (sl_dist * rr)
-            spread_buffer = atr * 0.05
-            if abs(entry - current_price) <= spread_buffer:
-                order_type = "market"
-            elif entry > current_price:
-                order_type = "sell limit"
+            sl = round(entry + sl_dist, decimals)
+            # Target external liquidity pool (swing_low) or minimum 1:3 RR
+            target_proj = entry - (sl_dist * rr)
+            if swing_low and swing_low < entry:
+                tp = round(min(swing_low, target_proj), decimals)
             else:
-                order_type = "sell stop"
+                tp = round(target_proj, decimals)
 
         # Strictly enforce directional invariants:
         # For bullish: SL MUST be < entry, TP MUST be > entry

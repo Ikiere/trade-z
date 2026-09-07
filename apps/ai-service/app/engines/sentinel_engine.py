@@ -160,6 +160,21 @@ class SentinelEngine:
                 "is_risk_free": False
             }
 
+        # ── GUARD 5: Partial Take-Profit (+1.5R Expansion) ───────────
+        if r_multiple >= 1.5:
+            return {
+                "ticket": ticket,
+                "symbol": symbol,
+                "action": "PARTIAL_PROFIT_1.5R",
+                "should_close": False,
+                "should_partial_close": True,
+                "badge": "💰 BANK 50% PARTIAL",
+                "badge_color": "emerald",
+                "reason": f"Strong expansion (+{r_multiple:.1f}R / +${profit:.2f})! Recommend banking 50% partial profit to lock in realized gains and letting remainder run risk-free to full TP.",
+                "r_multiple": round(r_multiple, 2),
+                "is_risk_free": is_at_breakeven
+            }
+
         # ── DEFAULT: Position Healthy & Monitored ───────────────────
         badge = "🔒 RISK-FREE (BE LOCKED)" if is_at_breakeven else "🟢 SMC INTACT"
         badge_color = "emerald" if is_at_breakeven else "green"

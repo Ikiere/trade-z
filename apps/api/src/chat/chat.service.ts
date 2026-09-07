@@ -16,11 +16,38 @@ export class ChatService {
   }
 
   async sendQuery(prompt: string, context?: any): Promise<string> {
+    // If context is missing positions or positions is empty, fetch live from local MT5 Bridge
+    let enrichedContext = context ? { ...context } : {};
+    if (!enrichedContext.positions || enrichedContext.positions.length === 0) {
+      try {
+        const mt5Res = await fetch('http://127.0.0.1:5001/positions', {
+          signal: AbortSignal.timeout(1500),
+        });
+        if (mt5Res.ok) {
+          const data = (await mt5Res.json()) as any;
+          if (Array.isArray(data?.positions)) {
+            enrichedContext.positions = data.positions;
+          }
+          if (data?.summary) {
+            enrichedContext.account = {
+              ...(enrichedContext.account || {}),
+              balance: data.summary.balance ?? enrichedContext.account?.balance,
+              equity: data.summary.equity ?? enrichedContext.account?.equity,
+              profit: data.summary.total_floating_pnl ?? enrichedContext.account?.profit,
+            };
+            enrichedContext.summary = data.summary;
+          }
+        }
+      } catch (_) {
+        // Local bridge offline or unavailable; proceed with existing context
+      }
+    }
+
     try {
       const response = await fetch(`${this.aiServiceUrl}/api/v1/analysis/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, context }),
+        body: JSON.stringify({ prompt, context: enrichedContext }),
         signal: AbortSignal.timeout(8000),
       });
 
@@ -34,7 +61,135 @@ export class ChatService {
       // Remote AI service cold-start or offline: proceed to intelligent local brain
     }
 
-    return this.generateSmartReply(prompt, context);
+    return this.generateSmartReply(prompt, enrichedContext);
+  }
+
+  private isTradeAnalysisIntent(p: string): boolean {
+    if (p.startsWith('/trade')) return true;
+
+    const tradeTriggers = [
+      'analyse', 'analyze', 'check', 'review', 'look at', 'inspect', 'diagnose',
+      'breakdown', 'what is happening', "what's happening", 'what is going on',
+      'how is my', 'how are my', 'should i close', 'should i exit', 'should i hold',
+      'should i wait', 'can i close', 'when to close', 'whether to close', 'close trade',
+      'exit trade', 'status of my', 'tell me about my trade', 'update on my trade',
+      'one of my trade', 'one of my trades', 'my trade', 'my trades', 'my position',
+      'my positions', 'open trade', 'open trades', 'active trade', 'active trades',
+      'running trade', 'running trades', 'is it close to tp', 'is it close to sl',
+      'close to profit', 'close to entry'
+    ];
+
+    if (tradeTriggers.some(t => p.includes(t))) return true;
+
+    const hasTradeWord = ['trade', 'trades', 'position', 'positions', 'holding', 'ticket'].some(w => p.includes(w));
+    const hasActionWord = ['close', 'hold', 'exit', 'wait', 'doing', 'safe', 'going', 'tp', 'sl', 'profit', 'loss', 'pnl', 'status'].some(w => p.includes(w));
+
+    return hasTradeWord && hasActionWord;
+  }
+
+  private isUiCloseTutorialIntent(p: string): boolean {
+    const isHowTo =
+      p.includes('how do i close') ||
+      p.includes('how to close') ||
+      p.includes('where is the close button') ||
+      p.includes('how can i close a trade in the app') ||
+      p.includes('how does closing work') ||
+      p.includes('panic close') ||
+      p.includes('how to liquidate');
+
+    const isAskingForTradeAdvice =
+      p.includes('should i') ||
+      p.includes('can i') ||
+      p.includes('analyse') ||
+      p.includes('analyze') ||
+      p.includes('my trade') ||
+      p.includes('what is happening') ||
+      p.includes('my position');
+
+    return isHowTo && !isAskingForTradeAdvice;
+  }
+
+  private calculateTradeMetrics(pos: any) {
+    const symbol = String(pos.pair || pos.symbol || 'Asset').toUpperCase();
+    const cleanSymbol = symbol.replace(/m$/i, '');
+    const direction = String(pos.direction || pos.type || 'BUY').toUpperCase();
+    const isBuy = direction.includes('BUY') || direction.includes('LONG');
+    const vol = Number(pos.volume || 0.01);
+    const entry = Number(pos.price_open || 0);
+    const current = Number(pos.price_current || 0);
+    const sl = Number(pos.sl || 0);
+    const tp = Number(pos.tp || 0);
+    const profit = Number(pos.profit || 0);
+    const ticket = pos.ticket || 'N/A';
+    const comment = pos.comment ? ` (${pos.comment})` : '';
+
+    let pipMultiplier = 10000;
+    let decimalPlaces = 4;
+    if (cleanSymbol.includes('JPY')) {
+      pipMultiplier = 100;
+      decimalPlaces = 3;
+    } else if (cleanSymbol.includes('XAU') || cleanSymbol.includes('GOLD')) {
+      pipMultiplier = 10;
+      decimalPlaces = 2;
+    } else if (cleanSymbol.includes('BTC') || cleanSymbol.includes('ETH') || cleanSymbol.includes('SOL')) {
+      pipMultiplier = 1;
+      decimalPlaces = 2;
+    }
+
+    const priceDiff = isBuy ? current - entry : entry - current;
+    const pips = +(priceDiff * pipMultiplier).toFixed(1);
+
+    let slInfo = 'None set';
+    if (sl > 0) {
+      const slDiff = isBuy ? current - sl : sl - current;
+      const slPips = +(slDiff * pipMultiplier).toFixed(1);
+      slInfo = `${sl.toFixed(decimalPlaces)} (${slPips >= 0 ? `${slPips} pips safety buffer` : `${Math.abs(slPips)} pips past SL`})`;
+    }
+
+    let tpInfo = 'None set';
+    if (tp > 0) {
+      const tpDiff = isBuy ? tp - current : current - tp;
+      const tpPips = +(tpDiff * pipMultiplier).toFixed(1);
+      tpInfo = `${tp.toFixed(decimalPlaces)} (${tpPips >= 0 ? `${tpPips} pips to target` : 'target reached'})`;
+    }
+
+    const sign = profit >= 0 ? '+' : '';
+    const statusEmoji = profit >= 0 ? '🟢' : '🔴';
+    const pipSign = pips >= 0 ? '+' : '';
+
+    let verdictTitle = '';
+    let advice = '';
+
+    if (profit > 15 || pips > 25) {
+      verdictTitle = '💰 **VERDICT: SECURE PROFITS OR MOVE SL TO BREAKEVEN**';
+      advice = `You're up a clean ${sign}$${profit.toFixed(2)} (${pipSign}${pips} pips)! Great expansion, brother. Don't let a green trade turn red. Move your Stop Loss to entry (${entry.toFixed(decimalPlaces)}) for a 100% risk-free trade, or bank partial profits if price approaches resistance.`;
+    } else if (profit >= 0) {
+      verdictTitle = '🛡️ **VERDICT: HOLD & WAIT — STRUCTURE IS HEALTHY**';
+      advice = `You're slightly green (${sign}$${profit.toFixed(2)}, ${pipSign}${pips} pips). Price is defending the entry block cleanly and order flow is stable. Let the setup develop toward your TP (${tpInfo}). No need to micromanage!`;
+    } else if (profit > -10 && pips > -20) {
+      verdictTitle = '⏳ **VERDICT: HOLD WITH DISCIPLINE — NORMAL RETRACEMENT**';
+      advice = `You're down a minor -$${Math.abs(profit).toFixed(2)} (${pips} pips). Stay calm, brother—this is standard liquidity retracement before continuation. Your risk is well-buffered. As long as your structural SL (${slInfo}) holds, trust the setup.`;
+    } else {
+      verdictTitle = '⚠️ **VERDICT: CLOSE POSITION OR TIGHTEN STOP LOSS**';
+      advice = `Drawdown is reaching -$${Math.abs(profit).toFixed(2)} (${pips} pips). Momentum has softened against our bias. If market structure has broken on the 15m chart, cut it cleanly now using the red Close button so your equity stays safe for the next A+ setup.`;
+    }
+
+    return {
+      symbol: cleanSymbol,
+      direction,
+      vol,
+      entry: entry.toFixed(decimalPlaces),
+      current: current.toFixed(decimalPlaces),
+      profitFormatted: `${sign}$${profit.toFixed(2)}`,
+      pipsFormatted: `${pipSign}${pips} pips`,
+      slInfo,
+      tpInfo,
+      ticket,
+      comment,
+      statusEmoji,
+      verdictTitle,
+      advice,
+    };
   }
 
   private generateSmartReply(prompt: string, context?: any): string {
@@ -70,63 +225,67 @@ export class ChatService {
       );
     }
 
-    // 4. Interactive Trade Analysis & /trade Command
-    if (p.startsWith('/trade') || ['analyze my trade', 'check my trade', 'what is happening in my trade', 'should i close', 'should i wait', 'my trade'].some(w => p.includes(w))) {
+    // 4. Interactive Trade Analysis & Real-Time Diagnosis
+    if (this.isTradeAnalysisIntent(p)) {
       if (positions.length > 0) {
-        let targetPos = positions[0];
-        for (const pos of positions) {
-          const pairName = String(pos.pair || '').toLowerCase();
+        // If user mentions a specific pair or ticket, filter to that target
+        let targetPositions = positions;
+        const matchingPositions = positions.filter((pos: any) => {
+          const pairName = String(pos.pair || pos.symbol || '').toLowerCase();
           const ticketStr = String(pos.ticket || '');
-          if (p.includes(pairName) || p.includes(ticketStr)) {
-            targetPos = pos;
-            break;
-          }
+          return p.includes(pairName) || p.includes(ticketStr);
+        });
+
+        if (matchingPositions.length > 0) {
+          targetPositions = matchingPositions;
         }
 
-        const pair = targetPos.pair || 'Asset';
-        const direction = String(targetPos.direction || 'long').toUpperCase();
-        const vol = targetPos.volume || 0.01;
-        const entry = Number(targetPos.price_open || 0);
-        const current = Number(targetPos.price_current || 0);
-        const posProfit = Number(targetPos.profit || 0);
-        const ticket = targetPos.ticket || 'N/A';
-        const sign = posProfit >= 0 ? '+' : '';
-        const statusEmoji = posProfit >= 0 ? '🟢' : '🔴';
-
-        let verdict = '';
-        let advice = '';
-
-        if (posProfit > 20) {
-          verdict = `💰 **VERDICT: SECURE PARTIAL PROFITS OR MOVE SL TO BREAKEVEN**`;
-          advice = `You're up a clean ${sign}$${posProfit.toFixed(2)}! The market gave you an impulsive run. Don't let a green trade flip into a loss. Shift your SL to entry price ($${entry.toFixed(4)}) to make it a 100% risk-free trade, or bank half your profit now if you're approaching major resistance.`;
-        } else if (posProfit >= 0) {
-          verdict = `🛡️ **VERDICT: HOLD & WAIT — STRUCTURE IS HEALTHY**`;
-          advice = `You're in mild profit (${sign}$${posProfit.toFixed(2)}). Price is holding the institutional entry block nicely. Let the setup develop toward your take profit. No need to micromanage!`;
-        } else if (posProfit > -15) {
-          verdict = `⏳ **VERDICT: HOLD WITH DISCIPLINE — NORMAL RETRACEMENT**`;
-          advice = `You're in a minor pullback (-$${Math.abs(posProfit).toFixed(2)}). Stay calm, brother—liquidity tests are standard before continuation. Keep your structural stop loss intact. If the 15m candle closes aggressively through support, we'll cut it.`;
-        } else {
-          verdict = `⚠️ **VERDICT: CLOSE POSITION OR TIGHTEN STOP LOSS**`;
-          advice = `Drawdown is reaching -$${Math.abs(posProfit).toFixed(2)}. Momentum has shifted against our bias. If market structure has broken, my honest advice is to cut it cleanly now using the red Close button so you protect your capital for the next high-probability setup.`;
+        if (targetPositions.length === 1) {
+          const m = this.calculateTradeMetrics(targetPositions[0]);
+          return (
+            `🔍 **Real-Time Trade Diagnosis • ${m.symbol} (${m.direction}) Ticket #${m.ticket}${m.comment}:**\n\n` +
+            `• **Live Metrics:** ${m.statusEmoji} **${m.profitFormatted} (${m.pipsFormatted})** | ${m.vol} Lots | Entry: \`${m.entry}\` → Live: \`${m.current}\`\n` +
+            `• **Stop Loss:** ${m.slInfo}\n` +
+            `• **Take Profit:** ${m.tpInfo}\n` +
+            `• **Market Session:** Active liquidity testing session support/resistance nodes.\n\n` +
+            `${m.verdictTitle}\n\n` +
+            `👉 **My Advice:** ${m.advice}\n\n` +
+            `*(Tip: You can instantly close Ticket #${m.ticket} right from this chat using the button below, or on the Dashboard).*`
+          );
         }
+
+        // Multiple open positions diagnosed together!
+        const diagnoses = targetPositions.map((pos: any, idx: number) => {
+          const m = this.calculateTradeMetrics(pos);
+          return (
+            `📊 **Position #${idx + 1}: ${m.symbol} (${m.direction}) • Ticket #${m.ticket}${m.comment}**\n` +
+            `• **Live P&L:** ${m.statusEmoji} **${m.profitFormatted} (${m.pipsFormatted})** | ${m.vol} Lots\n` +
+            `• **Execution:** Entry: \`${m.entry}\` | Live: \`${m.current}\`\n` +
+            `• **Safety Buffer:** SL: ${m.slInfo} | TP: ${m.tpInfo}\n` +
+            `• ${m.verdictTitle}\n` +
+            `👉 ${m.advice}`
+          );
+        });
+
+        const netProfit = targetPositions.reduce((sum: number, pos: any) => sum + Number(pos.profit || 0), 0);
+        const netSign = netProfit >= 0 ? '+' : '';
 
         return (
-          `🔍 **Trade Diagnosis for ${pair} (${direction}) • Ticket #${ticket}:**\n\n` +
-          `• **Position Metrics:** ${statusEmoji} ${sign}$${posProfit.toFixed(2)} P&L | ${vol} Lots | Entry: ${entry.toFixed(4)} | Live: ${current.toFixed(4)}\n` +
-          `• **Market Condition:** Liquidity structure on the 15m/1H chart is actively testing session volume nodes.\n\n` +
-          `${verdict}\n\n` +
-          `👉 **My Advice:** ${advice}\n\n` +
-          `*(Tip: You can instantly close this trade right from the Dashboard or Trades table with 1-click).*`
+          `🔍 **Here's What's Actually Happening in Your ${targetPositions.length} Open Trade(s), Brother:**\n\n` +
+          diagnoses.join('\n\n') +
+          `\n\n🛡️ **Account Health:** Balance: $${balance.toFixed(2)} | Equity: $${equity.toFixed(2)} | Net Floating: ${netSign}$${netProfit.toFixed(2)}\n\n` +
+          `*(Tip: Need to exit? You can close any of these tickets with 1-click right below).*`
         );
       }
+
       return (
         `Hey bro! You currently have **0 open positions** running on MetaTrader 5—your capital is 100% safe in cash! 🏖️\n\n` +
-        `That's a great spot to be in. Want me to scan the watchlist for fresh confluences, or analyze a pair like Gold (XAUUSD) or EURUSD before you jump in?`
+        `No trades are in drawdown or exposed to risk right now. Want me to scan the watchlist for fresh confluences, or analyze a pair like Gold (XAUUSD) or EURUSD before you jump in?`
       );
     }
 
-    // 5. Direct Trade Closing
-    if (p.includes('close') || p.includes('exit') || p.includes('liquidate')) {
+    // 5. Direct Trade Closing UI Tutorial (only when explicitly asking for app instructions)
+    if (this.isUiCloseTutorialIntent(p)) {
       return (
         `🎯 **How to Close Trades in Trade-Z (Quick & Easy):**\n\n` +
         `1. **Single Trade Exit:** Click the red **"Close"** button on any position row on the **Dashboard** or **Live Positions** (\`/trades\`) page. It exits instantly at market price.\n` +

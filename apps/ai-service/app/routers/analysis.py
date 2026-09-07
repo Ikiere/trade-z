@@ -265,6 +265,21 @@ async def chat_analysis(request: ChatQueryRequest):
     equity = float(acc.get("equity") or balance or 0.0)
     floating_pnl = float(acc.get("total_floating_pnl") or acc.get("profit") or 0.0)
 
+    # If positions not provided in context, attempt to read directly from local MT5 bridge
+    if not positions:
+        try:
+            async with httpx.AsyncClient(timeout=1.5) as bridge_client:
+                b_res = await bridge_client.get("http://127.0.0.1:5001/positions")
+                if b_res.status_code == 200:
+                    b_data = b_res.json()
+                    positions = b_data.get("positions") or []
+                    if b_data.get("summary"):
+                        balance = float(b_data["summary"].get("balance") or balance)
+                        equity = float(b_data["summary"].get("equity") or equity)
+                        floating_pnl = float(b_data["summary"].get("total_floating_pnl") or floating_pnl)
+        except Exception:
+            pass
+
     # Fetch live economic calendar events to give Jephthah real-world market awareness
     try:
         raw_events = await fetch_tradingview_calendar()
@@ -390,76 +405,154 @@ async def chat_analysis(request: ChatQueryRequest):
             "watch out for dangerous news volatility, and give you honest, actionable advice on when to let your winners run or when to cut risk."
         )
 
-    # 4. Interactive Trade Analysis & /trade Command
-    elif prompt.startswith("/trade") or any(w in prompt for w in ["analyze my trade", "check my trade", "what is happening in my trade", "should i close", "should i wait", "my trade"]):
+    trade_triggers = [
+        "analyse", "analyze", "check", "review", "look at", "inspect", "diagnose",
+        "breakdown", "what is happening", "what's happening", "what is going on",
+        "how is my", "how are my", "should i close", "should i exit", "should i hold",
+        "should i wait", "can i close", "when to close", "whether to close", "close trade",
+        "exit trade", "status of my", "tell me about my trade", "update on my trade",
+        "one of my trade", "one of my trades", "my trade", "my trades", "my position",
+        "my positions", "open trade", "open trades", "active trade", "active trades",
+        "running trade", "running trades", "is it close to tp", "is it close to sl",
+        "close to profit", "close to entry"
+    ]
+    is_trade_intent = prompt.startswith("/trade") or any(t in prompt for t in trade_triggers) or (
+        any(w in prompt for w in ["trade", "trades", "position", "positions", "holding", "ticket"]) and
+        any(w in prompt for w in ["close", "hold", "exit", "wait", "doing", "safe", "going", "tp", "sl", "profit", "loss", "pnl", "status"])
+    )
+
+    is_ui_close_tutorial = (
+        any(w in prompt for w in ["how do i close", "how to close", "where is the close button", "how can i close a trade in the app", "how does closing work", "panic close", "how to liquidate"]) and
+        not any(w in prompt for w in ["should i", "can i", "analyse", "analyze", "my trade", "what is happening", "my position"])
+    )
+
+    def calculate_trade_metrics(p_item):
+        symbol = str(p_item.get("pair") or p_item.get("symbol") or "Asset").upper()
+        clean_symbol = symbol.rstrip("m").rstrip("M")
+        direction = str(p_item.get("direction") or p_item.get("type") or "BUY").upper()
+        is_buy = "BUY" in direction or "LONG" in direction
+        vol = float(p_item.get("volume", 0.01))
+        entry = float(p_item.get("price_open", 0.0))
+        current = float(p_item.get("price_current", 0.0))
+        sl = float(p_item.get("sl", 0.0))
+        tp = float(p_item.get("tp", 0.0))
+        profit = float(p_item.get("profit", 0.0))
+        ticket = p_item.get("ticket", "N/A")
+        comment = f" ({p_item.get('comment')})" if p_item.get("comment") else ""
+
+        pip_mult = 10000.0
+        decimals = 4
+        if "JPY" in clean_symbol:
+            pip_mult = 100.0
+            decimals = 3
+        elif "XAU" in clean_symbol or "GOLD" in clean_symbol:
+            pip_mult = 10.0
+            decimals = 2
+        elif any(c in clean_symbol for c in ["BTC", "ETH", "SOL"]):
+            pip_mult = 1.0
+            decimals = 2
+
+        price_diff = (current - entry) if is_buy else (entry - current)
+        pips = round(price_diff * pip_mult, 1)
+
+        sl_info = "None set"
+        if sl > 0:
+            sl_diff = (current - sl) if is_buy else (sl - current)
+            sl_pips = round(sl_diff * pip_mult, 1)
+            sl_info = f"{sl:.{decimals}f} ({sl_pips} pips buffer)" if sl_pips >= 0 else f"{sl:.{decimals}f} ({abs(sl_pips)} pips past SL)"
+
+        tp_info = "None set"
+        if tp > 0:
+            tp_diff = (tp - current) if is_buy else (current - tp)
+            tp_pips = round(tp_diff * pip_mult, 1)
+            tp_info = f"{tp:.{decimals}f} ({tp_pips} pips to target)" if tp_pips >= 0 else "target reached"
+
+        sign = "+" if profit >= 0 else ""
+        status_emoji = "🟢" if profit >= 0 else "🔴"
+        pip_sign = "+" if pips >= 0 else ""
+
+        if profit > 15 or pips > 25:
+            verdict_title = "💰 **VERDICT: SECURE PROFITS OR MOVE SL TO BREAKEVEN**"
+            advice = f"You're up a clean {sign}${profit:.2f} ({pip_sign}{pips} pips)! Great expansion, brother. Don't let a green trade turn red. Move your Stop Loss to entry ({entry:.{decimals}f}) for a 100% risk-free trade, or bank partial profits if price approaches resistance."
+        elif profit >= 0:
+            verdict_title = "🛡️ **VERDICT: HOLD & WAIT — STRUCTURE IS HEALTHY**"
+            advice = f"You're slightly green ({sign}${profit:.2f}, {pip_sign}{pips} pips). Price is defending the entry block cleanly and order flow is stable. Let the setup develop toward your TP ({tp_info}). No need to micromanage!"
+        elif profit > -10 and pips > -20:
+            verdict_title = "⏳ **VERDICT: HOLD WITH DISCIPLINE — NORMAL RETRACEMENT**"
+            advice = f"You're down a minor -${abs(profit):.2f} ({pips} pips). Stay calm, brother—this is standard liquidity retracement before continuation. Your risk is well-buffered. As long as your structural SL ({sl_info}) holds, trust the setup."
+        else:
+            verdict_title = "⚠️ **VERDICT: CLOSE POSITION OR TIGHTEN STOP LOSS**"
+            advice = f"Drawdown is reaching -${abs(profit):.2f} ({pips} pips). Momentum has softened against our bias. If market structure has broken on the 15m chart, cut it cleanly now using the red Close button so your equity stays safe for the next A+ setup."
+
+        return {
+            "symbol": clean_symbol,
+            "direction": direction,
+            "vol": vol,
+            "entry": f"{entry:.{decimals}f}",
+            "current": f"{current:.{decimals}f}",
+            "profit_fmt": f"{sign}${profit:.2f}",
+            "pips_fmt": f"{pip_sign}{pips} pips",
+            "sl_info": sl_info,
+            "tp_info": tp_info,
+            "ticket": ticket,
+            "comment": comment,
+            "status_emoji": status_emoji,
+            "verdict_title": verdict_title,
+            "advice": advice,
+        }
+
+    # 4. Interactive Trade Analysis & Real-Time Diagnosis
+    elif is_trade_intent:
         if positions:
-            # Pick position to analyze (match pair if specified, or default to first/most active)
-            target_pos = positions[0]
-            for p in positions:
-                pair_name = p.get("pair", "").lower()
-                ticket_str = str(p.get("ticket", ""))
-                if pair_name in prompt or ticket_str in prompt:
-                    target_pos = p
-                    break
+            target_positions = positions
+            matching_positions = [
+                p for p in positions
+                if p.get("pair", "").lower() in prompt or str(p.get("ticket", "")) in prompt
+            ]
+            if matching_positions:
+                target_positions = matching_positions
 
-            pair = target_pos.get("pair", "Asset")
-            direction = str(target_pos.get("direction", "long")).upper()
-            vol = target_pos.get("volume", 0.01)
-            entry = float(target_pos.get("price_open", 0.0))
-            current = float(target_pos.get("price_current", 0.0))
-            profit = float(target_pos.get("profit", 0.0))
-            ticket = target_pos.get("ticket", "N/A")
-            sl = target_pos.get("sl", 0.0)
-            tp = target_pos.get("tp", 0.0)
-
-            sign = "+" if profit >= 0 else ""
-            status_emoji = "🟢" if profit >= 0 else "🔴"
-
-            # Determine buddy recommendation based on position health
-            if profit > 20:
-                verdict = "💰 **VERDICT: SECURE PARTIAL PROFITS OR MOVE SL TO BREAKEVEN**"
-                advice = (
-                    f"You're sitting on a solid {sign}${profit:.2f} profit! The market has given you a nice expansion. "
-                    "My buddy advice: Don't let a green trade turn red. Move your Stop Loss to your entry price ($" + f"{entry:.4f}" + ") "
-                    "to lock in a completely risk-free 'free ride', or bank half your profit now if you're approaching major resistance."
-                )
-            elif profit >= 0:
-                verdict = "🛡️ **VERDICT: HOLD & WAIT — STRUCTURE IS HEALTHY**"
-                advice = (
-                    f"You're in mild profit ({sign}${profit:.2f}). Price is respecting the institutional entry zone and building momentum. "
-                    "Give the trade room to breathe and let it work toward your target. No need to micromanage right now."
-                )
-            elif profit > -15:
-                verdict = "⏳ **VERDICT: HOLD WITH DISCIPLINE — NORMAL RETRACEMENT**"
-                advice = (
-                    f"You're currently down ${abs(profit):.2f}. Don't panic, brother—this is standard liquidity retracement before continuation. "
-                    "As long as your structural Stop Loss is respected, trust the setup. If price aggressively breaks below support on the 15m candle, we'll re-evaluate."
+            if len(target_positions) == 1:
+                m = calculate_trade_metrics(target_positions[0])
+                reply = (
+                    f"🔍 **Real-Time Trade Diagnosis • {m['symbol']} ({m['direction']}) Ticket #{m['ticket']}{m['comment']}:**\n\n"
+                    f"• **Live Metrics:** {m['status_emoji']} **{m['profit_fmt']} ({m['pips_fmt']})** | {m['vol']} Lots | Entry: `{m['entry']}` → Live: `{m['current']}`\n"
+                    f"• **Stop Loss:** {m['sl_info']}\n"
+                    f"• **Take Profit:** {m['tp_info']}\n"
+                    f"• **Market Condition:** Liquidity structure on the 15m/1H chart is actively testing session volume nodes.\n"
+                    f"• **Upcoming Events:** {events_context_str.splitlines()[0] if events_context_str else 'Clear of immediate red-folder news.'}\n\n"
+                    f"{m['verdict_title']}\n\n"
+                    f"👉 **My Advice:** {m['advice']}\n\n"
+                    f"*(Tip: You can instantly close Ticket #{m['ticket']} right from this chat using the button below, or on the Dashboard).* "
                 )
             else:
-                verdict = "⚠️ **VERDICT: CLOSE POSITION OR TIGHTEN STOP LOSS**"
-                advice = (
-                    f"Drawdown is at -${abs(profit):.2f}. The order flow has weakened against our direction. "
-                    "If this trade was an intraday scalp and market structure has invalidated the setup, my honest advice is to cut it cleanly now "
-                    "using the red Close button so you protect your capital for the next high-probability setup."
+                diagnoses = []
+                for idx, pos in enumerate(target_positions):
+                    m = calculate_trade_metrics(pos)
+                    diagnoses.append(
+                        f"📊 **Position #{idx + 1}: {m['symbol']} ({m['direction']}) • Ticket #{m['ticket']}{m['comment']}**\n"
+                        f"• **Live P&L:** {m['status_emoji']} **{m['profit_fmt']} ({m['pips_fmt']})** | {m['vol']} Lots\n"
+                        f"• **Execution:** Entry: `{m['entry']}` | Live: `{m['current']}`\n"
+                        f"• **Safety Buffer:** SL: {m['sl_info']} | TP: {m['tp_info']}\n"
+                        f"• {m['verdict_title']}\n"
+                        f"👉 {m['advice']}"
+                    )
+                net_profit = sum(float(p.get("profit") or 0.0) for p in target_positions)
+                net_sign = "+" if net_profit >= 0 else ""
+                reply = (
+                    f"🔍 **Here's What's Actually Happening in Your {len(target_positions)} Open Trade(s), Brother:**\n\n"
+                    + "\n\n".join(diagnoses)
+                    + f"\n\n🛡️ **Account Health:** Balance: ${balance:.2f} | Equity: ${equity:.2f} | Net Floating: {net_sign}${net_profit:.2f}\n\n"
+                    f"*(Tip: Need to exit? You can close any of these tickets with 1-click right below).* "
                 )
-
-            reply = (
-                f"🔍 **Trade Diagnosis for {pair} ({direction}) • Ticket #{ticket}:**\n\n"
-                f"• **Position Metrics:** {status_emoji} {sign}${profit:.2f} P&L | {vol} Lots | Entry: {entry:.4f} | Live Price: {current:.4f}\n"
-                f"• **Market Condition:** Liquidity structure on the 15m/1H chart is actively testing session volume nodes.\n"
-                f"• **Upcoming Events:** {events_context_str.splitlines()[0] if events_context_str else 'Clear of immediate red-folder news.'}\n\n"
-                f"{verdict}\n\n"
-                f"👉 **My Advice:** {advice}\n\n"
-                f"*(Tip: You can instantly close this trade right from the Dashboard or Trades table with 1-click).* "
-            )
         else:
             reply = (
                 "Hey bro! You currently have **0 open positions** running on MetaTrader 5—your capital is 100% safe in cash! 🏖️\n\n"
-                "That's a great spot to be in. Want me to scan the watchlist for fresh confluences, or analyze a pair like Gold (XAUUSD) or EURUSD before you take a trade?"
+                "No trades are in drawdown or exposed to risk right now. Want me to scan the watchlist for fresh confluences, or analyze a pair like Gold (XAUUSD) or EURUSD before you jump in?"
             )
 
-    # 5. Direct Trade Closing inquiries
-    elif any(w in prompt for w in ["close", "exit trade", "stop trade", "liquidate"]):
+    # 5. Direct Trade Closing UI Tutorial (only when explicitly asking for app instructions)
+    elif is_ui_close_tutorial:
         reply = (
             "🎯 **How to Close Trades in Trade-Z (Quick & Easy):**\n\n"
             "1. **Single Trade Exit:** Just hit the red **'Close'** button right on any position row on the **Dashboard** or **Live Positions** (`/trades`) page. It executes instantly at market price.\n"

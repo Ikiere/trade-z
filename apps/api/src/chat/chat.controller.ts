@@ -59,6 +59,17 @@ export class ChatController {
     }
   }
 
+  @Post('monitor')
+  @HttpCode(HttpStatus.OK)
+  async evaluatePosition(
+    @Headers('authorization') auth: string,
+    @Body() body: any,
+  ) {
+    const userId = this.extractUserId(auth);
+    if (!userId) throw new UnauthorizedException('Valid session token required');
+    return await this.chatService.evaluatePositionSentinel(body);
+  }
+
   /**
    * Decode the Supabase JWT and return the real user UUID.
    */

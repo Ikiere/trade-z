@@ -176,6 +176,8 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
 
         if path in ['/order', '/trade']:
             self._handle_order(body_data)
+        elif path in ['/modify', '/modify_position', '/modify-position', '/modify-sl-tp']:
+            self._handle_modify(body_data)
         elif path in ['/close', '/close_position', '/close-position']:
             self._handle_close(body_data)
         elif path in ['/close-all', '/close_all', '/closeall']:
@@ -728,6 +730,67 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
                 'success': False,
                 'retcode': retcode,
                 'error': f'Broker rejected close order for #{ticket}: {err} (Code: {retcode})'
+            })
+
+    def _handle_modify(self, data: dict):
+        """
+        Modifies Stop Loss and Take Profit of an existing open position on MetaTrader 5.
+        Used by AI Trade Sentinel to lock breakeven or trail stop loss.
+        """
+        if not MT5_AVAILABLE or not mt5.initialize():
+            self._send_json(503, {'success': False, 'error': 'MT5 terminal unavailable or not running'})
+            return
+
+        ticket = int(data.get('ticket') or data.get('position') or 0)
+        if ticket <= 0:
+            self._send_json(400, {'success': False, 'error': 'Valid position ticket required'})
+            return
+
+        # 1. Locate position
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions:
+            all_pos = mt5.positions_get() or []
+            positions = [pos for pos in all_pos if pos.ticket == ticket]
+
+        if not positions:
+            self._send_json(404, {'success': False, 'error': f'Position #{ticket} not found on MT5 terminal'})
+            return
+
+        p = positions[0]
+        sym_info = mt5.symbol_info(p.symbol)
+        if not sym_info:
+            self._send_json(400, {'success': False, 'error': f'Symbol info for {p.symbol} not found'})
+            return
+
+        digits = sym_info.digits
+        new_sl = round(float(data.get('sl') or data.get('stop_loss') or p.sl), digits)
+        new_tp = round(float(data.get('tp') or data.get('take_profit') or p.tp), digits)
+
+        req = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "position": ticket,
+            "symbol": p.symbol,
+            "sl": new_sl,
+            "tp": new_tp,
+        }
+
+        res = mt5.order_send(req)
+        if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+            self._send_json(200, {
+                'success': True,
+                'ticket': ticket,
+                'symbol': p.symbol,
+                'sl': new_sl,
+                'tp': new_tp,
+                'message': f'Position #{ticket} modified: SL -> {new_sl}, TP -> {new_tp}'
+            })
+        else:
+            err = res.comment if res else mt5.last_error()
+            retcode = res.retcode if res else -1
+            self._send_json(400, {
+                'success': False,
+                'retcode': retcode,
+                'error': f'Failed to modify position #{ticket}: {err} (Code: {retcode})'
             })
 
     def _handle_close_all(self, data: dict):

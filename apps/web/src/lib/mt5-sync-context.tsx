@@ -80,6 +80,7 @@ interface Mt5ContextType {
   closePosition: (ticket: number) => Promise<{ success: boolean; message?: string; error?: string }>;
   closeAllPositions: () => Promise<{ success: boolean; message?: string; error?: string }>;
   cancelOrder: (ticket: number) => Promise<{ success: boolean; message?: string; error?: string }>;
+  modifyPosition: (ticket: number, sl: number, tp?: number) => Promise<{ success: boolean; message?: string; error?: string }>;
   triggerHistorySync: () => Promise<void>;
 }
 
@@ -256,6 +257,27 @@ export function Mt5SyncProvider({ children }: { children: React.ReactNode }) {
     }
   }, [fetchPositions]);
 
+  // 7. Modify Position SL / TP (Breakeven or Trailing Stop)
+  const modifyPosition = useCallback(async (ticket: number, sl: number, tp?: number) => {
+    try {
+      const res = await fetch(`${BRIDGE_URL}/modify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket, sl, ...(tp !== undefined ? { tp } : {}) }),
+        signal: AbortSignal.timeout(6000),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await fetchPositions();
+        return { success: true, message: data.message };
+      } else {
+        return { success: false, error: data.error || 'Failed to modify position' };
+      }
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Bridge unreachable' };
+    }
+  }, [fetchPositions]);
+
   // Unified interval loops
   useEffect(() => {
     fetchPositions();
@@ -297,6 +319,7 @@ export function Mt5SyncProvider({ children }: { children: React.ReactNode }) {
         closePosition,
         closeAllPositions,
         cancelOrder,
+        modifyPosition,
         triggerHistorySync,
       }}
     >

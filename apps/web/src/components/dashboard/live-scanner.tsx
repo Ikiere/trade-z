@@ -5,11 +5,28 @@ import { createClient } from '@/lib/supabase';
 import { 
   Scan, TrendingUp, TrendingDown, Loader2, AlertTriangle, Zap, 
   CheckCircle2, ShieldAlert, Sparkles, Brain, Clock, ShieldCheck, 
-  Snowflake, Plus, X, Search, Coins, Compass 
+  Snowflake, Plus, X, Search, Coins, Compass, Lock, Radio, RefreshCw, XCircle, Shield
 } from 'lucide-react';
 import { getApiBaseUrl } from '@/lib/api';
 import { checkTradingSession, SessionShieldStatus } from '@/lib/trading-session';
 import { resolveAssetMeta, normalizePairSymbol, isCryptoAsset, CURATED_ASSETS } from '@/lib/assets-registry';
+import { useMt5, Mt5Position } from '@/lib/mt5-sync-context';
+
+export interface SentinelEvaluation {
+  ticket: number;
+  symbol: string;
+  action: 'HOLD' | 'BREAKEVEN_MOVE' | 'EARLY_CUT_STRUCTURE' | 'EARLY_CUT_BTC_DUMP' | 'EJECT_NEWS_SAFETY' | 'EJECT_NEWS_PROFIT';
+  should_close: boolean;
+  should_modify_sl?: boolean;
+  target_sl?: number;
+  badge: string;
+  badge_color: 'emerald' | 'green' | 'cyan' | 'amber' | 'red';
+  reason: string;
+  r_multiple: number;
+  is_risk_free: boolean;
+  news_event?: any;
+  last_evaluated_at?: string;
+}
 
 interface Mt5AccountInfo {
   connected: boolean;
@@ -92,10 +109,24 @@ export default function LiveScannerWidget() {
   ]);
   const [loading, setLoading] = useState(true);
 
-  // MT5 Bridge Status
+  // MT5 Bridge Status & Live Positions
+  const {
+    positions,
+    modifyPosition,
+    closePosition,
+    bridgeStatus,
+    refreshPositions,
+  } = useMt5();
+
   const [mt5Status, setMt5Status] = useState<Mt5AccountInfo | null>(null);
   const [isExecutingManual, setIsExecutingManual] = useState(false);
   const [latestSetup, setLatestSetup] = useState<LatestTradeSetup | null>(null);
+
+  // AI Sentinel Guardian state
+  const [sentinelMap, setSentinelMap] = useState<Record<number, SentinelEvaluation>>({});
+  const [isSentinelScanning, setIsSentinelScanning] = useState(false);
+  const [isActionBusy, setIsActionBusy] = useState<Record<number, boolean>>({});
+  const executedSentinelActionsRef = useRef<Set<string>>(new Set());
 
   // From user_settings
   const [tradingMode, setTradingMode] = useState('fully_automatic');
@@ -196,6 +227,198 @@ export default function LiveScannerWidget() {
     const probeTimer = setInterval(probeMt5Bridge, 12000);
     return () => clearInterval(probeTimer);
   }, [probeMt5Bridge]);
+
+  // AI Sentinel Continuous Active Trade Monitoring Loop
+  const runSentinelMonitoring = useCallback(async () => {
+    if (positions.length === 0) {
+      setSentinelMap({});
+      return;
+    }
+    setIsSentinelScanning(true);
+
+    try {
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const apiBase = getApiBaseUrl();
+
+      const newEvaluations: Record<number, SentinelEvaluation> = {};
+
+      for (const pos of positions) {
+        let evalData: SentinelEvaluation | null = null;
+        try {
+          const res = await fetch(`${apiBase}/api/v1/chat/monitor`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            },
+            body: JSON.stringify({
+              ticket: pos.ticket,
+              symbol: pos.pair || pos.symbol,
+              direction: pos.direction,
+              entry_price: pos.price_open,
+              current_price: pos.price_current,
+              sl: pos.sl,
+              tp: pos.tp,
+              volume: pos.volume,
+              profit: pos.profit,
+            }),
+            signal: AbortSignal.timeout(8000)
+          });
+
+          if (res.ok) {
+            evalData = await res.json();
+          }
+        } catch (_) {
+          // Local fallback
+          try {
+            const fallbackRes = await fetch(`http://127.0.0.1:8000/api/v1/analysis/monitor/evaluate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                ticket: pos.ticket,
+                symbol: pos.pair || pos.symbol,
+                direction: pos.direction,
+                entry_price: pos.price_open,
+                current_price: pos.price_current,
+                sl: pos.sl,
+                tp: pos.tp,
+                volume: pos.volume,
+                profit: pos.profit,
+              }),
+              signal: AbortSignal.timeout(4000)
+            });
+            if (fallbackRes.ok) {
+              evalData = await fallbackRes.json();
+            }
+          } catch (__) {}
+        }
+
+        if (evalData && evalData.badge) {
+          evalData.last_evaluated_at = new Date().toLocaleTimeString();
+          newEvaluations[pos.ticket] = evalData;
+
+          const actionKey = `${pos.ticket}_${evalData.action}_${evalData.target_sl || ''}`;
+
+          // Auto-execute if in fully_automatic mode
+          if (tradingMode === 'fully_automatic' && !executedSentinelActionsRef.current.has(actionKey)) {
+            // Guard 1, 2, 3: Structural Early Cut or News Ejection
+            if (evalData.should_close) {
+              executedSentinelActionsRef.current.add(actionKey);
+              setLogs(prev => [
+                `[SENTINEL AUTO-EJECT 🛡️] Executing emergency exit for #${pos.ticket} (${pos.pair || pos.symbol})!`,
+                `  -> Reason: ${evalData?.reason}`,
+                ...prev
+              ]);
+              const closeRes = await closePosition(pos.ticket);
+              if (closeRes.success) {
+                setLogs(prev => [
+                  `[SENTINEL EJECTED ✅] Position #${pos.ticket} closed. Capital protected from catastrophic drawdown.`,
+                  ...prev
+                ]);
+              } else {
+                setLogs(prev => [
+                  `[SENTINEL NOTICE ⚠️] Close attempt returned: ${closeRes.error}`,
+                  ...prev
+                ]);
+              }
+            }
+            // Guard 4: Breakeven locking
+            else if (evalData.should_modify_sl && evalData.target_sl) {
+              executedSentinelActionsRef.current.add(actionKey);
+              setLogs(prev => [
+                `[SENTINEL BREAKEVEN 🔒] Profit target hit (+1.0R)! Modifying #${pos.ticket} (${pos.pair || pos.symbol}) SL to ${evalData?.target_sl}.`,
+                ...prev
+              ]);
+              const modRes = await modifyPosition(pos.ticket, evalData.target_sl);
+              if (modRes.success) {
+                setLogs(prev => [
+                  `[SENTINEL LOCKED 🛡️] Trade #${pos.ticket} is now 100% Risk-Free (SL placed at entry + spread).`,
+                  ...prev
+                ]);
+              }
+            }
+          }
+        }
+      }
+
+      setSentinelMap(prev => ({ ...prev, ...newEvaluations }));
+    } catch (err: any) {
+      console.warn('[Sentinel Monitor error]:', err);
+    } finally {
+      setIsSentinelScanning(false);
+    }
+  }, [positions, tradingMode, closePosition, modifyPosition]);
+
+  useEffect(() => {
+    runSentinelMonitoring();
+    const interval = setInterval(runSentinelMonitoring, 15000);
+    return () => clearInterval(interval);
+  }, [runSentinelMonitoring]);
+
+  const handleManualLockBreakeven = async (pos: Mt5Position, targetSlFromEval?: number) => {
+    setIsActionBusy(prev => ({ ...prev, [pos.ticket]: true }));
+    try {
+      const meta = resolveAssetMeta(pos.pair || pos.symbol);
+      const buffer = meta.pipSize * 1.5;
+      const calculatedSl = pos.direction === 'long'
+        ? Number((pos.price_open + buffer).toFixed(meta.decimals))
+        : Number((pos.price_open - buffer).toFixed(meta.decimals));
+
+      const newSl = targetSlFromEval || calculatedSl;
+
+      setLogs(prev => [
+        `[SENTINEL USER COMMAND 🔒] Moving SL to Breakeven (${newSl}) for #${pos.ticket} (${pos.pair || pos.symbol})...`,
+        ...prev
+      ]);
+
+      const res = await modifyPosition(pos.ticket, newSl);
+      if (res.success) {
+        setLogs(prev => [
+          `[SENTINEL SUCCESS ✅] Breakeven locked on MT5 for #${pos.ticket}! Stop loss moved to ${newSl}. Trade is now risk-free!`,
+          ...prev
+        ]);
+        setTimeout(() => runSentinelMonitoring(), 1000);
+      } else {
+        setLogs(prev => [
+          `[SENTINEL ERROR ❌] Failed to modify SL on MT5: ${res.error}`,
+          ...prev
+        ]);
+      }
+    } catch (err: any) {
+      setLogs(prev => [`[SENTINEL EXCEPTION] ${err.message}`, ...prev]);
+    } finally {
+      setIsActionBusy(prev => ({ ...prev, [pos.ticket]: false }));
+    }
+  };
+
+  const handleManualEmergencyClose = async (ticket: number) => {
+    setIsActionBusy(prev => ({ ...prev, [ticket]: true }));
+    try {
+      setLogs(prev => [
+        `[SENTINEL USER COMMAND ⚡] Closing position #${ticket} at market price...`,
+        ...prev
+      ]);
+      const res = await closePosition(ticket);
+      if (res.success) {
+        setLogs(prev => [
+          `[SENTINEL SUCCESS ✅] Position #${ticket} closed successfully at market price.`,
+          ...prev
+        ]);
+        setTimeout(() => runSentinelMonitoring(), 1000);
+      } else {
+        setLogs(prev => [
+          `[SENTINEL ERROR ❌] Close rejected: ${res.error}`,
+          ...prev
+        ]);
+      }
+    } catch (err: any) {
+      setLogs(prev => [`[SENTINEL EXCEPTION] ${err.message}`, ...prev]);
+    } finally {
+      setIsActionBusy(prev => ({ ...prev, [ticket]: false }));
+    }
+  };
 
   // Load config + watchlist from Supabase settings
   const loadConfig = useCallback(async () => {
@@ -819,6 +1042,212 @@ export default function LiveScannerWidget() {
 
   return (
     <div className="space-y-4">
+      {/* 🛡️ AI TRADE SENTINEL: Real-Time Position Guardian & Capital Shield */}
+      <div className="card p-4 border border-brand-500/30 bg-[#090d18] relative overflow-hidden shadow-xl shadow-brand-500/5">
+        <div className="absolute top-0 right-0 w-64 h-32 bg-brand-500/5 rounded-full blur-3xl pointer-events-none" />
+        
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-[#1e293b] pb-3 relative z-10">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-brand-500/20 to-cyan-500/20 border border-brand-500/30 flex items-center justify-center text-brand-400 shrink-0 shadow-inner">
+              <ShieldAlert className="w-4 h-4 text-brand-400" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-white tracking-wide flex items-center gap-1.5">
+                  AI Trade Sentinel
+                  <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-brand-500/20 text-brand-300 border border-brand-500/30 uppercase">
+                    Active Guardian
+                  </span>
+                </h3>
+              </div>
+              <p className="text-[10px] font-mono text-[#64748b]">
+                Real-Time Trade Protection • High-Impact News Ejection • Adverse CHoCH Early Cut • Breakeven Locking
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+              15s Heartbeat Loop Active
+            </span>
+            <button
+              onClick={() => runSentinelMonitoring()}
+              disabled={isSentinelScanning}
+              className="p-1.5 rounded-lg bg-bg-secondary hover:bg-[#1e293b] border border-[#1e293b] text-[#94a3b8] hover:text-white transition-all disabled:opacity-50"
+              title="Force immediate Sentinel health evaluation"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSentinelScanning ? 'animate-spin text-brand-400' : ''}`} />
+            </button>
+          </div>
+        </div>
+
+        {/* Positions Sentinel Status List */}
+        <div className="pt-3 relative z-10 space-y-2.5">
+          {positions.length === 0 ? (
+            <div className="p-3.5 rounded-xl bg-[#060911] border border-[#1e293b]/60 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2.5">
+                <div className="w-6 h-6 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                </div>
+                <div>
+                  <div className="text-white font-semibold font-mono text-[11px]">
+                    All Systems Armed &bull; No Open Exposure
+                  </div>
+                  <div className="text-[#64748b] text-[10px] font-mono">
+                    Standing by to actively defend new MT5 positions against CPI/NFP news spikes and structural invalidations.
+                  </div>
+                </div>
+              </div>
+              <span className="text-[9px] font-mono text-[#475569] bg-bg-secondary px-2.5 py-1 rounded border border-[#1e293b] shrink-0">
+                Auto-Guard: {tradingMode === 'fully_automatic' ? '⚡ ENGAGED' : 'MANUAL CONFIRM'}
+              </span>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {positions.map((pos) => {
+                const evalData = sentinelMap[pos.ticket];
+                const isLong = pos.direction === 'long';
+                const isProfit = pos.profit >= 0;
+                const isEvaluating = isSentinelScanning && !evalData;
+
+                const badgeColor = evalData?.badge_color || 'green';
+                const isCut = evalData?.should_close;
+                const isMoveBE = evalData?.should_modify_sl;
+                const isSafe = evalData?.is_risk_free;
+
+                return (
+                  <div
+                    key={pos.ticket}
+                    className={`p-3 rounded-xl border transition-all ${
+                      isCut
+                        ? 'bg-rose-950/20 border-rose-500/50 shadow-lg shadow-rose-950/30'
+                        : isMoveBE
+                        ? 'bg-cyan-950/20 border-cyan-500/40 shadow-lg shadow-cyan-950/20'
+                        : 'bg-[#060911] border-[#1e293b]'
+                    }`}
+                  >
+                    <div className="flex flex-col md:flex-row justify-between md:items-center gap-2.5">
+                      {/* Left: Position Identifiers & Live Price */}
+                      <div className="flex items-center gap-3">
+                        <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                          isLong ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
+                        }`}>
+                          {isLong ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                        </span>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-white font-mono text-xs">{pos.pair || pos.symbol}</span>
+                            <span className={`text-[9px] font-bold font-mono px-1.5 py-0.2 rounded uppercase ${
+                              isLong ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+                            }`}>
+                              {isLong ? 'BUY' : 'SELL'} {pos.volume}L
+                            </span>
+                            <span className="text-[9px] font-mono text-[#64748b]">#{pos.ticket}</span>
+                          </div>
+                          <div className="text-[10px] font-mono text-[#94a3b8] flex items-center gap-2 mt-0.5">
+                            <span>Open: <strong className="text-white">{pos.price_open}</strong></span>
+                            <span>&rarr;</span>
+                            <span>Live: <strong className={isProfit ? 'text-emerald-400' : 'text-rose-400'}>{pos.price_current}</strong></span>
+                            <span>&bull;</span>
+                            <span className={isProfit ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                              {isProfit ? '+' : ''}${pos.profit.toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Center: Sentinel Guardian Diagnosis Badge */}
+                      <div className="flex items-center gap-2">
+                        {isEvaluating ? (
+                          <span className="text-[10px] font-mono px-2 py-1 rounded bg-bg-secondary text-[#64748b] border border-[#1e293b] flex items-center gap-1.5">
+                            <Loader2 className="w-3 h-3 animate-spin text-brand-400" />
+                            Analyzing 15M Structure & News...
+                          </span>
+                        ) : evalData ? (
+                          <div className="flex flex-col sm:items-end">
+                            <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border flex items-center gap-1 uppercase ${
+                              badgeColor === 'red'
+                                ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse'
+                                : badgeColor === 'amber'
+                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
+                                : badgeColor === 'cyan'
+                                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                                : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                            }`}>
+                              {evalData.badge}
+                            </span>
+                            {evalData.r_multiple !== undefined && (
+                              <span className="text-[9px] font-mono text-[#64748b] mt-0.5">
+                                Risk Multiple: <strong className={evalData.r_multiple >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                                  {evalData.r_multiple >= 0 ? '+' : ''}{evalData.r_multiple}R
+                                </strong>
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-[10px] font-mono px-2 py-1 rounded bg-bg-secondary text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                            <ShieldCheck className="w-3 h-3" /> Sentinel Guarded
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Right: Quick Action Buttons */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {/* Lock Breakeven Button */}
+                        <button
+                          onClick={() => handleManualLockBreakeven(pos, evalData?.target_sl)}
+                          disabled={isActionBusy[pos.ticket] || isSafe}
+                          className={`px-2 py-1 rounded text-[10px] font-mono font-bold flex items-center gap-1 transition-all border ${
+                            isSafe
+                              ? 'bg-bg-secondary text-[#475569] border-[#1e293b] cursor-default'
+                              : 'bg-cyan-500/10 hover:bg-cyan-500/25 text-cyan-300 border-cyan-500/30 shadow-sm shadow-cyan-500/20'
+                          }`}
+                          title={isSafe ? 'Trade is already risk-free at breakeven' : 'Move Stop Loss to Entry + Spread'}
+                        >
+                          <Lock className="w-3 h-3 text-cyan-400" />
+                          {isSafe ? 'BE Locked' : 'Lock BE'}
+                        </button>
+
+                        {/* Emergency Protective Close */}
+                        <button
+                          onClick={() => handleManualEmergencyClose(pos.ticket)}
+                          disabled={isActionBusy[pos.ticket]}
+                          className="px-2 py-1 rounded text-[10px] font-mono font-bold flex items-center gap-1 transition-all bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30"
+                          title="Instant market exit"
+                        >
+                          {isActionBusy[pos.ticket] ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <XCircle className="w-3 h-3 text-rose-400" />
+                          )}
+                          Close
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Sentinel AI Diagnosis Reasoning */}
+                    {evalData?.reason && (
+                      <div className="mt-2 pt-2 border-t border-[#1e293b]/60 flex items-start gap-1.5 text-[10px] font-mono">
+                        <Sparkles className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
+                          badgeColor === 'red' ? 'text-rose-400' :
+                          badgeColor === 'amber' ? 'text-amber-400' :
+                          badgeColor === 'cyan' ? 'text-cyan-400' : 'text-emerald-400'
+                        }`} />
+                        <span className="text-[#94a3b8] leading-relaxed">
+                          <strong className="text-white">AI Sentinel Diagnosis:</strong> {evalData.reason}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Scanner Control Panel */}
       <div className="card p-5 space-y-4">
         {/* Header */}

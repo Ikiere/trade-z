@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Zap, ShieldCheck, Loader2, RefreshCw, WifiOff,
   TrendingUp, TrendingDown, Clock, AlertCircle, XCircle,
-  Activity, DollarSign, BarChart3, AlertTriangle
+  Activity, DollarSign, BarChart3, AlertTriangle, Lock, ShieldAlert
 } from 'lucide-react';
 import { useMt5, Mt5Position } from '@/lib/mt5-sync-context';
 
@@ -45,11 +45,13 @@ export default function TradesPage() {
     closePosition,
     closeAllPositions,
     cancelOrder,
+    modifyPosition,
   } = useMt5();
 
   const [selectedPosition, setSelectedPosition] = useState<Mt5Position | null>(null);
   const [closingTicket, setClosingTicket] = useState<number | null>(null);
   const [cancellingTicket, setCancellingTicket] = useState<number | null>(null);
+  const [modifyingTicket, setModifyingTicket] = useState<number | null>(null);
   const [closingAll, setClosingAll] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'positions' | 'pending'>('positions');
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -75,6 +77,33 @@ export default function TradesPage() {
       showFeedback('error', err.message || 'Failed to close position.');
     } finally {
       setClosingTicket(null);
+    }
+  };
+
+  const handleLockBreakeven = async (pos: Mt5Position) => {
+    setModifyingTicket(pos.ticket);
+    try {
+      const isCrypto = pos.pair?.includes('BTC') || pos.pair?.includes('ETH') || pos.pair?.includes('SOL') || pos.price_open > 500;
+      const isJpy = pos.pair?.includes('JPY');
+      const pip = isCrypto ? 1.0 : isJpy ? 0.01 : 0.0001;
+      const buffer = pip * 1.5;
+      const digits = isCrypto ? 2 : isJpy ? 3 : 5;
+
+      const targetSl = pos.direction === 'long'
+        ? Number((pos.price_open + buffer).toFixed(digits))
+        : Number((pos.price_open - buffer).toFixed(digits));
+
+      const res = await modifyPosition(pos.ticket, targetSl);
+      if (res.success) {
+        showFeedback('success', `Position #${pos.ticket} Stop Loss moved to ${targetSl} (100% Risk-Free Breakeven locked).`);
+        refreshPositions();
+      } else {
+        showFeedback('error', res.error || 'Failed to modify Stop Loss.');
+      }
+    } catch (err: any) {
+      showFeedback('error', err.message || 'Failed to lock breakeven.');
+    } finally {
+      setModifyingTicket(null);
     }
   };
 
@@ -299,6 +328,10 @@ export default function TradesPage() {
                       const priceDiff = pos.price_current - pos.price_open;
                       const priceIsGood = isLong ? priceDiff >= 0 : priceDiff <= 0;
                       const isClosing = closingTicket === pos.ticket;
+                      const isModifying = modifyingTicket === pos.ticket;
+                      const isAtBreakeven = isLong
+                        ? (pos.sl >= (pos.price_open - 0.0001) && pos.sl > 0)
+                        : (pos.sl <= (pos.price_open + 0.0001) && pos.sl > 0);
 
                       return (
                         <motion.tr key={pos.ticket} layout className="hover:bg-bg-hover/20 transition-colors">
@@ -322,8 +355,15 @@ export default function TradesPage() {
                           <td className={`py-3.5 px-3 text-right font-mono font-bold ${priceIsGood ? 'text-emerald-400' : 'text-red-400'}`}>
                             {pos.price_current.toFixed(5)}
                           </td>
-                          <td className="py-3.5 px-3 text-right font-mono text-red-400 hidden sm:table-cell">
-                            {pos.sl > 0 ? pos.sl.toFixed(5) : <span className="text-[#475569]">—</span>}
+                          <td className="py-3.5 px-3 text-right font-mono hidden sm:table-cell">
+                            {pos.sl > 0 ? (
+                              <div>
+                                <span className={isAtBreakeven ? 'text-cyan-300 font-bold' : 'text-red-400'}>{pos.sl.toFixed(5)}</span>
+                                {isAtBreakeven && (
+                                  <span className="block text-[8px] text-cyan-400 font-bold uppercase">🔒 Risk-Free</span>
+                                )}
+                              </div>
+                            ) : <span className="text-[#475569]">—</span>}
                           </td>
                           <td className="py-3.5 px-3 text-right font-mono text-emerald-400 hidden sm:table-cell">
                             {pos.tp > 0 ? pos.tp.toFixed(5) : <span className="text-[#475569]">—</span>}
@@ -336,6 +376,25 @@ export default function TradesPage() {
                           </td>
                           <td className="py-3.5 px-3 text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              {/* 1-Click Breakeven Lock */}
+                              <button
+                                disabled={isModifying || isAtBreakeven}
+                                onClick={() => handleLockBreakeven(pos)}
+                                className={`px-2 py-1 rounded-md border text-[10px] font-bold font-mono transition-all flex items-center gap-1 ${
+                                  isAtBreakeven
+                                    ? 'bg-bg-secondary text-[#475569] border-[#1e293b] cursor-default'
+                                    : 'bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border-cyan-500/30 shadow-sm shadow-cyan-500/20'
+                                }`}
+                                title={isAtBreakeven ? 'Position already risk-free at breakeven' : 'Move Stop Loss to Entry + Spread'}
+                              >
+                                {isModifying ? (
+                                  <Loader2 className="w-3 h-3 animate-spin text-cyan-400" />
+                                ) : (
+                                  <Lock className="w-3 h-3 text-cyan-400" />
+                                )}
+                                {isAtBreakeven ? 'BE Locked' : 'Lock BE'}
+                              </button>
+
                               {/* Direct Close Button */}
                               <button
                                 disabled={isClosing}

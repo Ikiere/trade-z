@@ -29,6 +29,8 @@ from app.engines.risk import RiskEngine
 from app.engines.confidence import ConfidenceEngine
 from app.engines.decision import DecisionEngine
 
+from app.engines.sentinel_engine import SentinelEngine
+
 router = APIRouter()
 
 # Instantiate central data service and pipeline engines
@@ -49,6 +51,7 @@ history_engine = HistoricalPatternEngine()
 risk_engine = RiskEngine()
 confidence_engine = ConfidenceEngine()
 decision_engine = DecisionEngine()
+sentinel_engine = SentinelEngine()
 
 
 class AnalysisRequest(BaseModel):
@@ -70,6 +73,24 @@ class ChatQueryRequest(BaseModel):
     context: Optional[dict] = None
 
 
+class PositionEvaluateRequest(BaseModel):
+    ticket: int
+    symbol: str
+    direction: str
+    entry_price: float
+    current_price: float
+    sl: Optional[float] = 0.0
+    tp: Optional[float] = 0.0
+    volume: Optional[float] = 0.01
+    profit: Optional[float] = 0.0
+    api_key: Optional[str] = None
+
+
+class BatchPositionEvaluateRequest(BaseModel):
+    positions: list[PositionEvaluateRequest]
+    api_key: Optional[str] = None
+
+
 @router.get("/calendar")
 async def get_calendar():
     """
@@ -79,6 +100,60 @@ async def get_calendar():
     return {
         "success": True,
         "data": events,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@router.post("/monitor/evaluate")
+async def evaluate_position_health(request: PositionEvaluateRequest):
+    """
+    Evaluates an active MT5 position's health against:
+    - High-impact news in < 20 mins (News Ejection)
+    - 15M adverse CHoCH / SMC structural invalidation (Early Cut)
+    - >= 1.0R profit (Breakeven Locking)
+    - Crypto flash dumps (Altcoin protection)
+    """
+    result = await sentinel_engine.evaluate_position(
+        ticket=request.ticket,
+        symbol=request.symbol,
+        direction=request.direction,
+        entry_price=request.entry_price,
+        current_price=request.current_price,
+        sl=request.sl or 0.0,
+        tp=request.tp or 0.0,
+        volume=request.volume or 0.01,
+        profit=request.profit or 0.0,
+    )
+    return {
+        "success": True,
+        "data": result,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@router.post("/monitor/evaluate-batch")
+async def evaluate_positions_batch(request: BatchPositionEvaluateRequest):
+    """
+    Evaluates multiple active MT5 positions in a single batch request.
+    """
+    results = []
+    for pos in request.positions:
+        res = await sentinel_engine.evaluate_position(
+            ticket=pos.ticket,
+            symbol=pos.symbol,
+            direction=pos.direction,
+            entry_price=pos.entry_price,
+            current_price=pos.current_price,
+            sl=pos.sl or 0.0,
+            tp=pos.tp or 0.0,
+            volume=pos.volume or 0.01,
+            profit=pos.profit or 0.0,
+        )
+        results.append(res)
+    return {
+        "success": True,
+        "count": len(results),
+        "data": results,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 

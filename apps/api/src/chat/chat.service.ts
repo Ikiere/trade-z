@@ -496,4 +496,37 @@ export class ChatService {
       throw error;
     }
   }
+
+  /**
+   * Evaluates active MT5 position health against news, structural invalidation, and breakeven targets.
+   */
+  async evaluatePositionSentinel(payload: any) {
+    const postBody = JSON.stringify(payload);
+    try {
+      const res = await fetch(`${this.aiServiceUrl}/api/v1/analysis/monitor/evaluate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: postBody,
+        signal: AbortSignal.timeout(10000),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (_) {}
+
+    // Local fallback
+    try {
+      const localRes = await fetch('http://127.0.0.1:8000/api/v1/analysis/monitor/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: postBody,
+        signal: AbortSignal.timeout(5000),
+      });
+      if (localRes.ok) {
+        return await localRes.json();
+      }
+    } catch (_) {}
+
+    return { success: false, error: 'AI Sentinel service unreachable' };
+  }
 }

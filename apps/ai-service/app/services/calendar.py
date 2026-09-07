@@ -190,6 +190,51 @@ async def check_news_filter(pair: str) -> bool:
                         pass
     return True
 
+async def check_news_ejection_alert(pair: str, threshold_minutes: int = 20) -> Dict[str, Any]:
+    """
+    Checks if an ACTIVE position should be ejected or locked due to impending high-impact economic news.
+    Returns details if high-impact news is within threshold_minutes (e.g. 20 mins) of release time.
+    """
+    u = pair.upper().replace("/", "")
+    if len(u) < 6:
+        return {"has_imminent_news": False}
+
+    # Extract base and quote currencies (handles BTCUSD, EURUSD, XAUUSD, etc.)
+    base = u[0:3]
+    quote = u[3:6]
+    if any(k in u for k in ["XAU", "GOLD", "BTC", "ETH", "SOL", "USOIL"]):
+        quote = "USD"
+
+    events = await fetch_tradingview_calendar()
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    for event in events:
+        if event.get("impact") == "high":
+            evt_currency = event.get("currency", "").upper()
+            if evt_currency in [base, quote]:
+                evt_timestamp = event.get("timestamp")
+                if evt_timestamp:
+                    try:
+                        dt = datetime.datetime.fromisoformat(evt_timestamp.replace("Z", "+00:00"))
+                        diff_seconds = (dt - now).total_seconds()
+                        
+                        # News is upcoming within threshold_minutes (e.g. within next 20 mins, or just released < 3 mins ago)
+                        if -180 <= diff_seconds <= (threshold_minutes * 60):
+                            mins_left = max(0, round(diff_seconds / 60))
+                            return {
+                                "has_imminent_news": True,
+                                "event_title": event.get("title"),
+                                "currency": evt_currency,
+                                "minutes_remaining": mins_left,
+                                "event_time": event.get("time", ""),
+                                "impact": "high",
+                                "message": f"High-impact Red Folder event '{event.get('title')}' ({evt_currency}) in {mins_left}m! Spread blowout risk imminent."
+                            }
+                    except Exception:
+                        pass
+
+    return {"has_imminent_news": False}
+
 def get_fallback_calendar() -> List[Dict[str, Any]]:
     now = datetime.datetime.now(datetime.timezone.utc)
     return [

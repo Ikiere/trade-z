@@ -332,8 +332,16 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
         tick_sz = sym_info.trade_tick_size or 0.00001
         est_loss_at_sl = (sl_dist / tick_sz) * tick_val * lot
 
-        max_allowed_loss = acc.equity * (max(2.0, risk_percent * 2.0) / 100.0)
-        if est_loss_at_sl > max_allowed_loss and acc.equity < 500.0:
+        override_safety = bool(data.get('overrideSafety') or data.get('override_safety') or False)
+
+        if acc.equity < 150.0:
+            # Small account calibration: broker minimum lot is 0.01.
+            # Allow 0.01 lot orders with risk up to 40% of equity (or $20 max loss) so standard 15-40 pip stops work!
+            max_allowed_loss = max(20.0, acc.equity * 0.40)
+        else:
+            max_allowed_loss = acc.equity * (max(2.0, risk_percent * 2.0) / 100.0)
+
+        if not override_safety and est_loss_at_sl > max_allowed_loss:
             self._send_json(400, {
                 'success': False,
                 'error': (
@@ -353,6 +361,17 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
             else:
                 order_type = mt5.ORDER_TYPE_SELL_LIMIT if entry_price > market_price else mt5.ORDER_TYPE_SELL_STOP
 
+        # Determine filling mode supported by broker
+        filling_mode = mt5.ORDER_FILLING_IOC
+        if sym_info.filling_mode & 2:
+            filling_mode = mt5.ORDER_FILLING_IOC
+        elif sym_info.filling_mode & 1:
+            filling_mode = mt5.ORDER_FILLING_FOK
+        elif is_market_order:
+            filling_mode = mt5.ORDER_FILLING_IOC
+        else:
+            filling_mode = mt5.ORDER_FILLING_RETURN
+
         # 5. Build MT5 Request
         request = {
             "action": mt5.TRADE_ACTION_DEAL if is_market_order else mt5.TRADE_ACTION_PENDING,
@@ -366,7 +385,7 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
             "magic": 992200,  # Trade-Z AI Magic Identifier
             "comment": "Trade-Z AI Auto",
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC if is_market_order else mt5.ORDER_FILLING_RETURN,
+            "type_filling": filling_mode,
         }
 
         # Check order validity before sending

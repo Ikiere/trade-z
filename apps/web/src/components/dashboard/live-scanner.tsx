@@ -2,15 +2,38 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
-import { Scan, TrendingUp, TrendingDown, Loader2, AlertTriangle } from 'lucide-react';
+import { Scan, TrendingUp, TrendingDown, Loader2, AlertTriangle, Zap, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { getApiBaseUrl } from '@/lib/api';
+
+interface Mt5AccountInfo {
+  connected: boolean;
+  login?: number;
+  server?: string;
+  balance?: number;
+  equity?: number;
+  leverage?: number;
+}
+
+interface LatestTradeSetup {
+  pair: string;
+  direction: 'long' | 'short';
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  currentPrice: number;
+  confidence: number;
+  reasoning: string;
+  isApproved: boolean;
+  timestamp: string;
+  mt5Ticket?: number;
+}
 
 const getSimulatedPrice = (pair: string) => {
   const u = pair.toUpperCase();
-  if (u.includes('EURUSD')) return { entry: 1.0845, sl: 1.0830, tp: 1.0880 }; // 15 pip SL, 35 pip TP
-  if (u.includes('GBPUSD')) return { entry: 1.2680, sl: 1.2665, tp: 1.2720 }; // 15 pip SL, 40 pip TP
-  if (u.includes('USDJPY')) return { entry: 154.20, sl: 153.95, tp: 154.75 }; // 25 pip SL, 55 pip TP
-  if (u.includes('XAUUSD') || u.includes('GOLD')) return { entry: 2850.50, sl: 2844.50, tp: 2865.50 }; // $6 SL, $15 TP
+  if (u.includes('EURUSD')) return { entry: 1.0845, sl: 1.0830, tp: 1.0880 };
+  if (u.includes('GBPUSD')) return { entry: 1.2680, sl: 1.2665, tp: 1.2720 };
+  if (u.includes('USDJPY')) return { entry: 154.20, sl: 153.95, tp: 154.75 };
+  if (u.includes('XAUUSD') || u.includes('GOLD')) return { entry: 2850.50, sl: 2844.50, tp: 2865.50 };
   if (u.includes('BTCUSD') || u.includes('BTC')) return { entry: 88500.0, sl: 87500.0, tp: 90500.0 };
   if (u.includes('ETHUSD') || u.includes('ETH')) return { entry: 2820.0, sl: 2780.0, tp: 2900.0 };
   if (u.includes('AUDUSD')) return { entry: 0.6650, sl: 0.6635, tp: 0.6685 };
@@ -55,10 +78,15 @@ export default function LiveScannerWidget() {
   const [isScanningActive, setIsScanningActive] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // MT5 Bridge Status
+  const [mt5Status, setMt5Status] = useState<Mt5AccountInfo | null>(null);
+  const [isExecutingManual, setIsExecutingManual] = useState(false);
+  const [latestSetup, setLatestSetup] = useState<LatestTradeSetup | null>(null);
+
   // From user_settings
-  const [tradingMode, setTradingMode] = useState('manual');
+  const [tradingMode, setTradingMode] = useState('fully_automatic');
   const [defaultLot, setDefaultLot] = useState(0.01);
-  const [dailySignalLimit, setDailySignalLimit] = useState(2);
+  const [dailySignalLimit, setDailySignalLimit] = useState(50);
   const [userId, setUserId] = useState<string | null>(null);
 
   // Today's signal count (enforced limit)
@@ -74,6 +102,36 @@ export default function LiveScannerWidget() {
   const scanIndex = useRef(0);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Probe local MT5 bridge status (runs on user's laptop)
+  const probeMt5Bridge = useCallback(async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:5001/account', { signal: AbortSignal.timeout(3000) });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.connected && json.account) {
+          setMt5Status({
+            connected: true,
+            login: json.account.login,
+            server: json.account.server,
+            balance: json.account.balance,
+            equity: json.account.equity,
+            leverage: json.account.leverage,
+          });
+          return;
+        }
+      }
+      setMt5Status({ connected: false });
+    } catch (_) {
+      setMt5Status({ connected: false });
+    }
+  }, []);
+
+  useEffect(() => {
+    probeMt5Bridge();
+    const probeTimer = setInterval(probeMt5Bridge, 12000);
+    return () => clearInterval(probeTimer);
+  }, [probeMt5Bridge]);
+
   // Load config + watchlist from Supabase settings
   const loadConfig = useCallback(async () => {
     const supabase = createClient();
@@ -86,9 +144,9 @@ export default function LiveScannerWidget() {
         .from('user_settings').select('*').eq('user_id', user.id).maybeSingle();
 
       if (s) {
-        setTradingMode(s.trading_mode || 'manual');
+        setTradingMode(s.trading_mode || 'fully_automatic');
         setDefaultLot(Number(s.default_lot_size) || 0.01);
-        setDailySignalLimit(Number(s.daily_signal_limit) || 2);
+        setDailySignalLimit(Number(s.daily_signal_limit) || 50);
 
         const wl = Array.isArray(s.watchlist) && s.watchlist.length > 0
           ? s.watchlist
@@ -116,6 +174,149 @@ export default function LiveScannerWidget() {
   }, []);
 
   useEffect(() => { loadConfig(); }, [loadConfig]);
+
+  // Toggle MT5 Auto-Execution Mode
+  const handleToggleAutoTrade = async () => {
+    const nextMode = tradingMode === 'fully_automatic' ? 'manual' : 'fully_automatic';
+    setTradingMode(nextMode);
+    
+    if (userId) {
+      const supabase = createClient();
+      await supabase
+        .from('user_settings')
+        .update({ trading_mode: nextMode })
+        .eq('user_id', userId);
+    }
+
+    if (nextMode === 'fully_automatic') {
+      setLogs(prev => [
+        `[MODE TOGGLE ⚡] MT5 Auto-Execution ACTIVATED! Verified signals will immediately place trades on MT5.`,
+        ...prev
+      ]);
+    } else {
+      setLogs(prev => [
+        `[MODE TOGGLE 🛑] MT5 Auto-Execution turned OFF. Signals will be generated without auto-placing orders.`,
+        ...prev
+      ]);
+    }
+  };
+
+  // Direct Execution on MT5 Bridge
+  const sendOrderToMt5 = async (setup: {
+    pair: string;
+    direction: 'long' | 'short';
+    entryPrice: number;
+    stopLoss: number;
+    takeProfit: number;
+    lotSize?: number;
+    overrideSafety?: boolean;
+  }) => {
+    const apiBase = getApiBaseUrl();
+    const supabase = createClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+
+    let executedTicket: number | null = null;
+    let executedLot = setup.lotSize || defaultLot || 0.01;
+    let pricePlaced = setup.entryPrice;
+
+    // 1. Send direct to local MT5 bridge (running on user's laptop at 127.0.0.1:5001)
+    try {
+      const bridgeRes = await fetch('http://127.0.0.1:5001/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pair: setup.pair,
+          direction: setup.direction,
+          entryPrice: setup.entryPrice,
+          stopLoss: setup.stopLoss,
+          takeProfit: setup.takeProfit,
+          lotSize: executedLot,
+          riskPercent: 1.0,
+          overrideSafety: setup.overrideSafety ?? false,
+        }),
+      });
+
+      const bridgeJson = await bridgeRes.json().catch(() => ({}));
+
+      if (bridgeRes.ok && bridgeJson.success) {
+        executedTicket = bridgeJson.ticket;
+        executedLot = bridgeJson.volume || executedLot;
+        pricePlaced = bridgeJson.price || pricePlaced;
+
+        setLogs(prev => [
+          `[MT5 EXECUTED 🚀] Placed ${setup.direction.toUpperCase()} ${executedLot} lots on MetaTrader 5! (Ticket #${executedTicket})`,
+          `  -> Symbol: ${bridgeJson.symbol} | Price: ${pricePlaced} | SL: ${bridgeJson.sl} | TP: ${bridgeJson.tp}`,
+          ...prev
+        ]);
+        probeMt5Bridge();
+      } else if (bridgeJson.error) {
+        setLogs(prev => [
+          `[MT5 NOTICE 🛡️] MT5 execution rejected: ${bridgeJson.error}`,
+          ...prev
+        ]);
+      }
+    } catch (bridgeErr: any) {
+      console.warn('Direct local MT5 call unreachable, trying via backend API:', bridgeErr);
+    }
+
+    // 2. Sync to Trade-Z Trades database
+    try {
+      const tradeRes = await fetch(`${apiBase}/api/v1/trades`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          pair: setup.pair,
+          direction: setup.direction,
+          entryPrice: pricePlaced,
+          stopLoss: setup.stopLoss,
+          takeProfit: setup.takeProfit,
+          riskPercent: 1.0,
+          mt5_ticket: executedTicket,
+          lot_size: executedLot,
+        }),
+      });
+
+      if (!executedTicket && tradeRes.ok) {
+        const tradeJson = await tradeRes.json().catch(() => ({}));
+        const ticket = tradeJson.data?.mt5_ticket;
+        if (ticket) {
+          executedTicket = ticket;
+          setLogs(prev => [
+            `[MT5 EXECUTED 🚀] Placed on MT5 via backend bridge (Ticket #${ticket})!`,
+            ...prev
+          ]);
+        }
+      }
+    } catch (_) {}
+
+    return executedTicket;
+  };
+
+  // Manual button click on latest setup
+  const handleManualExecute = async () => {
+    if (!latestSetup) return;
+    setIsExecutingManual(true);
+    try {
+      setLogs(prev => [
+        `[MANUAL ORDER ⚡] Sending ${latestSetup.pair} (${latestSetup.direction.toUpperCase()}) to MT5...`,
+        ...prev
+      ]);
+      const ticket = await sendOrderToMt5({
+        pair: latestSetup.pair,
+        direction: latestSetup.direction,
+        entryPrice: latestSetup.entryPrice,
+        stopLoss: latestSetup.stopLoss,
+        takeProfit: latestSetup.takeProfit,
+        overrideSafety: true,
+      });
+      if (ticket) {
+        setLatestSetup(prev => prev ? { ...prev, mt5Ticket: ticket } : null);
+      }
+    } finally {
+      setIsExecutingManual(false);
+    }
+  };
 
   // The main scanning execution sequence
   const runSingleScan = useCallback(async (specificPair?: string) => {
@@ -181,7 +382,7 @@ export default function LiveScannerWidget() {
       const expectedTrigger = info.expected_trigger || null;
       const isApproved = decision === 'approve';
 
-      // 1. Resolve Direction Reliably (Never invert)
+      // 1. Resolve Direction Reliably
       let direction: 'long' | 'short' = 'long';
       if (info.direction) {
         direction = String(info.direction).toLowerCase() === 'short' ? 'short' : 'long';
@@ -195,14 +396,14 @@ export default function LiveScannerWidget() {
         direction = 'short';
       }
 
-      // 2. Resolve Price Levels with Non-Zero Guarantee
+      // 2. Resolve Price Levels
       const priceInfo = getSimulatedSetup(pair, direction);
       let entryPrice = (typeof info.entry_price === 'number' && info.entry_price > 0) ? info.entry_price : priceInfo.entry;
       let currentPrice = (typeof info.current_price === 'number' && info.current_price > 0) ? info.current_price : priceInfo.current;
       let stopLoss = (typeof info.stop_loss === 'number' && info.stop_loss > 0) ? info.stop_loss : priceInfo.sl;
       let takeProfit = (typeof info.take_profit === 'number' && info.take_profit > 0) ? info.take_profit : priceInfo.tp;
 
-      // 3. Enforce Directional Invariants (Never allow inverted SL/TP)
+      // Directional Invariants
       if (direction === 'long') {
         if (stopLoss >= entryPrice) {
           const risk = Math.abs(entryPrice - stopLoss) || Math.abs(entryPrice - priceInfo.sl);
@@ -225,7 +426,7 @@ export default function LiveScannerWidget() {
 
       const orderType = info.order_type || (direction === 'long' ? (entryPrice < currentPrice ? 'buy limit' : 'buy') : (entryPrice > currentPrice ? 'sell limit' : 'sell'));
 
-      // Post ONLY the single best setup resolved by the AI
+      // Save Signal to database
       const sigRes = await fetch(`${apiBase}/api/v1/trades/signals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -248,7 +449,7 @@ export default function LiveScannerWidget() {
       });
       const resBody = await sigRes.json().catch(() => ({}));
       const saved = sigRes.ok && resBody.success !== false;
- 
+
       if (!saved) {
         const err = resBody.error || sigRes.statusText || 'Unknown error';
         setLogs(prev => [
@@ -259,19 +460,32 @@ export default function LiveScannerWidget() {
         setActivePair(null);
         return;
       }
- 
-      // Increment today's count by 1
+
       setTodaySignalCount(n => n + 1);
- 
+
+      // Save as latest setup
+      setLatestSetup({
+        pair,
+        direction,
+        entryPrice,
+        stopLoss,
+        takeProfit,
+        currentPrice,
+        confidence,
+        reasoning,
+        isApproved,
+        timestamp: new Date().toLocaleTimeString(),
+      });
+
       if (isApproved) {
         const activeDir = direction.toUpperCase();
         const histSummary = info.certificate?.historical_pattern_summary || '';
         const hasLesson = histSummary.includes('Lesson Applied') || histSummary.includes('AI Lesson');
 
         const successLogs = [
-          `[SIGNAL ✅] generated best setup for ${pair}! Direction: ${activeDir}`,
+          `[SIGNAL ✅] Approved high-probability setup for ${pair}! Direction: ${activeDir}`,
           `  -> ENTRY: ${entryPrice.toFixed(5)} (SL: ${stopLoss.toFixed(5)}, TP: ${takeProfit.toFixed(5)})`,
-          `  -> Expected Trigger: ${expectedTrigger || 'Immediate'}`,
+          `  -> Confidence: ${confidence.toFixed(1)}% | Expected Trigger: ${expectedTrigger || 'Immediate'}`,
         ];
         if (hasLesson) {
           successLogs.push(`  -> [AI LESSON 💡] Setup applied lessons from previous trades to avoid traps.`);
@@ -282,43 +496,25 @@ export default function LiveScannerWidget() {
           ...prev,
         ]);
         
+        // Auto-Execution Check
         if (tradingMode === 'fully_automatic') {
-          setLogs(prev => [`[AUTO TRADE ⚡] Placing instant order for ${pair} (${direction.toUpperCase()})...`, ...prev]);
-          const tradeRes = await fetch(`${apiBase}/api/v1/trades`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify({ pair, direction, entryPrice, stopLoss, takeProfit, riskPercent: 1.0 }),
+          setLogs(prev => [`[AUTO TRADE ⚡] Placing instant order on MT5 for ${pair} (${direction.toUpperCase()})...`, ...prev]);
+          const ticket = await sendOrderToMt5({
+            pair,
+            direction,
+            entryPrice,
+            stopLoss,
+            takeProfit,
+            lotSize: defaultLot,
           });
-          const tradeJson = await tradeRes.json().catch(() => ({}));
-
-          if (tradeRes.ok) {
-            const ticket = tradeJson.data?.mt5_ticket || tradeJson.mt5_ticket;
-            const executedLot = tradeJson.data?.lot_size || defaultLot;
-            if (ticket) {
-              setLogs(prev => [
-                `[MT5 EXECUTED 🚀] Placed ${direction.toUpperCase()} ${executedLot} lots on MetaTrader 5 (Ticket #${ticket})!`,
-                ...prev,
-              ]);
-            } else {
-              setLogs(prev => [
-                `[AUTO TRADE ✅] Position recorded (${executedLot} lots). Note: Start start_mt5_bridge.bat to auto-execute directly on your MT5 terminal.`,
-                ...prev,
-              ]);
-            }
-          } else {
-            const errDetail = tradeJson.message || tradeRes.statusText || 'Execution failed';
-            if (errDetail.includes('Capital Protection') || errDetail.includes('Protection Veto')) {
-              setLogs(prev => [
-                `[CAPITAL SAFETY 🛡️] ${errDetail}`,
-                ...prev,
-              ]);
-            } else {
-              setLogs(prev => [
-                `[AUTO TRADE ⚠️] Execution failed: ${errDetail}`,
-                ...prev,
-              ]);
-            }
+          if (ticket) {
+            setLatestSetup(prev => prev ? { ...prev, mt5Ticket: ticket } : null);
           }
+        } else {
+          setLogs(prev => [
+            `[MANUAL MODE ℹ️] Signal approved! Click "⚡ Place on MT5 Now" button below to execute on MT5.`,
+            ...prev,
+          ]);
         }
       } else {
         const isMemoryVeto = reasoning.includes('AI MEMORY') || reasoning.includes('AI Memory') || reasoning.includes('Pattern memory') || reasoning.includes('stopped-out');
@@ -344,7 +540,7 @@ export default function LiveScannerWidget() {
         scanIndex.current += 1;
       }
     }
-  }, [watchlist, userId, tradingMode, dailySignalLimit, todaySignalCount]);
+  }, [watchlist, userId, tradingMode, dailySignalLimit, todaySignalCount, defaultLot, probeMt5Bridge]);
 
   // Start / stop scanner interval
   useEffect(() => {
@@ -369,25 +565,56 @@ export default function LiveScannerWidget() {
       {/* Scanner Control Panel */}
       <div className="card p-5 space-y-4">
         {/* Header */}
-        <div className="flex justify-between items-center border-b border-[#1e293b] pb-3">
+        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-[#1e293b] pb-3">
           <div className="flex items-center gap-2">
             <div className={`w-2 h-2 rounded-full ${isScanningActive && !limitReached ? 'bg-emerald-500 animate-ping' : 'bg-slate-600'}`} />
             <h3 className="text-sm font-semibold text-white">AI Scanner</h3>
             <span className="text-[9px] font-mono text-[#475569] bg-bg-secondary px-1.5 py-0.5 rounded">
               {todaySignalCount}/{dailySignalLimit} signals today
             </span>
+
+            {/* MT5 Bridge Live Status Pill */}
+            {mt5Status?.connected ? (
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                MT5 Online (#{mt5Status.login} • ${mt5Status.balance})
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                MT5 Bridge Offline
+              </span>
+            )}
           </div>
-          <button
-            onClick={() => setIsScanningActive(v => !v)}
-            disabled={limitReached}
-            className={`px-3 py-1 rounded text-[10px] font-bold font-mono uppercase transition-colors border disabled:opacity-40 disabled:cursor-not-allowed ${
-              isScanningActive
-                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
-                : 'bg-bg-secondary text-[#94a3b8] border-[#1e293b] hover:text-white'
-            }`}
-          >
-            {isScanningActive ? '⬛ Stop Scan' : '▶ Start Scan'}
-          </button>
+
+          <div className="flex items-center gap-2">
+            {/* Auto-Execution Toggle Button */}
+            <button
+              onClick={handleToggleAutoTrade}
+              className={`px-3 py-1 rounded text-[10px] font-bold font-mono transition-all flex items-center gap-1.5 border ${
+                tradingMode === 'fully_automatic'
+                  ? 'bg-brand-500/20 text-brand-300 border-brand-500/40 hover:bg-brand-500/30'
+                  : 'bg-bg-secondary text-[#64748b] border-[#1e293b] hover:text-[#94a3b8]'
+              }`}
+              title="Toggle whether scanner executes orders immediately on your MT5 terminal"
+            >
+              <Zap className={`w-3 h-3 ${tradingMode === 'fully_automatic' ? 'text-brand-400 fill-brand-400' : ''}`} />
+              {tradingMode === 'fully_automatic' ? '⚡ AUTO-TRADE: ON' : 'AUTO-TRADE: OFF'}
+            </button>
+
+            {/* Start / Stop Scan Button */}
+            <button
+              onClick={() => setIsScanningActive(v => !v)}
+              disabled={limitReached}
+              className={`px-3.5 py-1 rounded text-[10px] font-bold font-mono uppercase transition-colors border disabled:opacity-40 disabled:cursor-not-allowed ${
+                isScanningActive
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
+                  : 'bg-bg-secondary text-[#94a3b8] border-[#1e293b] hover:text-white'
+              }`}
+            >
+              {isScanningActive ? '⬛ Stop Scan' : '▶ Start Scan'}
+            </button>
+          </div>
         </div>
 
         {/* Single Pair Manual Analyzer Panel */}
@@ -453,15 +680,83 @@ export default function LiveScannerWidget() {
           )}
         </div>
 
-        {/* Mode display */}
-        <div className="flex items-center gap-3 pt-1 border-t border-[#1e293b]/50 text-[10px] font-mono text-[#475569]">
-          <span>Mode: <strong className="text-[#94a3b8]">{tradingMode.replace('_', ' ').toUpperCase()}</strong></span>
+        {/* Mode display & details */}
+        <div className="flex flex-wrap items-center gap-3 pt-1 border-t border-[#1e293b]/50 text-[10px] font-mono text-[#475569]">
+          <span>
+            Mode:{' '}
+            <strong className={tradingMode === 'fully_automatic' ? 'text-emerald-400' : 'text-[#94a3b8]'}>
+              {tradingMode === 'fully_automatic' ? '⚡ MT5 AUTO-EXECUTION' : 'MANUAL ALERTS'}
+            </strong>
+          </span>
           <span>·</span>
-          <span>Lot: <strong className="text-[#94a3b8]">{defaultLot}</strong></span>
+          <span>Default Lot: <strong className="text-[#94a3b8]">{defaultLot}</strong></span>
           <span>·</span>
           <span>Interval: <strong className="text-[#94a3b8]">45s</strong></span>
+          {mt5Status?.connected && (
+            <>
+              <span>·</span>
+              <span className="text-emerald-400 font-semibold">MT5 Terminal Synced</span>
+            </>
+          )}
         </div>
       </div>
+
+      {/* Latest Generated Setup Card with One-Click MT5 Execution */}
+      {latestSetup && (
+        <div className="card p-4 border border-[#1e293b] bg-[#0c101d] space-y-3">
+          <div className="flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <span className={`text-[10px] font-bold font-mono px-2 py-0.5 rounded uppercase ${
+                latestSetup.direction === 'long' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+              }`}>
+                {latestSetup.direction === 'long' ? '▲ BUY' : '▼ SELL'}
+              </span>
+              <h4 className="text-sm font-bold text-white font-mono">{latestSetup.pair}</h4>
+              <span className="text-[10px] font-mono text-[#64748b]">@{latestSetup.timestamp}</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {latestSetup.mt5Ticket ? (
+                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" /> Placed on MT5 (Ticket #{latestSetup.mt5Ticket})
+                </span>
+              ) : (
+                <button
+                  onClick={handleManualExecute}
+                  disabled={isExecutingManual}
+                  className="btn bg-brand-500 hover:bg-brand-600 text-white text-[11px] py-1 px-3 font-mono font-bold flex items-center gap-1.5 shadow-lg shadow-brand-500/20"
+                >
+                  {isExecutingManual ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Zap className="w-3.5 h-3.5 fill-white" />
+                  )}
+                  ⚡ Place on MT5 Now
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-[#1e293b]/60 text-[11px] font-mono">
+            <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
+              <span className="text-[#64748b] block text-[9px]">ENTRY</span>
+              <span className="text-white font-bold">{latestSetup.entryPrice}</span>
+            </div>
+            <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
+              <span className="text-rose-400 block text-[9px]">STOP LOSS</span>
+              <span className="text-rose-300 font-bold">{latestSetup.stopLoss}</span>
+            </div>
+            <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
+              <span className="text-emerald-400 block text-[9px]">TAKE PROFIT</span>
+              <span className="text-emerald-300 font-bold">{latestSetup.takeProfit}</span>
+            </div>
+            <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
+              <span className="text-[#64748b] block text-[9px]">CONFIDENCE</span>
+              <span className="text-brand-400 font-bold">{latestSetup.confidence.toFixed(1)}%</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Live AI Terminal Log */}
       <div className="card p-5 space-y-3">
@@ -481,15 +776,17 @@ export default function LiveScannerWidget() {
         <div className="bg-[#060810] p-3 rounded-lg border border-[#1e293b] h-[180px] overflow-y-auto font-mono text-[10px] leading-relaxed space-y-1.5 no-scrollbar">
           {logs.map((log, i) => {
             const isError = log.includes('[EXCEPTION]') || log.includes('[ERROR]');
-            const isSignal = log.includes('[SIGNAL');
+            const isSignal = log.includes('[SIGNAL') || log.includes('[MT5 EXECUTED');
             const isRejected = log.includes('[REJECTED');
-            const isWarn = log.includes('[WARN]') || log.includes('[LIMIT');
-            const isAuto = log.includes('[AUTO');
+            const isWarn = log.includes('[WARN]') || log.includes('[LIMIT') || log.includes('[MT5 NOTICE');
+            const isAuto = log.includes('[AUTO') || log.includes('[MT5');
+            const isWaking = log.includes('[AI ENGINE WAKING UP');
             return (
               <div key={i} className={
                 isError ? 'text-red-400 font-bold' :
                 isSignal ? 'text-emerald-400 font-bold pl-2 border-l-2 border-emerald-500' :
                 isRejected ? 'text-red-300 pl-2 border-l-2 border-red-500/50' :
+                isWaking ? 'text-amber-300 font-semibold' :
                 isWarn ? 'text-amber-400' :
                 isAuto ? 'text-blue-400' :
                 'text-[#475569]'

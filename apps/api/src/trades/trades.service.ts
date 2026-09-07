@@ -95,7 +95,9 @@ export class TradesService {
     // 3. Smart Account Capital Protection
     // Protect small accounts from wide stop-loss liquidations
     const approxDollarLossFor001 = stopLossDistancePips * (sym.includes('JPY') ? 0.065 : sym.includes('XAU') ? 1.0 : sym.includes('BTC') ? 0.01 : 0.10);
-    const maxAllowedDollarRisk = equity * ((tradeData.riskPercent || 1.0) * 2.5 / 100.0);
+    const maxAllowedDollarRisk = equity < 150
+      ? Math.max(15.0, equity * 0.35)
+      : equity * ((tradeData.riskPercent || 1.0) * 2.5 / 100.0);
 
     if (equity < 600 && approxDollarLossFor001 > maxAllowedDollarRisk) {
       throw new BadRequestException(

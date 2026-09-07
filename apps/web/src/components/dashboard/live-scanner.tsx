@@ -695,7 +695,7 @@ export default function LiveScannerWidget() {
       <div className="card p-5 space-y-4">
         {/* Header */}
         <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-[#1e293b] pb-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <div className={`w-2 h-2 rounded-full ${isScanningActive && !limitReached ? 'bg-emerald-500 animate-ping' : 'bg-slate-600'}`} />
             <h3 className="text-sm font-semibold text-white">AI Scanner</h3>
             <span className="text-[9px] font-mono text-[#475569] bg-bg-secondary px-1.5 py-0.5 rounded">
@@ -716,7 +716,7 @@ export default function LiveScannerWidget() {
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
             {/* Auto-Execution Toggle Button */}
             <button
               onClick={handleToggleAutoTrade}
@@ -748,7 +748,7 @@ export default function LiveScannerWidget() {
 
         {/* Single Pair Manual Analyzer Panel */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#1e293b]/50 pb-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[10px] font-mono text-[#94a3b8]">Select Asset:</span>
             <select
               value={selectedSinglePair}
@@ -833,8 +833,8 @@ export default function LiveScannerWidget() {
       {/* Latest Generated Setup Card with One-Click MT5 Execution */}
       {latestSetup && (
         <div className="card p-4 border border-[#1e293b] bg-[#0c101d] space-y-3">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className={`text-[10px] font-bold font-mono px-2 py-0.5 rounded uppercase border ${
                 latestSetup.orderType?.includes('stop')
                   ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'

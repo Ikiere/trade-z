@@ -3,8 +3,21 @@
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { useNotificationStore } from '@/stores/notification-store';
+import { useUIStore } from '@/stores/ui-store';
 import { formatCurrency, getCurrentTradingSession, isMarketOpen } from '@trade-z/utils';
-import { Bell, Search, LogOut, ChevronDown, CheckCheck, Trash2, Brain, Loader2 } from 'lucide-react';
+import {
+  Bell,
+  Search,
+  LogOut,
+  ChevronDown,
+  CheckCheck,
+  Trash2,
+  Brain,
+  Loader2,
+  Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useMt5 } from '@/lib/mt5-sync-context';
 
@@ -12,6 +25,7 @@ export default function Header() {
   const { user, logout } = useAuthStore();
   const { notifications, unreadCount, markAsRead, markAllAsRead, removeNotification } = useNotificationStore();
   const { bridgeStatus, summary, account, lastSyncAt, syncedCount, syncing } = useMt5();
+  const { sidebarCollapsed, setSidebarCollapsed, setSidebarOpen } = useUIStore();
 
   const [sessionInfo, setSessionInfo] = useState({ session: 'off_hours', isHighLiquidity: false, overlap: false });
   const [marketOpen, setMarketOpen] = useState(false);
@@ -34,9 +48,32 @@ export default function Header() {
   }, []);
 
   return (
-    <header className="h-16 bg-bg-secondary border-b border-[#1e293b] flex items-center justify-between px-6 sticky top-0 z-30">
-      {/* Left side — Search & Session */}
-      <div className="flex items-center gap-6 flex-1 max-w-lg">
+    <header className="h-16 bg-bg-secondary/95 backdrop-blur-xl border-b border-[#1e293b] flex items-center justify-between px-4 sm:px-6 sticky top-0 z-30">
+      {/* Left side — Mobile Hamburger & Desktop Collapse Toggle */}
+      <div className="flex items-center gap-2.5 sm:gap-4 flex-1 max-w-lg">
+        {/* Mobile Hamburger Menu Button */}
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="md:hidden p-2 rounded-xl bg-bg-card hover:bg-bg-hover text-[#94a3b8] hover:text-white border border-[#1e293b] transition-colors shrink-0"
+          title="Open navigation menu"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+
+        {/* Desktop Sidebar Collapse / Expand Toggle */}
+        <button
+          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          className="hidden md:flex p-2 rounded-xl text-[#94a3b8] hover:text-white hover:bg-bg-hover border border-transparent hover:border-[#1e293b] transition-all shrink-0"
+          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {sidebarCollapsed ? (
+            <PanelLeftOpen className="w-5 h-5 text-brand-400" />
+          ) : (
+            <PanelLeftClose className="w-5 h-5 text-[#94a3b8]" />
+          )}
+        </button>
+
+        {/* Search Bar (desktop) */}
         <div className="relative w-full hidden md:block">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#475569]" />
           <input
@@ -44,12 +81,12 @@ export default function Header() {
             placeholder="Search assets, signals, logs..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="input pl-10"
+            className="input pl-10 h-9 text-xs"
           />
         </div>
 
-        {/* Trading Session Indicator */}
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-bg-elevated border border-[#1e293b] shrink-0 text-xs font-mono">
+        {/* Trading Session Indicator (hidden on small mobile < 640px) */}
+        <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-bg-elevated border border-[#1e293b] shrink-0 text-xs font-mono">
           <div className={`w-2 h-2 rounded-full ${marketOpen ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
           <span className="text-[#94a3b8]">
             {marketOpen ? `Session: ${sessionInfo.session.toUpperCase()}` : 'MARKET CLOSED'}
@@ -62,16 +99,16 @@ export default function Header() {
         </div>
       </div>
 
-      {/* Right side — Notifications, Portfolio Quick stats, Profile */}
-      <div className="flex items-center gap-4">
-        {/* MT5 Live Equity + AI Sync Status */}
-        <div className="hidden lg:flex items-center gap-3">
+      {/* Right side — Notifications, MT5 Quick stats, Profile */}
+      <div className="flex items-center gap-2.5 sm:gap-4">
+        {/* MT5 Live Equity + AI Sync Status (visible on md+) */}
+        <div className="hidden sm:flex items-center gap-3">
           {/* Equity */}
           <div className="flex flex-col text-right text-xs">
-            <span className="text-[#64748b] uppercase tracking-wider font-mono">
+            <span className="text-[#64748b] uppercase tracking-wider font-mono text-[10px]">
               {mt5Balance !== null ? 'MT5 Equity' : 'Equity'}
             </span>
-            <span className="font-semibold text-white font-mono">
+            <span className="font-semibold text-white font-mono text-xs">
               {mt5Balance !== null
                 ? '$' + mt5Balance.toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                 : '—'}
@@ -80,9 +117,11 @@ export default function Header() {
 
           {/* AI Sync Badge */}
           <div
-            title={lastSyncAt
-              ? 'AI last synced: ' + lastSyncAt.toLocaleTimeString() + ' — ' + syncedCount + ' trades'
-              : 'AI sync: waiting for MT5 bridge'}
+            title={
+              lastSyncAt
+                ? 'AI last synced: ' + lastSyncAt.toLocaleTimeString() + ' — ' + syncedCount + ' trades'
+                : 'AI sync: waiting for MT5 bridge'
+            }
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-mono font-bold transition-all ${
               syncing
                 ? 'bg-brand-500/15 border-brand-500/30 text-brand-400'
@@ -91,17 +130,9 @@ export default function Header() {
                 : 'bg-[#1e293b] border-[#334155] text-[#475569]'
             }`}
           >
-            {syncing ? (
-              <Loader2 className="w-3 h-3 animate-spin" />
-            ) : (
-              <Brain className="w-3 h-3" />
-            )}
-            <span>
-              {syncing
-                ? 'SYNCING'
-                : bridgeStatus === 'connected'
-                ? 'AI LIVE'
-                : 'AI OFFLINE'}
+            {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
+            <span className="hidden md:inline">
+              {syncing ? 'SYNCING' : bridgeStatus === 'connected' ? 'AI LIVE' : 'AI OFFLINE'}
             </span>
           </div>
         </div>
@@ -110,7 +141,7 @@ export default function Header() {
         <div className="relative">
           <button
             onClick={() => setNotifDropdownOpen(!notifDropdownOpen)}
-            className="p-2 text-[#94a3b8] hover:text-white rounded-lg hover:bg-bg-hover transition-colors relative"
+            className="p-2 text-[#94a3b8] hover:text-white rounded-xl hover:bg-bg-hover transition-colors relative"
           >
             <Bell className="w-5 h-5" />
             {unreadCount > 0 && (
@@ -136,9 +167,7 @@ export default function Header() {
               </div>
               <div className="max-h-64 overflow-y-auto divide-y divide-[#1e293b] no-scrollbar">
                 {notifications.length === 0 ? (
-                  <div className="p-4 text-center text-xs text-[#64748b]">
-                    No new alerts
-                  </div>
+                  <div className="p-4 text-center text-xs text-[#64748b]">No new alerts</div>
                 ) : (
                   notifications.map((notif) => (
                     <div
@@ -180,30 +209,34 @@ export default function Header() {
         <div className="relative">
           <button
             onClick={() => setUserMenuOpen(!userMenuOpen)}
-            className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-bg-hover transition-colors text-[#94a3b8] hover:text-white"
+            className="flex items-center gap-1.5 p-1 rounded-xl hover:bg-bg-hover transition-colors text-[#94a3b8] hover:text-white"
           >
-            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-brand-600 to-brand-400 flex items-center justify-center text-white font-bold text-sm shrink-0">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-brand-600 to-brand-400 flex items-center justify-center text-white font-bold text-xs shrink-0 shadow-sm">
               {user?.fullName?.charAt(0).toUpperCase() || 'T'}
             </div>
-            <ChevronDown className="w-4 h-4" />
+            <ChevronDown className="w-3.5 h-3.5 text-[#64748b]" />
           </button>
 
           {/* User Menu */}
           {userMenuOpen && (
             <div className="absolute right-0 mt-2 w-48 bg-bg-card border border-[#1e293b] rounded-xl shadow-xl z-50 overflow-hidden">
               <div className="p-3 border-b border-[#1e293b]">
-                <p className="text-xs font-semibold text-white">{user?.fullName || 'Trader Account'}</p>
+                <p className="text-xs font-semibold text-white truncate">{user?.fullName || 'Trader Account'}</p>
                 <p className="text-[10px] text-[#64748b] truncate">{user?.email || 'trader@tradez.app'}</p>
               </div>
               <div className="p-1">
                 <Link
                   href="/settings"
+                  onClick={() => setUserMenuOpen(false)}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-[#94a3b8] hover:text-white hover:bg-bg-hover transition-colors"
                 >
                   Profile & Settings
                 </Link>
                 <button
-                  onClick={() => logout()}
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    logout();
+                  }}
                   className="flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
                 >
                   <LogOut className="w-3.5 h-3.5" /> Sign Out

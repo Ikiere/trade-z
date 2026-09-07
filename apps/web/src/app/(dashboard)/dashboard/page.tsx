@@ -1,366 +1,320 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import MarketSentimentWidget from '@/components/dashboard/sentiment-widget';
-import AIStatusWidget from '@/components/dashboard/ai-status-widget';
+import { useState } from 'react';
 import LiveScannerWidget from '@/components/dashboard/live-scanner';
-import EconomicCalendarWidget from '@/components/dashboard/economic-calendar-widget';
-import LatestSignalsWidget from '@/components/dashboard/latest-signals';
 import TradingViewChart from '@/components/charts/tradingview-chart';
-import { TrendingUp, Award, DollarSign, Wallet, ShieldAlert, BookOpen, GraduationCap, X } from 'lucide-react';
+import {
+  TrendingUp, TrendingDown, DollarSign, Wallet, Activity,
+  ShieldCheck, Loader2, XCircle, ArrowUpRight, WifiOff, Zap
+} from 'lucide-react';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase';
-import type { Trade } from '@trade-z/types';
-
-interface PortfolioStats {
-  totalEquity: number;
-  balance: number;
-  todayPnl: number;
-  winRate: number;
-  drawdown: number;
-}
+import { useMt5, Mt5Position } from '@/lib/mt5-sync-context';
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<PortfolioStats>({
-    totalEquity: 10000.00,
-    balance: 10000.00,
-    todayPnl: 0,
-    winRate: 0,
-    drawdown: 0,
-  });
-  const [openTrades, setOpenTrades] = useState<Trade[]>([]);
-  const [loading, setLoading] = useState(true);
-  
-  // Beginner Mode State to simplify explanations
-  const [isBeginnerMode, setIsBeginnerMode] = useState(false);
-  const [showGuide, setShowGuide] = useState(true);
+  const {
+    bridgeStatus,
+    positions,
+    summary,
+    account,
+    closePosition,
+  } = useMt5();
 
-  useEffect(() => {
-    const supabase = createClient();
+  const [closingTicket, setClosingTicket] = useState<number | null>(null);
+  const [activeChartPair, setActiveChartPair] = useState('EURUSD');
 
-    async function fetchData() {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-
-        // 1. Fetch default portfolio
-        let portfolio = null;
-        const { data: fetchPort } = await supabase
-          .from('portfolios')
-          .select('*')
-          .eq('user_id', user.id)
-          .eq('is_default', true)
-          .maybeSingle();
-
-        if (fetchPort) {
-          portfolio = fetchPort;
-        } else {
-          // Auto-repair: Create a default portfolio if missing
-          const { data: createdPort } = await supabase
-            .from('portfolios')
-            .insert({
-              user_id: user.id,
-              name: 'Default Portfolio',
-              is_default: true,
-              balance: 10000.00,
-              equity: 10000.00,
-              margin: 0.00,
-              free_margin: 10000.00,
-              margin_level: 0.00,
-              currency: 'USD'
-            })
-            .select()
-            .maybeSingle();
-          if (createdPort) {
-            portfolio = createdPort;
-          }
-        }
-
-        // 2. Fetch open positions
-        const { data: activePositions } = await supabase
-          .from('trades')
-          .select('*')
-          .eq('user_id', user.id)
-          .eq('status', 'open');
-
-        // 3. Fetch completed positions for stats
-        const { data: closedTrades } = await supabase
-          .from('trades')
-          .select('*')
-          .eq('user_id', user.id)
-          .in('status', ['closed', 'stopped_out', 'take_profit', 'partially_closed']);
-
-        // Calculate win rate
-        let winRate = 0;
-        if (closedTrades && closedTrades.length > 0) {
-          const profitable = closedTrades.filter(t => (t.pnl || 0) > 0).length;
-          winRate = Math.round((profitable / closedTrades.length) * 100);
-        }
-
-        if (portfolio) {
-          setStats({
-            totalEquity: Number(portfolio.equity),
-            balance: Number(portfolio.balance),
-            todayPnl: Number(portfolio.today_pnl),
-            winRate,
-            drawdown: Number(portfolio.margin_level) > 0 ? Number(portfolio.margin_level) : 0,
-          });
-        } else {
-          setStats(prev => ({ ...prev, winRate }));
-        }
-
-        if (activePositions) {
-          const mapped = activePositions.map((trade: any) => ({
-            id: trade.id,
-            userId: trade.user_id,
-            signalId: trade.signal_id,
-            brokerId: trade.broker_id,
-            pair: trade.pair,
-            type: trade.type,
-            direction: trade.direction,
-            status: trade.status,
-            entryPrice: Number(trade.entry_price) || 0,
-            stopLoss: Number(trade.stop_loss) || 0,
-            takeProfit: Number(trade.take_profit) || 0,
-            currentPrice: Number(trade.current_price || trade.entry_price) || 0,
-            exitPrice: Number(trade.exit_price) || 0,
-            lotSize: Number(trade.lot_size) || 0.01,
-            riskAmount: Number(trade.risk_amount) || 0,
-            riskReward: Number(trade.risk_reward) || 0,
-            riskPercent: Number(trade.risk_percent) || 0,
-            pnl: Number(trade.pnl) || 0,
-            pnlPercent: Number(trade.pnl_percent) || 0,
-            pips: Number(trade.pips) || 0,
-            aiConfidence: Number(trade.ai_confidence) || 0,
-            aiReasoning: trade.ai_reasoning || '',
-            openedAt: trade.opened_at,
-            closedAt: trade.closed_at,
-            createdAt: trade.created_at,
-            updatedAt: trade.updated_at,
-          }));
-          setOpenTrades(mapped);
-        }
-      } catch (err) {
-        console.error('Error fetching dashboard data:', err);
-      } finally {
-        setLoading(false);
-      }
+  // Handle direct close from dashboard table
+  const handleDirectClose = async (ticket: number) => {
+    setClosingTicket(ticket);
+    try {
+      await closePosition(ticket);
+    } finally {
+      setClosingTicket(null);
     }
+  };
 
-    fetchData();
-
-    const channel = supabase
-      .channel('schema-db-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, () => fetchData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'portfolios' }, () => fetchData())
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
+  const balance = account?.balance ?? summary?.balance ?? 0;
+  const equity = account?.equity ?? summary?.equity ?? 0;
+  const floatingPnl = summary?.total_floating_pnl ?? 0;
+  const freeMargin = account?.free_margin ?? balance;
+  const marginLevel = account?.margin_level ?? 0;
 
   return (
     <div className="p-4 md:p-6 space-y-6">
-      {/* Header section */}
+      {/* Top Header Strip */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl md:text-2xl font-bold text-white tracking-tight">AI Command Center</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl md:text-2xl font-bold text-white tracking-tight">Trading Command Center</h1>
+            {bridgeStatus === 'connected' ? (
+              <span className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                MT5 LIVE
+              </span>
+            ) : bridgeStatus === 'disconnected' ? (
+              <span className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-red-400 bg-red-500/10 border border-red-500/20 px-2.5 py-0.5 rounded-full">
+                <WifiOff className="w-3 h-3" />
+                BRIDGE OFFLINE
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 px-2.5 py-0.5 rounded-full">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                CONNECTING
+              </span>
+            )}
+          </div>
           <p className="text-xs text-[#94a3b8] mt-1 font-mono">
-            LIVE MARKET WORKSPACE • {openTrades.length} ACTIVE POSITIONS
+            {bridgeStatus === 'connected'
+              ? `CONNECTED TO MT5 ACCOUNT #${account?.login || 'ACTIVE'} · AUTO-EXECUTION READY`
+              : 'LOCAL BRIDGE OFFLINE · LAUNCH START_MT5_BRIDGE.BAT FOR LIVE TRADING'}
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setIsBeginnerMode(!isBeginnerMode)}
-            className={`btn px-3 py-1.5 text-xs flex items-center gap-1.5 font-semibold transition-all ${
-              isBeginnerMode 
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
-                : 'bg-bg-secondary text-[#94a3b8] border border-[#1e293b] hover:text-white'
-            }`}
+
+        <div className="flex items-center gap-2">
+          <Link
+            href="/trades"
+            className="btn btn-secondary text-xs font-mono font-bold flex items-center gap-1.5"
           >
-            <GraduationCap className="w-4 h-4" />
-            {isBeginnerMode ? 'Beginner Guide: ON' : 'Show Beginner Explanations'}
-          </button>
+            <Zap className="w-3.5 h-3.5 text-brand-400" />
+            Positions ({positions.length})
+          </Link>
+          <Link
+            href="/history"
+            className="btn btn-secondary text-xs font-mono font-bold"
+          >
+            Trade History
+          </Link>
           <Link
             href="/chat"
-            className="btn btn-primary text-xs"
+            className="btn btn-primary text-xs font-mono font-bold flex items-center gap-1"
           >
-            Ask AI Assistant
+            AI Assistant
+            <ArrowUpRight className="w-3.5 h-3.5" />
           </Link>
         </div>
       </div>
 
-      {/* Forex Beginner Welcome Board */}
-      {isBeginnerMode && showGuide && (
-        <div className="card p-5 border-emerald-500/20 bg-emerald-500/5 relative animate-fade-in">
-          <button 
-            onClick={() => setShowGuide(false)}
-            className="absolute top-4 right-4 text-[#64748b] hover:text-white"
-          >
-            <X className="w-4 h-4" />
-          </button>
-          <div className="flex gap-3">
-            <BookOpen className="w-6 h-6 text-emerald-400 shrink-0 mt-0.5" />
-            <div className="space-y-2">
-              <h3 className="text-sm font-semibold text-white">New to Forex Trading? Quick Start Guide:</h3>
-              <p className="text-xs text-[#94a3b8] leading-relaxed">
-                This dashboard shows what the Trade-Z AI Engine is doing. The AI monitors the market for you, 
-                detects trade opportunities (called <strong>Signals</strong>), and automatically executes them. 
-                You can manage active trades, view metrics, and chat with the AI assistant.
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-[11px] font-mono">
-                <div className="bg-bg-secondary/40 p-2.5 rounded border border-emerald-500/10">
-                  <span className="text-emerald-400 font-bold block mb-0.5">1. AI Signals</span>
-                  Signals are alerts generated by the AI when it spots a high probability trade.
-                </div>
-                <div className="bg-bg-secondary/40 p-2.5 rounded border border-emerald-500/10">
-                  <span className="text-emerald-400 font-bold block mb-0.5">2. Active Positions</span>
-                  Once a signal is triggered, it becomes a live trade (Position) running in your account.
-                </div>
-                <div className="bg-bg-secondary/40 p-2.5 rounded border border-emerald-500/10">
-                  <span className="text-emerald-400 font-bold block mb-0.5">3. Protection (SL / TP)</span>
-                  SL (Stop Loss) limits potential losses. TP (Take Profit) sets target profit goals.
-                </div>
-              </div>
+      {/* Live Account Strip Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+        {/* Balance */}
+        <div className="card p-4 flex flex-col justify-between min-h-[96px] border border-[#1e293b] bg-bg-secondary/60">
+          <div className="flex justify-between items-start">
+            <span className="text-[10px] text-[#64748b] uppercase tracking-wider font-mono font-semibold">
+              Account Balance
+            </span>
+            <div className="w-7 h-7 rounded-lg bg-bg-elevated flex items-center justify-center text-brand-400 shrink-0">
+              <Wallet className="w-3.5 h-3.5" />
+            </div>
+          </div>
+          <div>
+            <div className="text-lg md:text-xl font-bold font-mono text-white">
+              {bridgeStatus === 'connected' ? `$${balance.toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+            </div>
+            <div className="text-[10px] text-[#64748b] font-mono mt-0.5">
+              {account?.currency || 'USD'} Core Capital
             </div>
           </div>
         </div>
-      )}
 
-      {/* Quick stats cards row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          { 
-            label: 'Total Equity', 
-            value: `$${stats.totalEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 
-            icon: Wallet, 
-            desc: `Balance: $${stats.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            explanation: 'Your total account value, including open trade profits/losses.'
-          },
-          { 
-            label: 'Today P&L', 
-            value: `${stats.todayPnl >= 0 ? '+' : ''}$${stats.todayPnl.toFixed(2)}`, 
-            icon: TrendingUp, 
-            desc: 'Realtime daily shift', 
-            color: stats.todayPnl >= 0 ? 'text-emerald-400' : 'text-red-400',
-            explanation: 'Profit or loss you made today (Profit & Loss).'
-          },
-          { 
-            label: 'Win Rate', 
-            value: `${stats.winRate}%`, 
-            icon: Award, 
-            desc: 'Completed trades ratio',
-            explanation: 'Percentage of completed trades that closed with profit.'
-          },
-          { 
-            label: 'Active Drawdown', 
-            value: `${stats.drawdown.toFixed(2)}%`, 
-            icon: ShieldAlert, 
-            desc: 'Max limit: 5.0%', 
-            color: 'text-[#64748b]',
-            explanation: 'Safety check. Shows how much your account has dipped today.'
-          },
-        ].map((stat, idx) => {
-          const Icon = stat.icon;
-          return (
-            <div key={idx} className="card p-4 flex flex-col justify-between gap-3 min-h-[110px]">
-              <div className="flex justify-between items-start">
-                <div className="space-y-1">
-                  <span className="text-[10px] text-[#64748b] uppercase tracking-wider font-mono font-semibold">
-                    {stat.label}
-                  </span>
-                  <p className={`text-lg md:text-xl font-bold font-mono text-white ${stat.color || ''}`}>{stat.value}</p>
-                </div>
-                <div className="w-8 h-8 rounded-lg bg-bg-elevated flex items-center justify-center text-[#64748b] shrink-0">
-                  <Icon className="w-4 h-4" />
-                </div>
-              </div>
-              <div className="space-y-1">
-                <p className="text-[10px] text-[#94a3b8] font-mono">{stat.desc}</p>
-                {isBeginnerMode && (
-                  <p className="text-[9px] text-emerald-400 font-mono italic">{stat.explanation}</p>
-                )}
-              </div>
+        {/* Equity */}
+        <div className="card p-4 flex flex-col justify-between min-h-[96px] border border-[#1e293b] bg-bg-secondary/60">
+          <div className="flex justify-between items-start">
+            <span className="text-[10px] text-[#64748b] uppercase tracking-wider font-mono font-semibold">
+              Current Equity
+            </span>
+            <div className="w-7 h-7 rounded-lg bg-bg-elevated flex items-center justify-center text-blue-400 shrink-0">
+              <DollarSign className="w-3.5 h-3.5" />
             </div>
-          );
-        })}
-      </div>
-
-      {/* Main Grid: Live Analytics Chart & Status */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left 2 Columns: Chart & Latest Signals */}
-        <div className="lg:col-span-2 space-y-6">
-          <TradingViewChart pair="EURUSD" />
-          <LatestSignalsWidget />
+          </div>
+          <div>
+            <div className="text-lg md:text-xl font-bold font-mono text-white">
+              {bridgeStatus === 'connected' ? `$${equity.toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+            </div>
+            <div className="text-[10px] text-[#64748b] font-mono mt-0.5">
+              Real-time Net Asset Value
+            </div>
+          </div>
         </div>
 
-        {/* Right 1 Column: Widgets */}
-        <div className="space-y-6">
-          <AIStatusWidget />
-          <MarketSentimentWidget />
+        {/* Floating P&L */}
+        <div className={`card p-4 flex flex-col justify-between min-h-[96px] border ${
+          floatingPnl >= 0 ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-red-500/20 bg-red-500/5'
+        }`}>
+          <div className="flex justify-between items-start">
+            <span className="text-[10px] text-[#64748b] uppercase tracking-wider font-mono font-semibold">
+              Floating P&L
+            </span>
+            <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+              floatingPnl >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+            }`}>
+              <Activity className="w-3.5 h-3.5" />
+            </div>
+          </div>
+          <div>
+            <div className={`text-lg md:text-xl font-bold font-mono ${floatingPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {bridgeStatus === 'connected' ? `${floatingPnl >= 0 ? '+' : ''}$${floatingPnl.toFixed(2)}` : '—'}
+            </div>
+            <div className="text-[10px] text-[#64748b] font-mono mt-0.5">
+              {positions.length} Active {positions.length === 1 ? 'Trade' : 'Trades'}
+            </div>
+          </div>
+        </div>
+
+        {/* Free Margin & Health */}
+        <div className="card p-4 flex flex-col justify-between min-h-[96px] border border-[#1e293b] bg-bg-secondary/60">
+          <div className="flex justify-between items-start">
+            <span className="text-[10px] text-[#64748b] uppercase tracking-wider font-mono font-semibold">
+              Free Margin
+            </span>
+            <div className="w-7 h-7 rounded-lg bg-bg-elevated flex items-center justify-center text-yellow-400 shrink-0">
+              <ShieldCheck className="w-3.5 h-3.5" />
+            </div>
+          </div>
+          <div>
+            <div className="text-lg md:text-xl font-bold font-mono text-white">
+              {bridgeStatus === 'connected' ? `$${freeMargin.toLocaleString('en', { minimumFractionDigits: 2 })}` : '—'}
+            </div>
+            <div className="text-[10px] text-[#64748b] font-mono mt-0.5">
+              {marginLevel > 0 ? `Margin Level: ${marginLevel.toFixed(0)}%` : 'No open margin used'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Core Grid: AI Scanner & Chart */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left: AI Scanner & Auto-Execution */}
+        <div className="lg:col-span-7 space-y-4">
           <LiveScannerWidget />
-          <EconomicCalendarWidget />
+        </div>
+
+        {/* Right: Live TradingView Chart */}
+        <div className="lg:col-span-5 space-y-3 flex flex-col">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-xs font-mono font-bold text-white uppercase tracking-wider">
+              Market Action &bull; {activeChartPair}
+            </span>
+            <div className="flex gap-1">
+              {['EURUSD', 'XAUUSD', 'GBPUSD'].map((pair) => (
+                <button
+                  key={pair}
+                  onClick={() => setActiveChartPair(pair)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all ${
+                    activeChartPair === pair
+                      ? 'bg-brand-500/20 text-brand-400 border border-brand-500/30'
+                      : 'text-[#64748b] hover:text-white'
+                  }`}
+                >
+                  {pair}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="card p-3 flex-1 min-h-[380px] overflow-hidden border border-[#1e293b]">
+            <TradingViewChart pair={activeChartPair} />
+          </div>
         </div>
       </div>
 
-      {/* Open Trades Summary Panel */}
-      <div className="card p-5">
+      {/* Live Active Positions Table with Direct 1-Click Close */}
+      <div className="card p-5 border border-[#1e293b]">
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-sm font-semibold text-white">Active Positions ({openTrades.length})</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-white">Live MT5 Open Positions</h3>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-brand-500/10 text-brand-400 border border-brand-500/20">
+              {positions.length} Active
+            </span>
+          </div>
           <Link
             href="/trades"
-            className="text-xs text-brand-400 hover:text-brand-300 font-semibold"
+            className="text-xs text-brand-400 hover:text-brand-300 font-mono font-semibold flex items-center gap-1"
           >
-            Manage Trades
+            Manage All Trades
+            <ArrowUpRight className="w-3.5 h-3.5" />
           </Link>
         </div>
 
         <div className="overflow-x-auto no-scrollbar">
-          {loading ? (
-            <div className="text-center py-6 text-xs text-[#64748b]">Loading open positions...</div>
-          ) : openTrades.length === 0 ? (
-            <div className="text-center py-6 text-xs text-[#64748b]">No active positions. AI scanning active.</div>
+          {bridgeStatus === 'loading' ? (
+            <div className="text-center py-8 text-xs text-[#64748b] flex items-center justify-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-brand-400" />
+              Connecting to MT5 terminal...
+            </div>
+          ) : positions.length === 0 ? (
+            <div className="text-center py-10 space-y-2">
+              <div className="w-10 h-10 rounded-full bg-bg-secondary border border-[#1e293b] flex items-center justify-center mx-auto text-[#64748b]">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <p className="text-xs font-semibold text-white">No active open positions</p>
+              <p className="text-[11px] text-[#64748b] font-mono">
+                The AI scanner is actively monitoring your watchlist for institutional entries.
+              </p>
+            </div>
           ) : (
-            <table className="w-full text-left border-collapse">
+            <table className="w-full text-left border-collapse font-mono">
               <thead>
-                <tr className="border-b border-[#1e293b] text-[#64748b] text-[10px] font-semibold uppercase tracking-wider font-mono">
-                  <th className="pb-2">Asset</th>
-                  <th className="pb-2 text-right hidden sm:table-cell">Size</th>
-                  <th className="pb-2 text-right hidden md:table-cell">Entry</th>
-                  <th className="pb-2 text-right hidden md:table-cell">Current</th>
-                  <th className="pb-2 text-right">P&L ($)</th>
-                  <th className="pb-2 text-right hidden sm:table-cell">Pips</th>
+                <tr className="border-b border-[#1e293b] text-[#64748b] text-[10px] font-semibold uppercase tracking-wider">
+                  <th className="py-2.5 px-3">Asset</th>
+                  <th className="py-2.5 px-3 text-right hidden sm:table-cell">Size</th>
+                  <th className="py-2.5 px-3 text-right hidden md:table-cell">Entry</th>
+                  <th className="py-2.5 px-3 text-right">Live Price</th>
+                  <th className="py-2.5 px-3 text-right hidden sm:table-cell">Stop Loss</th>
+                  <th className="py-2.5 px-3 text-right hidden sm:table-cell">Take Profit</th>
+                  <th className="py-2.5 px-3 text-right">Floating P&L</th>
+                  <th className="py-2.5 px-3 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#1e293b] text-xs">
-                {openTrades.map((trade) => {
-                  const isLong = trade.direction === 'long';
-                  const isProfit = (trade.pnl || 0) >= 0;
+                {positions.map((pos) => {
+                  const isLong = pos.direction === 'long';
+                  const isProfit = pos.profit >= 0;
+                  const priceDiff = pos.price_current - pos.price_open;
+                  const priceIsGood = isLong ? priceDiff >= 0 : priceDiff <= 0;
+                  const isClosing = closingTicket === pos.ticket;
+
                   return (
-                    <tr key={trade.id} className="hover:bg-bg-hover/30 transition-colors">
-                      <td className="py-3 flex items-center gap-2">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono ${
-                          isLong ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-                        }`}>
-                          {isLong ? 'LONG' : 'SHORT'}
-                        </span>
-                        <span className="font-bold text-white font-mono">{trade.pair}</span>
+                    <tr key={pos.ticket} className="hover:bg-bg-hover/20 transition-colors">
+                      <td className="py-3 px-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-5 h-5 rounded flex items-center justify-center shrink-0 ${
+                            isLong ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'
+                          }`}>
+                            {isLong ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                          </span>
+                          <div>
+                            <span className="font-bold text-white">{pos.pair}</span>
+                            <span className="text-[9px] text-[#64748b] ml-1.5">#{pos.ticket}</span>
+                          </div>
+                        </div>
                       </td>
-                      <td className="py-3 text-right font-mono text-[#94a3b8] hidden sm:table-cell">
-                        {trade.lotSize.toFixed(2)}
+                      <td className="py-3 px-3 text-right text-[#94a3b8] hidden sm:table-cell">
+                        {pos.volume.toFixed(2)}
                       </td>
-                      <td className="py-3 text-right font-mono text-white hidden md:table-cell">
-                        {trade.entryPrice.toFixed(5)}
+                      <td className="py-3 px-3 text-right text-white hidden md:table-cell">
+                        {pos.price_open.toFixed(5)}
                       </td>
-                      <td className="py-3 text-right font-mono text-white hidden md:table-cell">
-                        {(trade.currentPrice || 0).toFixed(5)}
+                      <td className={`py-3 px-3 text-right font-bold ${priceIsGood ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {pos.price_current.toFixed(5)}
                       </td>
-                      <td className={`py-3 text-right font-mono font-bold ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
-                        ${(trade.pnl || 0).toFixed(2)}
+                      <td className="py-3 px-3 text-right text-red-400 hidden sm:table-cell">
+                        {pos.sl > 0 ? pos.sl.toFixed(5) : '—'}
                       </td>
-                      <td className={`py-3 text-right font-mono font-medium hidden sm:table-cell ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
-                        {isProfit ? '+' : ''}{(trade.pips || 0).toFixed(1)}
+                      <td className="py-3 px-3 text-right text-emerald-400 hidden sm:table-cell">
+                        {pos.tp > 0 ? pos.tp.toFixed(5) : '—'}
+                      </td>
+                      <td className={`py-3 px-3 text-right font-bold ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {isProfit ? '+' : ''}${pos.profit.toFixed(2)}
+                      </td>
+                      <td className="py-3 px-3 text-right">
+                        {/* Direct Close Button on Dashboard */}
+                        <button
+                          disabled={isClosing}
+                          onClick={() => handleDirectClose(pos.ticket)}
+                          className="px-2.5 py-1 rounded bg-red-500/15 hover:bg-red-500/30 text-red-400 border border-red-500/25 text-[10px] font-bold font-mono transition-all disabled:opacity-50 inline-flex items-center gap-1"
+                          title="Close position immediately at market"
+                        >
+                          {isClosing ? <Loader2 className="w-3 h-3 animate-spin" /> : <XCircle className="w-3 h-3" />}
+                          Close
+                        </button>
                       </td>
                     </tr>
                   );

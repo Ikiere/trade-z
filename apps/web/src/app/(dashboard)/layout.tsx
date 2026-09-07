@@ -11,8 +11,7 @@ import { useEffect } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { useNotificationStore } from '@/stores/notification-store';
 import { createClient } from '@/lib/supabase';
-import { useMt5Sync } from '@/lib/use-mt5-sync';
-
+import { Mt5SyncProvider } from '@/lib/mt5-sync-context';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { sidebarCollapsed } = useUIStore();
@@ -24,17 +23,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const setLoading = useAuthStore((state) => state.setLoading);
   const logout = useAuthStore((state) => state.logout);
   const addNotification = useNotificationStore((state) => state.addNotification);
-
-  // Background MT5 sync: silently syncs closed trades to Supabase every 5 minutes
-  // This feeds the AI's HistoricalPatternEngine (Layer 12) with live trade data
-  const mt5Sync = useMt5Sync();
-
-  // Log sync events for debugging (visible in browser console)
-  useEffect(() => {
-    if (mt5Sync.lastSyncAt && mt5Sync.syncedCount > 0) {
-      console.log(`[Dashboard] MT5 AI Sync: ${mt5Sync.syncedCount} trades synced at ${mt5Sync.lastSyncAt.toLocaleTimeString()}`);
-    }
-  }, [mt5Sync.lastSyncAt, mt5Sync.syncedCount]);
 
 
   useEffect(() => {
@@ -108,37 +96,39 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [setUser, setProfile, setSettings, setLoading, logout, router]);
 
   return (
-    <div className="min-h-screen bg-bg-primary flex">
-      {/* Sidebar */}
-      <Sidebar />
+    <Mt5SyncProvider>
+      <div className="min-h-screen bg-bg-primary flex">
+        {/* Sidebar */}
+        <Sidebar />
 
-      {/* Main content wrapper */}
-      <div
-        className={cn(
-          'flex-1 flex flex-col min-h-screen pb-16 md:pb-0 transition-all duration-300',
-          sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'
-        )}
-      >
-        <Header />
+        {/* Main content wrapper */}
+        <div
+          className={cn(
+            'flex-1 flex flex-col min-h-screen pb-16 md:pb-0 transition-all duration-300',
+            sidebarCollapsed ? 'md:pl-20' : 'md:pl-64'
+          )}
+        >
+          <Header />
 
-        <main className="flex-1 overflow-x-hidden">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={pathname}
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -15 }}
-              transition={{ duration: 0.25, ease: 'easeInOut' }}
-              className="w-full h-full"
-            >
-              {children}
-            </motion.div>
-          </AnimatePresence>
-        </main>
+          <main className="flex-1 overflow-x-hidden">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={pathname}
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                transition={{ duration: 0.25, ease: 'easeInOut' }}
+                className="w-full h-full"
+              >
+                {children}
+              </motion.div>
+            </AnimatePresence>
+          </main>
+        </div>
+
+        {/* Mobile nav bottom bar */}
+        <MobileNav />
       </div>
-
-      {/* Mobile nav bottom bar */}
-      <MobileNav />
-    </div>
+    </Mt5SyncProvider>
   );
 }

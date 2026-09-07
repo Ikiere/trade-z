@@ -6,37 +6,20 @@ import { useNotificationStore } from '@/stores/notification-store';
 import { formatCurrency, getCurrentTradingSession, isMarketOpen } from '@trade-z/utils';
 import { Bell, Search, LogOut, ChevronDown, CheckCheck, Trash2, Brain, Loader2 } from 'lucide-react';
 import Link from 'next/link';
-import { useMt5Sync } from '@/lib/use-mt5-sync';
+import { useMt5 } from '@/lib/mt5-sync-context';
 
 export default function Header() {
   const { user, logout } = useAuthStore();
   const { notifications, unreadCount, markAsRead, markAllAsRead, removeNotification } = useNotificationStore();
-  const mt5Sync = useMt5Sync();
+  const { bridgeStatus, summary, account, lastSyncAt, syncedCount, syncing } = useMt5();
 
   const [sessionInfo, setSessionInfo] = useState({ session: 'off_hours', isHighLiquidity: false, overlap: false });
   const [marketOpen, setMarketOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [mt5Balance, setMt5Balance] = useState<number | null>(null);
 
-  // Poll MT5 account balance for the header equity display
-  useEffect(() => {
-    const fetchBalance = async () => {
-      try {
-        const res = await fetch('http://localhost:5001/account', {
-          signal: AbortSignal.timeout(3000),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setMt5Balance(data.equity ?? data.balance ?? null);
-        }
-      } catch { /* bridge may not be running */ }
-    };
-    fetchBalance();
-    const timer = setInterval(fetchBalance, 15000);
-    return () => clearInterval(timer);
-  }, []);
+  const mt5Balance = account?.equity ?? summary?.equity ?? null;
 
   useEffect(() => {
     setSessionInfo(getCurrentTradingSession());
@@ -97,26 +80,26 @@ export default function Header() {
 
           {/* AI Sync Badge */}
           <div
-            title={mt5Sync.lastSyncAt
-              ? 'AI last synced: ' + mt5Sync.lastSyncAt.toLocaleTimeString() + ' — ' + mt5Sync.syncedCount + ' trades'
+            title={lastSyncAt
+              ? 'AI last synced: ' + lastSyncAt.toLocaleTimeString() + ' — ' + syncedCount + ' trades'
               : 'AI sync: waiting for MT5 bridge'}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-mono font-bold transition-all ${
-              mt5Sync.syncing
+              syncing
                 ? 'bg-brand-500/15 border-brand-500/30 text-brand-400'
-                : mt5Sync.bridgeConnected
+                : bridgeStatus === 'connected'
                 ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
                 : 'bg-[#1e293b] border-[#334155] text-[#475569]'
             }`}
           >
-            {mt5Sync.syncing ? (
+            {syncing ? (
               <Loader2 className="w-3 h-3 animate-spin" />
             ) : (
               <Brain className="w-3 h-3" />
             )}
             <span>
-              {mt5Sync.syncing
+              {syncing
                 ? 'SYNCING'
-                : mt5Sync.bridgeConnected
+                : bridgeStatus === 'connected'
                 ? 'AI LIVE'
                 : 'AI OFFLINE'}
             </span>

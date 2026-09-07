@@ -170,12 +170,14 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
 
         if path in ['/order', '/trade']:
             self._handle_order(body_data)
-        elif path in ['/close', '/close_position']:
+        elif path in ['/close', '/close_position', '/close-position']:
             self._handle_close(body_data)
-        elif path in ['/cancel', '/cancel_order']:
+        elif path in ['/close-all', '/close_all', '/closeall']:
+            self._handle_close_all(body_data)
+        elif path in ['/cancel', '/cancel_order', '/cancel-order']:
             self._handle_cancel_order(body_data)
         else:
-            self._send_json(404, {'success': False, 'error': 'Not Found'})
+            self._send_json(404, {'success': False, 'error': f'Route {path} Not Found'})
 
     # ── HANDLERS ──
 
@@ -640,43 +642,142 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
 
     def _handle_close(self, data: dict):
         if not MT5_AVAILABLE or not mt5.initialize():
-            self._send_json(503, {'success': False, 'error': 'MT5 terminal unavailable'})
+            self._send_json(503, {'success': False, 'error': 'MT5 terminal unavailable or not running'})
             return
 
-        ticket = int(data.get('ticket') or 0)
+        ticket = int(data.get('ticket') or data.get('position') or 0)
         if ticket <= 0:
-            self._send_json(400, {'success': False, 'error': 'Valid ticket required'})
+            self._send_json(400, {'success': False, 'error': 'Valid position ticket required'})
             return
 
+        # 1. Locate position
         positions = mt5.positions_get(ticket=ticket)
         if not positions:
-            self._send_json(404, {'success': False, 'error': f'Position #{ticket} not found on MT5'})
+            # Fallback scan all active positions
+            all_pos = mt5.positions_get() or []
+            positions = [pos for pos in all_pos if pos.ticket == ticket]
+
+        if not positions:
+            self._send_json(404, {'success': False, 'error': f'Position #{ticket} not found on MT5 terminal. It may have already closed.'})
             return
 
         p = positions[0]
         close_type = mt5.ORDER_TYPE_SELL if p.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+
+        sym_info = mt5.symbol_info(p.symbol)
+        if not sym_info:
+            self._send_json(400, {'success': False, 'error': f'Symbol info for {p.symbol} not found'})
+            return
+
         tick = mt5.symbol_info_tick(p.symbol)
+        if not tick:
+            self._send_json(400, {'success': False, 'error': f'Live tick quote unavailable for {p.symbol}'})
+            return
+
         close_price = tick.bid if p.type == mt5.POSITION_TYPE_BUY else tick.ask
 
-        req = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "position": ticket,
-            "symbol": p.symbol,
-            "volume": p.volume,
-            "type": close_type,
-            "price": close_price,
-            "deviation": 20,
-            "magic": 992200,
-            "comment": "Trade-Z Close",
-            "type_filling": mt5.ORDER_FILLING_IOC,
-        }
+        # 2. Try filling modes supported by broker
+        candidate_fillings = [mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN]
+        if sym_info.filling_mode & 2:
+            candidate_fillings = [mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN]
+        elif sym_info.filling_mode & 1:
+            candidate_fillings = [mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_RETURN]
 
-        res = mt5.order_send(req)
-        if res and res.retcode == mt5.TRADE_RETCODE_DONE:
-            self._send_json(200, {'success': True, 'message': f'Position #{ticket} closed successfully'})
+        last_res = None
+        close_success = False
+
+        for filling_mode in candidate_fillings:
+            req = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "position": ticket,
+                "symbol": p.symbol,
+                "volume": p.volume,
+                "type": close_type,
+                "price": close_price,
+                "deviation": 20,
+                "magic": 992200,
+                "comment": "Trade-Z Close",
+                "type_filling": filling_mode,
+            }
+
+            last_res = mt5.order_send(req)
+            if last_res and last_res.retcode == mt5.TRADE_RETCODE_DONE:
+                close_success = True
+                break
+
+        if close_success and last_res:
+            self._send_json(200, {
+                'success': True,
+                'ticket': ticket,
+                'symbol': p.symbol,
+                'volume': p.volume,
+                'price': last_res.price or close_price,
+                'profit': round(p.profit, 2),
+                'message': f'Position #{ticket} ({p.symbol}) closed successfully at {close_price}!'
+            })
         else:
-            err = res.comment if res else mt5.last_error()
-            self._send_json(400, {'success': False, 'error': f'Failed to close position: {err}'})
+            err = last_res.comment if last_res else mt5.last_error()
+            retcode = last_res.retcode if last_res else -1
+            self._send_json(400, {
+                'success': False,
+                'retcode': retcode,
+                'error': f'Broker rejected close order for #{ticket}: {err} (Code: {retcode})'
+            })
+
+    def _handle_close_all(self, data: dict):
+        """Emergency panic close: Closes all open positions simultaneously."""
+        if not MT5_AVAILABLE or not mt5.initialize():
+            self._send_json(503, {'success': False, 'error': 'MT5 terminal unavailable'})
+            return
+
+        positions = mt5.positions_get() or []
+        if not positions:
+            self._send_json(200, {'success': True, 'closed_count': 0, 'message': 'No open positions to close'})
+            return
+
+        closed = []
+        failed = []
+
+        for p in positions:
+            close_type = mt5.ORDER_TYPE_SELL if p.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+            tick = mt5.symbol_info_tick(p.symbol)
+            if not tick:
+                failed.append({'ticket': p.ticket, 'error': 'No tick'})
+                continue
+
+            close_price = tick.bid if p.type == mt5.POSITION_TYPE_BUY else tick.ask
+            req = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "position": p.ticket,
+                "symbol": p.symbol,
+                "volume": p.volume,
+                "type": close_type,
+                "price": close_price,
+                "deviation": 25,
+                "magic": 992200,
+                "comment": "Trade-Z Panic Close",
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+            res = mt5.order_send(req)
+            if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                closed.append({'ticket': p.ticket, 'symbol': p.symbol, 'volume': p.volume, 'price': res.price})
+            else:
+                # Try FOK
+                req["type_filling"] = mt5.ORDER_FILLING_FOK
+                res2 = mt5.order_send(req)
+                if res2 and res2.retcode == mt5.TRADE_RETCODE_DONE:
+                    closed.append({'ticket': p.ticket, 'symbol': p.symbol, 'volume': p.volume, 'price': res2.price})
+                else:
+                    failed.append({'ticket': p.ticket, 'error': res.comment if res else 'Unknown'})
+
+        self._send_json(200, {
+            'success': True,
+            'closed_count': len(closed),
+            'failed_count': len(failed),
+            'closed': closed,
+            'failed': failed,
+            'message': f'Closed {len(closed)} of {len(positions)} positions.'
+        })
 
 
 def run_bridge():

@@ -188,6 +188,8 @@ class DecisionEngine(BaseEngine):
             "take_profit": round(tp, decimals),
             "confidence": round(final_confidence, 2),
             "risk_reward": round(rr, 2),
+            "recommended_lot_size": results.get("risk").metrics.get("recommended_lot_size", 0.01) if results.get("risk") else 0.01,
+            "dollar_risk": results.get("risk").metrics.get("dollar_risk", 0.0) if results.get("risk") else 0.0,
             "higher_timeframe_bias": higher_bias.result if higher_bias else "neutral",
             "market_structure_summary": struct_res.explanation if struct_res else "",
             "liquidity_findings": liq_res.explanation if liq_res else "",

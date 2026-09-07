@@ -9,6 +9,13 @@ export class AnalysisDto {
   @IsString()
   @IsOptional()
   timeframe?: string;
+
+  @IsOptional()
+  account?: {
+    balance?: number;
+    equity?: number;
+    leverage?: number;
+  };
 }
 
 @Controller('chat')
@@ -36,7 +43,12 @@ export class ChatController {
     if (!userId) throw new UnauthorizedException('Valid session token required');
 
     try {
-      const result = await this.chatService.getQuickAnalysis(userId, body.pair, body.timeframe || '4h');
+      const result = await this.chatService.getQuickAnalysis(
+        userId,
+        body.pair,
+        body.timeframe || '4h',
+        body.account,
+      );
       return result;
     } catch (err: any) {
       throw new BadRequestException(err.message);

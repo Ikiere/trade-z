@@ -41,7 +41,12 @@ export class ChatService {
     }
   }
 
-  async getQuickAnalysis(userId: string, pair: string, timeframe: string): Promise<any> {
+  async getQuickAnalysis(
+    userId: string,
+    pair: string,
+    timeframe: string,
+    account?: { balance?: number; equity?: number; leverage?: number },
+  ): Promise<any> {
     try {
       // 1. Fetch last 10 closed trades matching this pair for AI loss autopsy & pattern learning
       const { data: closedTrades } = await this.supabase
@@ -53,11 +58,31 @@ export class ChatService {
         .order('closed_at', { ascending: false })
         .limit(10);
 
+      let balance = account?.balance;
+      let equity = account?.equity;
+      const leverage = account?.leverage;
+
+      if (!balance && !equity) {
+        const { data: port } = await this.supabase
+          .from('portfolios')
+          .select('balance, equity')
+          .eq('user_id', userId)
+          .eq('is_default', true)
+          .maybeSingle();
+        if (port) {
+          balance = Number(port.balance);
+          equity = Number(port.equity);
+        }
+      }
+
       const postBody = JSON.stringify({ 
         pair, 
         timeframe,
         api_key: null,
-        history: closedTrades || []
+        history: closedTrades || [],
+        account_balance: balance,
+        account_equity: equity,
+        account_leverage: leverage,
       });
 
       let targetUrl = `${this.aiServiceUrl}/api/v1/analysis/quick`;

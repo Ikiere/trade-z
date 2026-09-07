@@ -382,7 +382,15 @@ export default function LiveScannerWidget() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ pair, timeframe: '15m' }),
+        body: JSON.stringify({ 
+          pair, 
+          timeframe: '15m',
+          account: mt5Status?.connected ? {
+            balance: mt5Status.balance,
+            equity: mt5Status.equity,
+            leverage: mt5Status.leverage,
+          } : undefined,
+        }),
       });
  
       if (!res.ok) {
@@ -547,11 +555,14 @@ export default function LiveScannerWidget() {
         const activeDir = orderType.toUpperCase();
         const histSummary = info.certificate?.historical_pattern_summary || '';
         const hasLesson = histSummary.includes('Lesson Applied') || histSummary.includes('AI Lesson');
+        const safeLot = (typeof info.recommended_lot_size === 'number' && info.recommended_lot_size > 0)
+          ? info.recommended_lot_size
+          : defaultLot;
 
         const successLogs = [
           `[SIGNAL ✅] Approved high-probability setup for ${pair}! Order: ${activeDir}`,
           `  -> ENTRY: ${entryPrice.toFixed(5)} (SL: ${stopLoss.toFixed(5)}, TP: ${takeProfit.toFixed(5)})`,
-          `  -> Confidence: ${confidence.toFixed(1)}% | Expected Trigger: ${expectedTrigger || 'Immediate'}`,
+          `  -> Size: ${safeLot} Lots (MT5 Balance-Calibrated) | Confidence: ${confidence.toFixed(1)}%`,
         ];
         if (hasLesson) {
           successLogs.push(`  -> [AI LESSON 💡] Setup applied lessons from previous trades to avoid traps.`);
@@ -562,9 +573,31 @@ export default function LiveScannerWidget() {
           ...prev,
         ]);
         
+        // Auto-Management: Check for opposing position to close early on reversal
+        try {
+          const posRes = await fetch('http://127.0.0.1:5001/positions', { signal: AbortSignal.timeout(2000) });
+          if (posRes.ok) {
+            const posJson = await posRes.json();
+            const opposing = (posJson.positions || []).find((p: any) => 
+              p.pair.toUpperCase() === pair.toUpperCase() && p.direction !== direction
+            );
+            if (opposing) {
+              setLogs(prev => [
+                `[AI AUTO-EXIT 🎯] Reversal detected! Closing opposing ${opposing.direction.toUpperCase()} position #${opposing.ticket} on ${pair}...`,
+                ...prev,
+              ]);
+              await fetch('http://127.0.0.1:5001/close', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ticket: opposing.ticket }),
+              });
+            }
+          }
+        } catch (_) {}
+
         // Auto-Execution Check
         if (tradingMode === 'fully_automatic') {
-          setLogs(prev => [`[AUTO TRADE ⚡] Placing instant order on MT5 for ${pair} (${orderType.toUpperCase()})...`, ...prev]);
+          setLogs(prev => [`[AUTO TRADE ⚡] Placing smart-sized order on MT5 for ${pair} (${orderType.toUpperCase()}, ${safeLot} lots)...`, ...prev]);
           const ticket = await sendOrderToMt5({
             pair,
             direction,
@@ -573,20 +606,28 @@ export default function LiveScannerWidget() {
             entryPrice,
             stopLoss,
             takeProfit,
-            lotSize: defaultLot,
+            lotSize: safeLot,
           });
           if (ticket) {
             setLatestSetup(prev => prev ? { ...prev, mt5Ticket: ticket } : null);
           }
         } else {
           setLogs(prev => [
-            `[MANUAL MODE ℹ️] Signal approved! Click "⚡ Place on MT5 Now" button below to execute on MT5.`,
+            `[MANUAL MODE ℹ️] Signal approved! Sized at ${safeLot} lots. Click "⚡ Place on MT5 Now" button below to execute.`,
             ...prev,
           ]);
         }
       } else {
+        const isShieldVeto = reasoning.includes('Capital Shield') || reasoning.includes('small capital') || reasoning.includes('tolerance') || reasoning.includes('Stop loss risk');
         const isMemoryVeto = reasoning.includes('AI MEMORY') || reasoning.includes('AI Memory') || reasoning.includes('Pattern memory') || reasoning.includes('stopped-out');
-        if (isMemoryVeto) {
+
+        if (isShieldVeto) {
+          setLogs(prev => [
+            `[CAPITAL SHIELD 🛡️] Trade vetoed on ${pair} to protect MT5 balance:`,
+            `  -> ${reasoning}`,
+            ...prev,
+          ]);
+        } else if (isMemoryVeto) {
           setLogs(prev => [
             `[AI MEMORY 🧠] Vetoed ${pair} ${direction.toUpperCase()} setup to avoid repeating past loss pattern:`,
             `  -> ${reasoning}`,

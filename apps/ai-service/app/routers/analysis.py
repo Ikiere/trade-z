@@ -60,6 +60,9 @@ class AnalysisRequest(BaseModel):
     history: Optional[list] = None
     today_signal_count: Optional[int] = 0
     daily_signal_limit: Optional[int] = 100
+    account_balance: Optional[float] = None
+    account_equity: Optional[float] = None
+    account_leverage: Optional[float] = None
 
 
 class ChatQueryRequest(BaseModel):
@@ -129,6 +132,9 @@ async def quick_analysis(request: AnalysisRequest):
         "daily_signal_limit": request.daily_signal_limit or 100,
         "history": request.history or [],
         "risk_reward_ratio": rr,
+        "account_balance": request.account_balance,
+        "account_equity": request.account_equity,
+        "account_leverage": request.account_leverage,
         "engine_results": {}
     }
 
@@ -232,6 +238,8 @@ async def quick_analysis(request: AnalysisRequest):
             "stop_loss": cert.get("stop_loss", 0.0),
             "take_profit": cert.get("take_profit", 0.0),
             "risk_reward": cert.get("risk_reward", rr),
+            "recommended_lot_size": cert.get("recommended_lot_size", 0.01),
+            "dollar_risk": cert.get("dollar_risk", 0.0),
             "certificate": cert,
             "timestamp": datetime.now(timezone.utc).isoformat()
         },

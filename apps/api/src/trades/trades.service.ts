@@ -96,16 +96,19 @@ export class TradesService {
     const pipMult = sym.includes('JPY') ? 100 : sym.includes('XAU') || sym.includes('GOLD') ? 10 : sym.includes('BTC') || sym.includes('ETH') ? 1 : 10000;
     const stopLossDistancePips = Math.abs(tradeData.entryPrice - tradeData.stopLoss) * pipMult;
 
-    // 3. Smart Account Capital Protection
-    // Protect small accounts from wide stop-loss liquidations
-    const approxDollarLossFor001 = stopLossDistancePips * (sym.includes('JPY') ? 0.065 : sym.includes('XAU') ? 1.0 : sym.includes('BTC') ? 0.01 : 0.10);
-    const maxAllowedDollarRisk = equity < 150
-      ? Math.max(15.0, equity * 0.35)
-      : equity * ((tradeData.riskPercent || 1.0) * 2.5 / 100.0);
+    // Check Global Kill Switch
+    if (process.env.TRADING_ENABLED === 'false') {
+      throw new BadRequestException('Global Trading Kill Switch is ACTIVE (TRADING_ENABLED=false). Order execution is suspended.');
+    }
 
-    if (equity < 600 && approxDollarLossFor001 > maxAllowedDollarRisk) {
+    // 3. Smart Account Capital Protection (Institutional 0.5% - 2.0% Hard Cap)
+    const approxDollarLossFor001 = stopLossDistancePips * (sym.includes('JPY') ? 0.065 : sym.includes('XAU') || sym.includes('GOLD') ? 1.0 : sym.includes('BTC') ? 0.01 : 0.10);
+    const effectiveRiskPct = Math.min(Math.max(tradeData.riskPercent || 1.0, 0.5), 2.0);
+    const maxAllowedDollarRisk = equity * (effectiveRiskPct / 100.0);
+
+    if (equity > 0 && approxDollarLossFor001 > maxAllowedDollarRisk) {
       throw new BadRequestException(
-        `Capital Protection Veto: Setup on ${tradeData.pair} has a wide stop loss risking ~$${approxDollarLossFor001.toFixed(2)} at minimum 0.01 lot. This would exceed the safe risk limit for your $${equity.toFixed(2)} equity. Trade blocked to avoid burning account capital.`,
+        `Capital Shield Veto: Broker minimum volume (0.01 lot) risks ~$${approxDollarLossFor001.toFixed(2)} (${((approxDollarLossFor001 / equity) * 100).toFixed(1)}% of equity), exceeding maximum allowed ${effectiveRiskPct.toFixed(1)}% risk ($${maxAllowedDollarRisk.toFixed(2)}) on $${equity.toFixed(2)} equity. Trade blocked to protect capital.`,
       );
     }
 

@@ -514,7 +514,6 @@ export default function LiveScannerWidget() {
     stopLoss: number;
     takeProfit: number;
     lotSize?: number;
-    overrideSafety?: boolean;
   }) => {
     const apiBase = getApiBaseUrl();
     const supabase = createClient();
@@ -527,7 +526,7 @@ export default function LiveScannerWidget() {
 
     // ── GUARD 1: Trading Session Protection Shield ─────────────
     const sessionShield = checkTradingSession(setup.pair);
-    if (!setup.overrideSafety && !sessionShield.isEligible) {
+    if (!sessionShield.isEligible) {
       setLogs(prev => [
         `[SESSION SHIELD 🛡️] Trade execution vetoed: ${setup.pair} is outside active ${sessionShield.sessionName}!`,
         `  -> Current: ${sessionShield.currentUtcTime} | Session Hours: ${sessionShield.activeHours}`,
@@ -538,26 +537,24 @@ export default function LiveScannerWidget() {
     }
 
     // ── GUARD 2: Greed Shield — Max 2 Open Positions in MT5 ────
-    if (!setup.overrideSafety) {
-      try {
-        const posRes = await fetch('http://127.0.0.1:5001/positions', { signal: AbortSignal.timeout(1500) });
-        if (posRes.ok) {
-          const posData = await posRes.json();
-          const activePositions = Array.isArray(posData.positions) ? posData.positions : [];
-          if (activePositions.length >= 2) {
-            setLogs(prev => [
-              `[GREED SHIELD 🛑] Trade vetoed: Maximum 2 open positions active in MT5 (${activePositions.length}/2).`,
-              `  -> Institutional discipline rule: No new trades will be executed until an existing position is closed.`,
-              ...prev,
-            ]);
-            return null;
-          }
+    try {
+      const posRes = await fetch('http://127.0.0.1:5001/positions', { signal: AbortSignal.timeout(1500) });
+      if (posRes.ok) {
+        const posData = await posRes.json();
+        const activePositions = Array.isArray(posData.positions) ? posData.positions : [];
+        if (activePositions.length >= 2) {
+          setLogs(prev => [
+            `[GREED SHIELD 🛑] Trade vetoed: Maximum 2 open positions active in MT5 (${activePositions.length}/2).`,
+            `  -> Institutional discipline rule: No new trades will be executed until an existing position is closed.`,
+            ...prev,
+          ]);
+          return null;
         }
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
 
     // ── GUARD 3: Greed Shield — Max 2 Trades Per Day ───────────
-    if (!setup.overrideSafety && todaySignalCount >= 2) {
+    if (todaySignalCount >= 2) {
       setLogs(prev => [
         `[GREED SHIELD 🛑] MT5 auto-trade vetoed: Daily limit of 2 trades reached for today (${todaySignalCount}/2).`,
         `  -> Institutional rule: 2 trades/day maximum to eliminate overtrading and emotional greed. Resumes tomorrow.`,
@@ -567,8 +564,7 @@ export default function LiveScannerWidget() {
     }
 
     // ── GUARD 4: Loss Cool-Down Shield ─────────────────────────
-    if (!setup.overrideSafety) {
-      try {
+    try {
         const histData = await mt5Fetch('/history');
         if (histData && histData.success) {
           const trades = Array.isArray(histData.trades) ? histData.trades : [];
@@ -587,7 +583,6 @@ export default function LiveScannerWidget() {
           }
         }
       } catch (_) {}
-    }
 
     // 1. Send to MT5 bridge (direct or via backend API)
     try {
@@ -602,7 +597,6 @@ export default function LiveScannerWidget() {
           takeProfit: setup.takeProfit,
           lotSize: executedLot,
           riskPercent: 1.0,
-          overrideSafety: setup.overrideSafety ?? false,
         }),
       });
 

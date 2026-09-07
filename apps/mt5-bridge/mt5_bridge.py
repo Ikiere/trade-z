@@ -87,41 +87,83 @@ def clean_symbol(sym: str) -> str:
     return s
 
 
-def calculate_safe_lot_size(symbol_info, equity: float, sl_dist_points: float, risk_percent: float = 1.0) -> float:
+def calculate_safe_lot_size(symbol_info, equity: float, sl_dist_points: float, risk_percent: float = 1.0) -> dict:
     """
     Calculates precise, institutional lot size based on real account equity and broker tick value.
-    Protects smaller accounts from over-leveraging.
+    Protects smaller accounts ($20-$500) from catastrophic drawdown.
+    Hard enforces risk_percent <= 2.0% (target 0.5% - 1.0%).
+    If the minimum broker volume (e.g. 0.01) creates risk exceeding allowed risk, returns valid: False, lot: 0.0.
     """
-    min_volume = symbol_info.volume_min or 0.01
-    max_volume = symbol_info.volume_max or 100.0
-    vol_step = symbol_info.volume_step or 0.01
+    min_volume = float(symbol_info.volume_min or 0.01)
+    max_volume = float(symbol_info.volume_max or 100.0)
+    vol_step = float(symbol_info.volume_step or 0.01)
 
-    if sl_dist_points <= 0 or equity <= 0:
-        return min_volume
+    # Hard cap risk percentage to 2.0% maximum
+    effective_risk_pct = min(max(risk_percent, 0.1), 2.0)
+    max_risk_dollars = equity * (effective_risk_pct / 100.0)
 
-    risk_money = equity * (risk_percent / 100.0)
-    tick_value = symbol_info.trade_tick_value or 1.0
-    tick_size = symbol_info.trade_tick_size or 0.00001
+    tick_value = float(symbol_info.trade_tick_value or 1.0)
+    tick_size = float(symbol_info.trade_tick_size or 0.00001)
+
+    if sl_dist_points <= 0 or equity <= 0 or tick_size <= 0:
+        return {
+            "valid": False,
+            "lot": 0.0,
+            "error": "Invalid equity or stop loss distance",
+            "max_risk_dollars": max_risk_dollars,
+            "est_loss": 0.0
+        }
 
     points = sl_dist_points / tick_size
     loss_per_1_lot = points * tick_value
 
     if loss_per_1_lot <= 0:
-        return min_volume
+        return {
+            "valid": False,
+            "lot": 0.0,
+            "error": "Loss per 1 lot calculated as zero or negative",
+            "max_risk_dollars": max_risk_dollars,
+            "est_loss": 0.0
+        }
 
-    raw_lot = risk_money / loss_per_1_lot
+    # Calculate dollar loss if trading minimum allowed broker volume
+    loss_at_min_volume = loss_per_1_lot * min_volume
 
+    if loss_at_min_volume > max_risk_dollars:
+        # Crucial small-account safety: broker minimum volume is too large for account size and SL distance
+        return {
+            "valid": False,
+            "lot": 0.0,
+            "error": (
+                f"Capital Shield Veto: Broker minimum volume ({min_volume}) with stop distance ({sl_dist_points:.5f}) "
+                f"would risk ${loss_at_min_volume:.2f} ({ (loss_at_min_volume / equity * 100.0):.1f}% of equity), "
+                f"exceeding max allowed {effective_risk_pct:.1f}% risk (${max_risk_dollars:.2f}) on equity ${equity:.2f}."
+            ),
+            "max_risk_dollars": max_risk_dollars,
+            "est_loss": loss_at_min_volume
+        }
+
+    raw_lot = max_risk_dollars / loss_per_1_lot
     # Round down to nearest step
     steps = int(raw_lot / vol_step)
     calculated_lot = round(steps * vol_step, 2)
 
-    # Clamping
     if calculated_lot < min_volume:
+        # If steps rounded below min_volume even though loss_at_min_volume <= max_risk_dollars
         calculated_lot = min_volume
-    elif calculated_lot > max_volume:
+
+    if calculated_lot > max_volume:
         calculated_lot = max_volume
 
-    return calculated_lot
+    est_loss = loss_per_1_lot * calculated_lot
+
+    return {
+        "valid": True,
+        "lot": calculated_lot,
+        "error": None,
+        "max_risk_dollars": max_risk_dollars,
+        "est_loss": est_loss
+    }
 
 
 class MT5BridgeHandler(BaseHTTPRequestHandler):
@@ -514,38 +556,46 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
         is_market_order = entry_price <= 0 or abs(entry_price - market_price) <= (sym_info.point * 15)
         price_to_send = market_price if is_market_order else entry_price
 
-        # 3. Account Capital Protection & Sizing
+        # 3. Account Capital Protection & Sizing (Institutional Hard Risk Limits)
         sl_dist = abs(price_to_send - stop_loss)
-        if user_lot:
-            lot = round(float(user_lot), 2)
-        else:
-            lot = calculate_safe_lot_size(sym_info, acc.equity, sl_dist, risk_percent)
-
-        # Smart Capital Safety Guard:
-        # Check monetary risk of 0.01 lot vs account equity
-        tick_val = sym_info.trade_tick_value or 1.0
-        tick_sz = sym_info.trade_tick_size or 0.00001
-        est_loss_at_sl = (sl_dist / tick_sz) * tick_val * lot
-
-        override_safety = bool(data.get('overrideSafety') or data.get('override_safety') or False)
-
-        if acc.equity < 150.0:
-            # Small account calibration: broker minimum lot is 0.01.
-            # Allow 0.01 lot orders with risk up to 40% of equity (or $20 max loss) so standard 15-40 pip stops work!
-            max_allowed_loss = max(20.0, acc.equity * 0.40)
-        else:
-            max_allowed_loss = acc.equity * (max(2.0, risk_percent * 2.0) / 100.0)
-
-        if not override_safety and est_loss_at_sl > max_allowed_loss:
+        if sl_dist <= 0:
             self._send_json(400, {
                 'success': False,
-                'error': (
-                    f'Capital Protection Veto: Estimated stop loss risk (${est_loss_at_sl:.2f}) '
-                    f'exceeds safe limit (${max_allowed_loss:.2f}) for current equity (${acc.equity:.2f}). '
-                    f'Trade blocked to prevent burning account capital on high-volatility wide stops.'
-                )
+                'error': 'Stop loss must be provided and cannot equal entry price.'
             })
             return
+
+        effective_risk_pct = min(max(risk_percent, 0.1), 2.0)
+        max_allowed_loss = acc.equity * (effective_risk_pct / 100.0)
+
+        sizing = calculate_safe_lot_size(sym_info, acc.equity, sl_dist, effective_risk_pct)
+        if not sizing["valid"]:
+            self._send_json(400, {
+                'success': False,
+                'error': sizing['error'],
+                'risk_veto': True
+            })
+            return
+
+        lot = sizing["lot"]
+
+        # If explicit lot was provided, verify it strictly stays under the hard 2.0% risk cap
+        if user_lot:
+            requested_lot = round(float(user_lot), 2)
+            tick_val = float(sym_info.trade_tick_value or 1.0)
+            tick_sz = float(sym_info.trade_tick_size or 0.00001)
+            est_loss_requested = (sl_dist / tick_sz) * tick_val * requested_lot
+            if est_loss_requested > max_allowed_loss:
+                self._send_json(400, {
+                    'success': False,
+                    'error': (
+                        f"Capital Shield Veto: Requested lot {requested_lot} risks ${est_loss_requested:.2f}, "
+                        f"which exceeds maximum allowed {effective_risk_pct:.1f}% risk (${max_allowed_loss:.2f}) on equity ${acc.equity:.2f}."
+                    ),
+                    'risk_veto': True
+                })
+                return
+            lot = requested_lot
 
         # 4. Determine MT5 Order Action Type
         req_type = str(data.get('orderType') or data.get('order_type') or '').lower().strip()

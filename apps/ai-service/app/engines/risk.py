@@ -60,43 +60,41 @@ class RiskEngine(BaseEngine):
             sl_points = 0.0020  # 20 pips
             loss_at_001 = 2.00  # ~$2.00 at 0.01 lot
 
-        # 3. Small Account Capital Shield Guard
+        # 3. Small Account Capital Shield Guard (Hard 0.5% - 2.0% Maximum Risk)
         recommended_lot = 0.01
-        risk_percent = 1.0
+        risk_percent = float(context.get("risk_percent", 1.0) or 1.0)
+        # Institutional hard cap: 0.5% to 2.0%
+        effective_risk_pct = min(max(risk_percent, 0.5), 2.0)
 
         if equity > 0:
-            if equity < 150.0:
-                # Small account (<$150): Enforce strict capital preservation.
-                # Strictly cap risk to maximum 5.0% of balance (or $3.50 max).
-                max_allowable_loss = min(3.50, max(1.50, equity * 0.05))
-                if loss_at_001 > max_allowable_loss:
-                    return EngineResult(
-                        result="rejected",
-                        confidence=0.0,
-                        explanation=(
-                            f"AI Capital Shield Veto: Stop loss dollar risk (${loss_at_001:.2f}) exceeds safe 5% risk "
-                            f"(${max_allowable_loss:.2f}) on your ${equity:.2f} MT5 balance. Trade vetoed to protect small "
-                            f"capital from wide-stop wicks. Scan Major Forex pairs (EURUSD, GBPUSD, AUDUSD) where 0.01 lot stop is only ~$2.00."
-                        ),
-                        metrics={
-                            "risk_reward_ratio": target_rr,
-                            "recommended_lot_size": 0.01,
-                            "dollar_risk": loss_at_001,
-                            "equity": equity,
-                            "capital_shield": "vetoed"
-                        },
-                        validation_status="limit_breached"
-                    )
-                recommended_lot = 0.01
-            else:
-                # Standard account (>$150): Institutional 1.0% risk sizing
-                target_risk_dollars = equity * (risk_percent / 100.0)
-                if loss_at_001 > 0:
-                    raw_lot = (target_risk_dollars / loss_at_001) * 0.01
-                    # Clamp between 0.01 and 10.0 lots
-                    recommended_lot = round(max(0.01, min(10.0, raw_lot)), 2)
-                else:
-                    recommended_lot = 0.01
+            max_allowable_loss = equity * (effective_risk_pct / 100.0)
+
+            # Check if broker minimum 0.01 volume exceeds allowed risk dollars
+            if loss_at_001 > max_allowable_loss:
+                pct_loss = (loss_at_001 / equity) * 100.0
+                return EngineResult(
+                    result="rejected",
+                    confidence=0.0,
+                    explanation=(
+                        f"AI Capital Shield Veto: Minimum volume (0.01 lot) with required stop distance risks ${loss_at_001:.2f} "
+                        f"({pct_loss:.1f}% of equity), exceeding your maximum allowed {effective_risk_pct:.1f}% risk "
+                        f"(${max_allowable_loss:.2f}) on current ${equity:.2f} equity. Trade rejected under small-account safety rules."
+                    ),
+                    metrics={
+                        "risk_reward_ratio": target_rr,
+                        "recommended_lot_size": 0.0,
+                        "dollar_risk": loss_at_001,
+                        "equity": equity,
+                        "max_allowable_loss": max_allowable_loss,
+                        "capital_shield": "vetoed"
+                    },
+                    validation_status="limit_breached"
+                )
+
+            # Sizing for accounts where loss_at_001 <= max_allowable_loss
+            raw_lot = (max_allowable_loss / loss_at_001) * 0.01
+            # Round down to nearest 0.01, clamped between 0.01 and 10.0 lots
+            recommended_lot = round(max(0.01, min(10.0, raw_lot)), 2)
 
         explanation = (
             f"Risk verification passed. Targets yield a 1:{target_rr:.2f} Risk/Reward structure. "

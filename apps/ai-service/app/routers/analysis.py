@@ -30,11 +30,13 @@ from app.engines.confidence import ConfidenceEngine
 from app.engines.decision import DecisionEngine
 
 from app.engines.sentinel_engine import SentinelEngine
+from app.services.reviewers import OpenRouterReviewer
 
 router = APIRouter()
 
 # Instantiate central data service and pipeline engines
 market_data_service = MarketDataService()
+openrouter_reviewer = OpenRouterReviewer()
 
 eligibility_engine = EligibilityEngine()
 higher_tf_engine = HigherTimeframeEngine()
@@ -177,7 +179,7 @@ async def quick_analysis(request: AnalysisRequest):
     # 1. Fetch economic calendar news safety
     news_safe = await check_news_filter(request.pair)
 
-    # 2. Get normalized market data snapshot
+    # 2. Get normalized market data snapshot (Pre-Flight Sanity Filter)
     try:
         snapshot = await market_data_service.get_market_snapshot(
             symbol=request.pair,
@@ -186,20 +188,53 @@ async def quick_analysis(request: AnalysisRequest):
             news_safe=news_safe
         )
     except Exception as val_err:
-        # Fall back to simulated market snapshot so pipeline still executes with valid institutional levels
-        print(f"[analysis.py] Live data query warning: {val_err}. Utilizing simulated chart feed.")
-        from app.services.market_data import MarketSnapshot
-        fallback_df = generate_simulated_candles(request.pair, request.timeframe)
-        higher_tf = "4h" if request.timeframe in ["15m", "30m", "1h"] else "1d"
-        higher_df = generate_simulated_candles(request.pair, higher_tf)
-        snapshot = MarketSnapshot(
-            symbol=request.pair,
-            timeframe=request.timeframe,
-            df=fallback_df,
-            higher_df=higher_df,
-            corr_df=None,
-            news_safe=news_safe
-        )
+        print(f"[analysis.py] Live data query exception: {val_err}")
+        snapshot = None
+
+    # Institutional Rule: If live market data fails sanity validation, NEVER run on simulated candles
+    if snapshot is None or not getattr(snapshot, "is_valid", True) or snapshot.df is None or len(snapshot.df) < 20:
+        val_errors = getattr(snapshot, "validation_errors", ["LIVE_MARKET_DATA_UNAVAILABLE"])
+        return {
+            "success": True,
+            "data": {
+                "pair": request.pair,
+                "timeframe": request.timeframe,
+                "decision": "NO_TRADE",
+                "direction": "neutral",
+                "order_type": "none",
+                "confidence": 0.0,
+                "reasoning": (
+                    f"Data Integrity Veto: Market data pre-flight check failed ({', '.join(val_errors)}). "
+                    f"Under institutional risk rules, live trading on unverified or simulated data is strictly prohibited."
+                ),
+                "rejection_reasons": val_errors,
+                "expected_trigger": "Restore verified live broker/TwelveData market data feed.",
+                "confluence_breakdown": {
+                    "marketStructure": 0.0,
+                    "trend": 0.0,
+                    "momentum": 0.0,
+                    "liquidity": 0.0,
+                    "economicNews": 100.0 if news_safe else 0.0,
+                    "riskReward": 0.0,
+                    "overall": 0.0
+                },
+                "entry_price": 0.0,
+                "current_price": 0.0,
+                "stop_loss": 0.0,
+                "take_profit": 0.0,
+                "risk_reward": 0.0,
+                "recommended_lot_size": 0.0,
+                "dollar_risk": 0.0,
+                "collaboration": {},
+                "certificate": {
+                    "decision": "NO_TRADE",
+                    "reason": "DATA_INTEGRITY_FAILURE",
+                    "details": val_errors
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
 
     # 3. Construct pipeline execution context
     rr = 2.5 if request.timeframe == "15m" else 3.2
@@ -280,6 +315,23 @@ async def quick_analysis(request: AnalysisRequest):
     for key, res in context["engine_results"].items():
         if res.validation_status in ["invalid", "limit_breached", "closed"]:
             rejection_reasons.append(res.explanation)
+
+    # 5b. Decoupled AI Reviewer Layer (Adversarial Critic)
+    # The LLM CANNOT create trades or change risk; it can only vet/criticize the deterministic setup
+    if dec_res.result == "approve":
+        try:
+            review_res = await openrouter_reviewer.review_setup(cert)
+            cert["ai_review"] = review_res.dict()
+            if review_res.decision == "REJECT":
+                dec_res.result = "reject"
+                critic_reasons = review_res.contradictions or review_res.risk_flags or [review_res.critic_notes]
+                dec_res.explanation = f"NO TRADE: AI Critic Veto — {review_res.critic_notes or 'SMC structural contradictions identified.'}"
+                rejection_reasons.extend(critic_reasons)
+            elif review_res.decision == "REQUEST_MORE_DATA":
+                dec_res.result = "wait"
+                dec_res.explanation = f"WAIT: AI Critic requested further confirmation — {review_res.critic_notes}"
+        except Exception as rev_err:
+            print(f"[analysis.py] AI Reviewer non-fatal exception: {rev_err}")
 
     # 6. Map to backwards-compatible JSON schema
     confluence_breakdown = {

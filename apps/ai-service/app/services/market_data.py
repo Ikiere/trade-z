@@ -5,6 +5,9 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 
 
+from app.services.market_data_validator import validate_dataframe_candles, ValidationResult
+
+
 class MarketSnapshot:
     """
     Unified immutable container holding all validated data feeds
@@ -14,10 +17,12 @@ class MarketSnapshot:
         self,
         symbol: str,
         timeframe: str,
-        df: pd.DataFrame,
-        higher_df: pd.DataFrame,
+        df: Optional[pd.DataFrame],
+        higher_df: Optional[pd.DataFrame],
         corr_df: Optional[pd.DataFrame] = None,
         news_safe: bool = True,
+        is_valid: bool = True,
+        validation_errors: Optional[list] = None,
         metadata: Optional[Dict[str, Any]] = None
     ):
         self.symbol = symbol
@@ -26,6 +31,8 @@ class MarketSnapshot:
         self.higher_df = higher_df
         self.corr_df = corr_df
         self.news_safe = news_safe
+        self.is_valid = is_valid
+        self.validation_errors = validation_errors or []
         self.timestamp = datetime.now(timezone.utc)
         self.metadata = metadata or {}
 
@@ -126,6 +133,7 @@ class MarketDataService:
         """
         Builds a comprehensive MarketSnapshot. Uses cached data if within freshness threshold,
         otherwise updates feeds from TwelveData API.
+        Enforces strict pre-flight validation. NEVER falls back to fake candles for live analysis.
         """
         cache_key = f"{symbol}_{timeframe}"
         now = datetime.now(timezone.utc)
@@ -134,7 +142,7 @@ class MarketDataService:
         cached = self.cache.get(cache_key)
         if cached:
             age = now - cached["timestamp"]
-            if age < self.cache_expiry:
+            if age < self.cache_expiry and cached["snapshot"].is_valid:
                 print(f"[MarketDataService] Serving fresh cached snapshot for {cache_key} (age: {age.total_seconds():.1f}s)")
                 return cached["snapshot"]
 
@@ -142,14 +150,42 @@ class MarketDataService:
             # 1. Fetch primary timeframe candles
             df = await self.fetch_candles_with_retry(symbol, timeframe, api_key)
 
-            # 2. Fetch higher timeframe candles for bias check (e.g. 4h if 15m requested, 1d if 4h requested)
+            # 2. Pre-flight validation on primary candles
+            val_primary = validate_dataframe_candles(df, timeframe=timeframe, min_candles=30)
+            if not val_primary.is_valid:
+                print(f"[MarketDataService] Pre-flight validation failed on primary timeframe: {val_primary.failure_reasons}")
+                return MarketSnapshot(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    df=df,
+                    higher_df=None,
+                    corr_df=None,
+                    news_safe=news_safe,
+                    is_valid=False,
+                    validation_errors=val_primary.failure_reasons
+                )
+
+            # 3. Fetch higher timeframe candles for bias check (e.g. 4h if 15m requested, 1d if 4h requested)
             higher_timeframe = "4h" if timeframe in ["15m", "30m", "1h"] else "1d"
             higher_df = await self.fetch_candles_with_retry(symbol, higher_timeframe, api_key)
 
-            # 3. Fetch correlation pair if applicable (e.g., DXY or USDX)
+            val_higher = validate_dataframe_candles(higher_df, timeframe=higher_timeframe, min_candles=20)
+            if not val_higher.is_valid:
+                print(f"[MarketDataService] Pre-flight validation failed on higher timeframe: {val_higher.failure_reasons}")
+                return MarketSnapshot(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    df=df,
+                    higher_df=higher_df,
+                    corr_df=None,
+                    news_safe=news_safe,
+                    is_valid=False,
+                    validation_errors=val_higher.failure_reasons
+                )
+
+            # 4. Fetch correlation pair if applicable
             corr_df = None
             if symbol.upper() in ["EURUSD", "GBPUSD", "XAUUSD"]:
-                # Try fetching EURUSD as USD alignment indicator if scanning Gold, or query DXY index
                 try:
                     corr_df = await self.fetch_candles_with_retry("USDJPY", timeframe, api_key, outputsize=30)
                 except Exception as corr_exc:
@@ -161,7 +197,9 @@ class MarketDataService:
                 df=df,
                 higher_df=higher_df,
                 corr_df=corr_df,
-                news_safe=news_safe
+                news_safe=news_safe,
+                is_valid=True,
+                validation_errors=[]
             )
 
             # Write cache
@@ -172,30 +210,20 @@ class MarketDataService:
             return snapshot
 
         except Exception as e:
-            # If fresh data failed, fall back to any stale cache if available
-            if cached:
-                print(f"[MarketDataService] Warning: Updating failed. Falling back to stale cache for {cache_key}: {str(e)}")
+            # If fresh data failed, check if we have a valid cached snapshot
+            if cached and cached.get("snapshot") and cached["snapshot"].is_valid:
+                print(f"[MarketDataService] Warning: Fetch failed, serving cached snapshot for {cache_key}: {str(e)}")
                 return cached["snapshot"]
-            
-            # Fall back to high-fidelity market candles so the analysis pipeline never crashes with 0
-            print(f"[MarketDataService] TwelveData query exception ({str(e)}). Serving realistic fallback candles for {symbol} ({timeframe}).")
-            try:
-                from app.services.structure import generate_simulated_candles
-                df = generate_simulated_candles(symbol, timeframe)
-                higher_timeframe = "4h" if timeframe in ["15m", "30m", "1h"] else "1d"
-                higher_df = generate_simulated_candles(symbol, higher_timeframe)
-                snapshot = MarketSnapshot(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    df=df,
-                    higher_df=higher_df,
-                    corr_df=None,
-                    news_safe=news_safe
-                )
-                self.cache[cache_key] = {
-                    "snapshot": snapshot,
-                    "timestamp": now
-                }
-                return snapshot
-            except Exception as sim_err:
-                raise ValueError(f"Market data unavailable: {str(e)} (Simulation error: {str(sim_err)})")
+
+            # Institutional rule: If live market data fails, NEVER generate fake candles. Return invalid snapshot.
+            print(f"[MarketDataService] Live market data query failed for {symbol} ({timeframe}): {str(e)}")
+            return MarketSnapshot(
+                symbol=symbol,
+                timeframe=timeframe,
+                df=None,
+                higher_df=None,
+                corr_df=None,
+                news_safe=news_safe,
+                is_valid=False,
+                validation_errors=[f"DATA_FETCH_EXCEPTION: {str(e)}"]
+            )

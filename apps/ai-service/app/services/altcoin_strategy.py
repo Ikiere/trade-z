@@ -13,6 +13,33 @@ from typing import Dict, Any, Optional
 from app.services.market_data import MarketSnapshot
 
 
+def get_bitcoin_regime(btc_df: Optional[pd.DataFrame] = None) -> str:
+    """
+    Evaluates Bitcoin's regime from 15M/1H candles:
+    - 'btc_flash_dump': Severe selloff (< -2.0% in last 6 bars or trading below EMA21 with EMA9 < EMA21)
+    - 'bullish_expansion': BTC breaking higher above EMA21 (> +2.0%)
+    - 'consolidation_optimal': Healthy ranging/consolidation
+    - 'supportive_neutral': Default neutral condition
+    """
+    if btc_df is None or btc_df.empty or len(btc_df) < 15:
+        return "supportive_neutral"
+
+    b_closes = btc_df["close"].values
+    if len(b_closes) < 6:
+        return "supportive_neutral"
+
+    b_ema9 = pd.Series(b_closes).ewm(span=9).mean().iloc[-1]
+    b_ema21 = pd.Series(b_closes).ewm(span=21).mean().iloc[-1]
+    b_pct_change = ((b_closes[-1] - b_closes[-6]) / b_closes[-6]) * 100.0
+
+    if b_pct_change < -2.0 or (b_closes[-1] < b_ema21 and b_ema9 < b_ema21):
+        return "btc_flash_dump"
+    elif b_pct_change > 2.0 and b_closes[-1] > b_ema21:
+        return "bullish_expansion"
+    else:
+        return "consolidation_optimal"
+
+
 def analyze_altcoin_strategy(
     symbol: str,
     snapshot: MarketSnapshot,
@@ -45,21 +72,14 @@ def analyze_altcoin_strategy(
     btc_note = "Bitcoin is consolidating stably. Altcoin liquidity rotation favorable."
 
     if btc_snapshot is not None and not btc_snapshot.df.empty and len(btc_snapshot.df) >= 15:
-        b_closes = btc_snapshot.df["close"].values
-        b_ema9 = pd.Series(b_closes).ewm(span=9).mean().iloc[-1]
-        b_ema21 = pd.Series(b_closes).ewm(span=21).mean().iloc[-1]
-        b_pct_change = ((b_closes[-1] - b_closes[-6]) / b_closes[-6]) * 100.0
-
-        if b_pct_change < -2.0 or (b_closes[-1] < b_ema21 and b_ema9 < b_ema21):
-            btc_regime = "dumping_hostile"
+        btc_regime = get_bitcoin_regime(btc_snapshot.df)
+        if btc_regime == "btc_flash_dump":
             btc_modifier = -25.0
             btc_note = "BTC Compass: Bitcoin is experiencing sharp selling pressure. Altcoin longs face severe liquidation contagion risk."
-        elif b_pct_change > 2.0 and b_closes[-1] > b_ema21:
-            btc_regime = "bullish_expansion"
+        elif btc_regime == "bullish_expansion":
             btc_modifier = +10.0
             btc_note = "BTC Compass: Bitcoin is in active expansion mode, providing broad crypto tailwinds."
         else:
-            btc_regime = "consolidation_optimal"
             btc_modifier = +15.0
             btc_note = "BTC Compass: Bitcoin is ranging stably above support—ideal environment for Altcoin Smart Money breakouts!"
     else:
@@ -119,14 +139,14 @@ def analyze_altcoin_strategy(
         score += 10.0
         tags.append("fvg_displacement")
 
-    if alt_trend_bullish and btc_regime != "dumping_hostile":
+    if alt_trend_bullish and btc_regime not in ("dumping_hostile", "btc_flash_dump"):
         score += 12.0
         tags.append("relative_strength_aligned")
 
     score = max(10.0, min(96.0, score))
 
     # Construct actionable trader rationale
-    if btc_regime == "dumping_hostile":
+    if btc_regime in ("dumping_hostile", "btc_flash_dump"):
         rationale = f"⚠️ ASLM Alert: {btc_note} Altcoin exposure guarded until Bitcoin stabilizes."
     elif bullish_sfp:
         rationale = f"🔥 ASLM Signal: Liquidity sweep of retail lows detected on {symbol}! Smart money SFP reversal confirmed with FVG order flow. {btc_note}"

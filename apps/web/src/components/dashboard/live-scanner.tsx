@@ -255,10 +255,14 @@ export default function LiveScannerWidget() {
         executedTicket = bridgeJson.ticket;
         executedLot = bridgeJson.volume || executedLot;
         pricePlaced = bridgeJson.price || pricePlaced;
-        const mt5OrderType = (bridgeJson.order_type || setup.orderType || (setup.direction === 'long' ? 'BUY' : 'SELL')).toUpperCase();
+        const rawOrderType = (bridgeJson.order_type || setup.orderType || (setup.direction === 'long' ? 'BUY' : 'SELL')).toLowerCase();
+        const normalizedOrderType = (rawOrderType === 'buy' || rawOrderType === 'sell') ? 'market' : rawOrderType;
+        const displayOrderType = normalizedOrderType === 'market'
+          ? (setup.direction === 'long' ? 'BUY (MARKET)' : 'SELL (MARKET)')
+          : normalizedOrderType.toUpperCase();
 
         setLogs(prev => [
-          `[MT5 EXECUTED 🚀] Placed ${mt5OrderType} (${executedLot} lots) on MetaTrader 5! (Ticket #${executedTicket})`,
+          `[MT5 EXECUTED 🚀] Placed ${displayOrderType} (${executedLot} lots) on MetaTrader 5! (Ticket #${executedTicket})`,
           `  -> Symbol: ${bridgeJson.symbol} | Price: ${pricePlaced} | SL: ${bridgeJson.sl} | TP: ${bridgeJson.tp}`,
           ...prev
         ]);
@@ -268,7 +272,7 @@ export default function LiveScannerWidget() {
         setLatestSetup(prev => prev ? {
           ...prev,
           mt5Ticket: executedTicket,
-          orderType: mt5OrderType.toLowerCase(),
+          orderType: normalizedOrderType,
         } : null);
 
         // Sync exact MT5 order type and ticket to the Supabase signal
@@ -278,7 +282,7 @@ export default function LiveScannerWidget() {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
             body: JSON.stringify({
-              order_type: mt5OrderType.toLowerCase(),
+              order_type: normalizedOrderType,
               mt5_ticket: executedTicket,
             }),
           }).catch(() => {});
@@ -483,12 +487,12 @@ export default function LiveScannerWidget() {
         }
       }
 
-      // Exact order type calculation adhering to MT5 specifications
+      // Exact order type calculation adhering to MT5 specifications & Supabase signals constraint
       let orderType: string;
       const spreadThreshold = currentPrice * 0.0003;
       if (direction === 'long') {
         if (Math.abs(entryPrice - currentPrice) <= spreadThreshold) {
-          orderType = 'buy';
+          orderType = 'market';
         } else if (entryPrice < currentPrice) {
           orderType = 'buy limit';
         } else {
@@ -496,7 +500,7 @@ export default function LiveScannerWidget() {
         }
       } else {
         if (Math.abs(entryPrice - currentPrice) <= spreadThreshold) {
-          orderType = 'sell';
+          orderType = 'market';
         } else if (entryPrice > currentPrice) {
           orderType = 'sell limit';
         } else {
@@ -840,7 +844,11 @@ export default function LiveScannerWidget() {
                   ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
                   : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
               }`}>
-                {latestSetup.orderType ? latestSetup.orderType.toUpperCase() : (latestSetup.direction === 'long' ? '▲ BUY' : '▼ SELL')}
+                {latestSetup.orderType === 'market'
+                  ? (latestSetup.direction === 'long' ? '▲ BUY (MARKET)' : '▼ SELL (MARKET)')
+                  : latestSetup.orderType
+                  ? latestSetup.orderType.toUpperCase()
+                  : (latestSetup.direction === 'long' ? '▲ BUY' : '▼ SELL')}
               </span>
               <h4 className="text-sm font-bold text-white font-mono">{latestSetup.pair}</h4>
               <span className="text-[10px] font-mono text-[#64748b]">@{latestSetup.timestamp}</span>

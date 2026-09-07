@@ -228,7 +228,7 @@ async def quick_analysis(request: AnalysisRequest):
             "timeframe": request.timeframe,
             "decision": dec_res.result,
             "direction": standard_dir,
-            "order_type": cert.get("order_type", "buy" if standard_dir == "long" else "sell"),
+            "order_type": cert.get("order_type", "market"),
             "confidence": float(dec_res.confidence),
             "reasoning": dec_res.explanation,
             "rejection_reasons": rejection_reasons,

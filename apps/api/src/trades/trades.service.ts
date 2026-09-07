@@ -291,14 +291,32 @@ export class TradesService {
     if (!orderType) {
       const spread = currentPrice * 0.0003;
       if (direction === 'long') {
-        if (Math.abs(entryPrice - currentPrice) <= spread) orderType = 'buy';
+        if (Math.abs(entryPrice - currentPrice) <= spread) orderType = 'market';
         else if (entryPrice < currentPrice) orderType = 'buy limit';
         else orderType = 'buy stop';
       } else {
-        if (Math.abs(entryPrice - currentPrice) <= spread) orderType = 'sell';
+        if (Math.abs(entryPrice - currentPrice) <= spread) orderType = 'market';
         else if (entryPrice > currentPrice) orderType = 'sell limit';
         else orderType = 'sell stop';
       }
+    }
+
+    // Strict validation against signals_order_type_check constraint:
+    // ('buy limit', 'sell limit', 'buy stop', 'sell stop', 'buy stop limit', 'sell stop limit', 'market')
+    const ALLOWED_ORDER_TYPES = new Set([
+      'buy limit',
+      'sell limit',
+      'buy stop',
+      'sell stop',
+      'buy stop limit',
+      'sell stop limit',
+      'market',
+    ]);
+    const normalizedOrderType = String(orderType || '').toLowerCase().trim();
+    if (normalizedOrderType === 'buy' || normalizedOrderType === 'sell' || !ALLOWED_ORDER_TYPES.has(normalizedOrderType)) {
+      orderType = 'market';
+    } else {
+      orderType = normalizedOrderType;
     }
 
     const payload: Record<string, any> = {
@@ -355,6 +373,21 @@ export class TradesService {
     for (const k of allowed) {
       if (updates[k] !== undefined) filtered[k] = updates[k];
     }
+
+    if (filtered.order_type) {
+      const ALLOWED_ORDER_TYPES = new Set([
+        'buy limit',
+        'sell limit',
+        'buy stop',
+        'sell stop',
+        'buy stop limit',
+        'sell stop limit',
+        'market',
+      ]);
+      const norm = String(filtered.order_type).toLowerCase().trim();
+      filtered.order_type = (norm === 'buy' || norm === 'sell' || !ALLOWED_ORDER_TYPES.has(norm)) ? 'market' : norm;
+    }
+
     const { data, error } = await this.supabase
       .from('signals')
       .update(filtered)

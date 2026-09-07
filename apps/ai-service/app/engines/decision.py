@@ -138,7 +138,7 @@ class DecisionEngine(BaseEngine):
             tp = entry + (sl_dist * rr)
             spread_buffer = atr * 0.05
             if abs(entry - current_price) <= spread_buffer:
-                order_type = "buy"
+                order_type = "market"
             elif entry < current_price:
                 order_type = "buy limit"
             else:
@@ -160,7 +160,7 @@ class DecisionEngine(BaseEngine):
             tp = entry - (sl_dist * rr)
             spread_buffer = atr * 0.05
             if abs(entry - current_price) <= spread_buffer:
-                order_type = "sell"
+                order_type = "market"
             elif entry > current_price:
                 order_type = "sell limit"
             else:

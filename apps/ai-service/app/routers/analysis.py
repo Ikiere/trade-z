@@ -380,31 +380,6 @@ async def chat_analysis(request: ChatQueryRequest):
     # Jephthah's Intelligent Local Trading Buddy Brain
     prompt = request.prompt.lower().strip()
 
-    # 1. Casual conversational greetings (avoid sounding like a robot)
-    if any(prompt == w or prompt.startswith(w + " ") for w in ["hi", "hello", "hey", "sup", "yo", "good morning", "good afternoon", "howdy"]):
-        reply = (
-            "Hey brother! Jephthah here, your trading buddy and market copilot. 👊\n\n"
-            "I'm keeping my eyes on the charts, your MT5 positions, and live news flow so you don't have to stress. "
-            "How is your trading session going today? You can type `/trade` anytime to review your active positions, "
-            "or ask me about Gold, EURUSD, or your account balance!"
-        )
-
-    # 2. "How are you" / Friendly Check-ins
-    elif any(w in prompt for w in ["how are you", "how r u", "how do you feel", "how's it going", "how is it going", "what's up", "whats up"]):
-        reply = (
-            "Doing great, brother! Feeling sharp and locked in on the markets. ⚡\n\n"
-            "Watching the liquidity shifts and keeping tabs on your capital. "
-            "How can I help you right now? Want me to analyze one of your open trades, or do you want a quick market pulse check?"
-        )
-
-    # 3. Who are you / Identity
-    elif any(w in prompt for w in ["who are you", "your name", "what is your name", "introduce yourself"]):
-        reply = (
-            "I'm **Jephthah**—your personal trading buddy, institutional co-trader, and risk guardian in Trade-Z! 🛡️\n\n"
-            "Unlike a cold robotic script, I'm here to trade alongside you, break down complex market moves in plain English, "
-            "watch out for dangerous news volatility, and give you honest, actionable advice on when to let your winners run or when to cut risk."
-        )
-
     trade_triggers = [
         "analyse", "analyze", "check", "review", "look at", "inspect", "diagnose",
         "breakdown", "what is happening", "what's happening", "what is going on",
@@ -500,6 +475,31 @@ async def chat_analysis(request: ChatQueryRequest):
             "verdict_title": verdict_title,
             "advice": advice,
         }
+
+    # 1. Casual conversational greetings (avoid sounding like a robot)
+    if any(prompt == w or prompt.startswith(w + " ") for w in ["hi", "hello", "hey", "sup", "yo", "good morning", "good afternoon", "howdy"]):
+        reply = (
+            "Hey brother! Jephthah here, your trading buddy and market copilot. 👊\n\n"
+            "I'm keeping my eyes on the charts, your MT5 positions, and live news flow so you don't have to stress. "
+            "How is your trading session going today? You can type `/trade` anytime to review your active positions, "
+            "or ask me about Gold, EURUSD, or your account balance!"
+        )
+
+    # 2. "How are you" / Friendly Check-ins
+    elif any(w in prompt for w in ["how are you", "how r u", "how do you feel", "how's it going", "how is it going", "what's up", "whats up"]):
+        reply = (
+            "Doing great, brother! Feeling sharp and locked in on the markets. ⚡\n\n"
+            "Watching the liquidity shifts and keeping tabs on your capital. "
+            "How can I help you right now? Want me to analyze one of your open trades, or do you want a quick market pulse check?"
+        )
+
+    # 3. Who are you / Identity
+    elif any(w in prompt for w in ["who are you", "your name", "what is your name", "introduce yourself"]):
+        reply = (
+            "I'm **Jephthah**—your personal trading buddy, institutional co-trader, and risk guardian in Trade-Z! 🛡️\n\n"
+            "Unlike a cold robotic script, I'm here to trade alongside you, break down complex market moves in plain English, "
+            "watch out for dangerous news volatility, and give you honest, actionable advice on when to let your winners run or when to cut risk."
+        )
 
     # 4. Interactive Trade Analysis & Real-Time Diagnosis
     elif is_trade_intent:

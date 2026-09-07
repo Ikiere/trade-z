@@ -106,6 +106,18 @@ export class TradesController {
     }
   }
 
+  @Patch('signals/:id')
+  async patchSignal(
+    @Headers('authorization') auth: string,
+    @Param('id') id: string,
+    @Body() body: Record<string, any>,
+  ) {
+    const userId = this.extractUserId(auth);
+    if (!userId) throw new UnauthorizedException('Valid session token required');
+    const data = await this.tradesService.patchSignal(userId, id, body);
+    return { success: true, data, timestamp: new Date().toISOString() };
+  }
+
   /**
    * POST /trades/log
    * Log a manually closed trade and update portfolio balance.

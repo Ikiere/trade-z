@@ -127,7 +127,13 @@ class DecisionEngine(BaseEngine):
 
             sl = entry - sl_dist
             tp = entry + (sl_dist * rr)
-            order_type = "buy limit" if entry < current_price * 1.0005 else "buy"
+            spread_buffer = atr * 0.05
+            if abs(entry - current_price) <= spread_buffer:
+                order_type = "buy"
+            elif entry < current_price:
+                order_type = "buy limit"
+            else:
+                order_type = "buy stop"
 
         else:  # bearish
             # Institutional SL above swing high with buffer
@@ -139,7 +145,13 @@ class DecisionEngine(BaseEngine):
 
             sl = entry + sl_dist
             tp = entry - (sl_dist * rr)
-            order_type = "sell limit" if entry > current_price * 0.9995 else "sell"
+            spread_buffer = atr * 0.05
+            if abs(entry - current_price) <= spread_buffer:
+                order_type = "sell"
+            elif entry > current_price:
+                order_type = "sell limit"
+            else:
+                order_type = "sell stop"
 
         # Strictly enforce directional invariants:
         # For bullish: SL MUST be < entry, TP MUST be > entry

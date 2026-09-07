@@ -289,10 +289,15 @@ export class TradesService {
 
     let orderType = signalData.order_type;
     if (!orderType) {
+      const spread = currentPrice * 0.0003;
       if (direction === 'long') {
-        orderType = entryPrice < currentPrice ? 'buy limit' : 'buy';
+        if (Math.abs(entryPrice - currentPrice) <= spread) orderType = 'buy';
+        else if (entryPrice < currentPrice) orderType = 'buy limit';
+        else orderType = 'buy stop';
       } else {
-        orderType = entryPrice > currentPrice ? 'sell limit' : 'sell';
+        if (Math.abs(entryPrice - currentPrice) <= spread) orderType = 'sell';
+        else if (entryPrice > currentPrice) orderType = 'sell limit';
+        else orderType = 'sell stop';
       }
     }
 
@@ -342,6 +347,26 @@ export class TradesService {
     });
 
     return { ...data, _saved: true };
+  }
+
+  async patchSignal(userId: string, signalId: string, updates: Record<string, any>) {
+    const allowed = ['order_type', 'status', 'mt5_ticket'];
+    const filtered: Record<string, any> = {};
+    for (const k of allowed) {
+      if (updates[k] !== undefined) filtered[k] = updates[k];
+    }
+    const { data, error } = await this.supabase
+      .from('signals')
+      .update(filtered)
+      .eq('id', signalId)
+      .eq('user_id', userId)
+      .select()
+      .single();
+    if (error) {
+      console.warn('Signal patch warning:', error.message);
+      return null;
+    }
+    return data;
   }
 
   async logManualTrade(

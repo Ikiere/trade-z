@@ -403,7 +403,13 @@ export default function SignalsPage() {
                               {isLong ? '▲ LONG' : '▼ SHORT'}
                             </span>
                             {sig.order_type && (
-                              <span className="text-[9px] bg-brand-500/10 text-brand-400 border border-brand-500/20 px-1.5 py-0.5 rounded font-mono font-bold uppercase">
+                              <span className={`text-[9px] border px-1.5 py-0.5 rounded font-mono font-bold uppercase ${
+                                sig.order_type.includes('stop')
+                                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                                  : sig.order_type.includes('limit')
+                                  ? 'bg-brand-500/10 text-brand-400 border-brand-500/30'
+                                  : 'bg-slate-500/10 text-slate-300 border-slate-500/30'
+                              }`}>
                                 {sig.order_type}
                               </span>
                             )}
@@ -684,7 +690,11 @@ export default function SignalsPage() {
                       { label: 'DIRECTION',  value: selected.direction.toUpperCase(),               color: selected.direction === 'long' ? 'text-emerald-400' : 'text-red-400' },
                       { label: 'CONFIDENCE', value: `${Number(selected.confidence).toFixed(1)}%`,  color: selected.status === 'rejected' ? 'text-red-400' : 'text-emerald-400' },
                       { label: 'RISK/REWARD',value: calcRR(Number(selected.entry_price), Number(selected.stop_loss), Number(selected.take_profit)), color: 'text-amber-400' },
-                      { label: 'ORDER TYPE', value: (selected.order_type || 'buy limit').toUpperCase(), color: 'text-brand-400' },
+                      { 
+                        label: 'ORDER TYPE', 
+                        value: (selected.order_type || (selected.direction === 'long' ? 'BUY LIMIT' : 'SELL LIMIT')).toUpperCase(), 
+                        color: selected.order_type?.includes('stop') ? 'text-amber-400' : 'text-brand-400' 
+                      },
                     ].map(({ label, value, color }) => (
                       <div key={label} className="bg-bg-card border border-[#1e293b] rounded-xl p-3">
                         <span className="text-[9px] text-[#64748b] block mb-1">{label}</span>

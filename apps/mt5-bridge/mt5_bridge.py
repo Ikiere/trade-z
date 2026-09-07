@@ -134,6 +134,8 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
             self._handle_account()
         elif path == '/positions':
             self._handle_positions()
+        elif path in ['/quote', '/price', '/tick']:
+            self._handle_quote(parsed.query)
         else:
             self._send_json(404, {'success': False, 'error': 'Not Found'})
 
@@ -257,6 +259,39 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
 
         self._send_json(200, {'success': True, 'positions': formatted})
 
+    def _handle_quote(self, query_str: str):
+        """
+        Returns real-time bid, ask, and spread directly from MT5 terminal for accurate pricing.
+        """
+        if not MT5_AVAILABLE or not mt5.initialize():
+            self._send_json(503, {'success': False, 'error': 'MT5 terminal not running or not responding'})
+            return
+
+        params = parse_qs(query_str)
+        raw_pair = params.get('pair', params.get('symbol', ['EURUSD']))[0]
+        symbol = get_broker_symbol(raw_pair)
+        if not mt5.symbol_select(symbol, True):
+            self._send_json(400, {'success': False, 'error': f'Symbol "{symbol}" not found in MT5 Market Watch'})
+            return
+
+        tick = mt5.symbol_info_tick(symbol)
+        sym_info = mt5.symbol_info(symbol)
+        if not tick or not sym_info:
+            self._send_json(400, {'success': False, 'error': f'No tick data received for {symbol}'})
+            return
+
+        self._send_json(200, {
+            'success': True,
+            'symbol': symbol,
+            'pair': raw_pair,
+            'bid': tick.bid,
+            'ask': tick.ask,
+            'last': tick.last or tick.bid,
+            'spread': round(tick.ask - tick.bid, sym_info.digits),
+            'digits': sym_info.digits,
+            'point': sym_info.point,
+        })
+
     def _handle_order(self, data: dict):
         """
         Executes real trade on MetaTrader 5 terminal with account protection guards.
@@ -353,7 +388,22 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
             return
 
         # 4. Determine MT5 Order Action Type
-        if is_market_order:
+        req_type = str(data.get('orderType') or data.get('order_type') or '').lower().strip()
+        if 'limit' in req_type:
+            if is_buy:
+                # MT5 buy limit: price must be < market ask
+                order_type = mt5.ORDER_TYPE_BUY_LIMIT if entry_price < market_price else mt5.ORDER_TYPE_BUY_STOP
+            else:
+                # MT5 sell limit: price must be > market bid
+                order_type = mt5.ORDER_TYPE_SELL_LIMIT if entry_price > market_price else mt5.ORDER_TYPE_SELL_STOP
+        elif 'stop' in req_type:
+            if is_buy:
+                # MT5 buy stop: price must be > market ask
+                order_type = mt5.ORDER_TYPE_BUY_STOP if entry_price > market_price else mt5.ORDER_TYPE_BUY_LIMIT
+            else:
+                # MT5 sell stop: price must be < market bid
+                order_type = mt5.ORDER_TYPE_SELL_STOP if entry_price < market_price else mt5.ORDER_TYPE_SELL_LIMIT
+        elif is_market_order:
             order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
         else:
             if is_buy:
@@ -414,12 +464,23 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
             })
             return
 
+        type_names = {
+            mt5.ORDER_TYPE_BUY: 'BUY',
+            mt5.ORDER_TYPE_SELL: 'SELL',
+            mt5.ORDER_TYPE_BUY_LIMIT: 'BUY LIMIT',
+            mt5.ORDER_TYPE_SELL_LIMIT: 'SELL LIMIT',
+            mt5.ORDER_TYPE_BUY_STOP: 'BUY STOP',
+            mt5.ORDER_TYPE_SELL_STOP: 'SELL STOP',
+        }
+        order_type_str = type_names.get(order_type, 'BUY' if is_buy else 'SELL')
+
         # Success!
         self._send_json(200, {
             'success': True,
             'ticket': result.order,
             'symbol': symbol,
             'direction': 'BUY' if is_buy else 'SELL',
+            'order_type': order_type_str,
             'volume': result.volume,
             'price': result.price,
             'sl': stop_loss,
@@ -427,7 +488,7 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
             'comment': result.comment,
             'balance': round(acc.balance, 2),
             'equity': round(acc.equity, 2),
-            'message': f'Order #{result.order} placed successfully on MetaTrader 5!'
+            'message': f'Order #{result.order} ({order_type_str}) placed successfully on MetaTrader 5!'
         })
 
     def _handle_close(self, data: dict):

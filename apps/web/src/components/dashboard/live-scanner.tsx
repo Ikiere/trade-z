@@ -17,6 +17,8 @@ interface Mt5AccountInfo {
 interface LatestTradeSetup {
   pair: string;
   direction: 'long' | 'short';
+  orderType: string;
+  signalId?: string;
   entryPrice: number;
   stopLoss: number;
   takeProfit: number;
@@ -25,7 +27,7 @@ interface LatestTradeSetup {
   reasoning: string;
   isApproved: boolean;
   timestamp: string;
-  mt5Ticket?: number;
+  mt5Ticket?: number | null;
 }
 
 const getSimulatedPrice = (pair: string) => {
@@ -205,6 +207,8 @@ export default function LiveScannerWidget() {
   const sendOrderToMt5 = async (setup: {
     pair: string;
     direction: 'long' | 'short';
+    orderType?: string;
+    signalId?: string;
     entryPrice: number;
     stopLoss: number;
     takeProfit: number;
@@ -228,6 +232,7 @@ export default function LiveScannerWidget() {
         body: JSON.stringify({
           pair: setup.pair,
           direction: setup.direction,
+          orderType: setup.orderType,
           entryPrice: setup.entryPrice,
           stopLoss: setup.stopLoss,
           takeProfit: setup.takeProfit,
@@ -243,13 +248,34 @@ export default function LiveScannerWidget() {
         executedTicket = bridgeJson.ticket;
         executedLot = bridgeJson.volume || executedLot;
         pricePlaced = bridgeJson.price || pricePlaced;
+        const mt5OrderType = (bridgeJson.order_type || setup.orderType || (setup.direction === 'long' ? 'BUY' : 'SELL')).toUpperCase();
 
         setLogs(prev => [
-          `[MT5 EXECUTED 🚀] Placed ${setup.direction.toUpperCase()} ${executedLot} lots on MetaTrader 5! (Ticket #${executedTicket})`,
+          `[MT5 EXECUTED 🚀] Placed ${mt5OrderType} (${executedLot} lots) on MetaTrader 5! (Ticket #${executedTicket})`,
           `  -> Symbol: ${bridgeJson.symbol} | Price: ${pricePlaced} | SL: ${bridgeJson.sl} | TP: ${bridgeJson.tp}`,
           ...prev
         ]);
         probeMt5Bridge();
+
+        // Update latestSetup with exact MT5 order type
+        setLatestSetup(prev => prev ? {
+          ...prev,
+          mt5Ticket: executedTicket,
+          orderType: mt5OrderType.toLowerCase(),
+        } : null);
+
+        // Sync exact MT5 order type and ticket to the Supabase signal
+        const targetSignalId = setup.signalId || latestSetup?.signalId;
+        if (targetSignalId && token) {
+          fetch(`${apiBase}/api/v1/trades/signals/${targetSignalId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({
+              order_type: mt5OrderType.toLowerCase(),
+              mt5_ticket: executedTicket,
+            }),
+          }).catch(() => {});
+        }
       } else if (bridgeJson.error) {
         setLogs(prev => [
           `[MT5 NOTICE 🛡️] MT5 execution rejected: ${bridgeJson.error}`,
@@ -299,12 +325,14 @@ export default function LiveScannerWidget() {
     setIsExecutingManual(true);
     try {
       setLogs(prev => [
-        `[MANUAL ORDER ⚡] Sending ${latestSetup.pair} (${latestSetup.direction.toUpperCase()}) to MT5...`,
+        `[MANUAL ORDER ⚡] Sending ${latestSetup.pair} (${(latestSetup.orderType || latestSetup.direction).toUpperCase()}) to MT5...`,
         ...prev
       ]);
       const ticket = await sendOrderToMt5({
         pair: latestSetup.pair,
         direction: latestSetup.direction,
+        orderType: latestSetup.orderType,
+        signalId: latestSetup.signalId,
         entryPrice: latestSetup.entryPrice,
         stopLoss: latestSetup.stopLoss,
         takeProfit: latestSetup.takeProfit,
@@ -396,10 +424,26 @@ export default function LiveScannerWidget() {
         direction = 'short';
       }
 
+      // Query MT5 bridge for exact live tick if connected
+      let liveBid: number | null = null;
+      let liveAsk: number | null = null;
+      try {
+        const qRes = await fetch(`http://127.0.0.1:5001/quote?pair=${encodeURIComponent(pair)}`, {
+          signal: AbortSignal.timeout(1200),
+        });
+        if (qRes.ok) {
+          const qData = await qRes.json();
+          if (qData.success && typeof qData.bid === 'number') {
+            liveBid = qData.bid;
+            liveAsk = qData.ask;
+          }
+        }
+      } catch (_) {}
+
       // 2. Resolve Price Levels
       const priceInfo = getSimulatedSetup(pair, direction);
+      let currentPrice = (direction === 'long' ? liveAsk : liveBid) || (typeof info.current_price === 'number' && info.current_price > 0 ? info.current_price : priceInfo.current);
       let entryPrice = (typeof info.entry_price === 'number' && info.entry_price > 0) ? info.entry_price : priceInfo.entry;
-      let currentPrice = (typeof info.current_price === 'number' && info.current_price > 0) ? info.current_price : priceInfo.current;
       let stopLoss = (typeof info.stop_loss === 'number' && info.stop_loss > 0) ? info.stop_loss : priceInfo.sl;
       let takeProfit = (typeof info.take_profit === 'number' && info.take_profit > 0) ? info.take_profit : priceInfo.tp;
 
@@ -424,7 +468,26 @@ export default function LiveScannerWidget() {
         }
       }
 
-      const orderType = info.order_type || (direction === 'long' ? (entryPrice < currentPrice ? 'buy limit' : 'buy') : (entryPrice > currentPrice ? 'sell limit' : 'sell'));
+      // Exact order type calculation adhering to MT5 specifications
+      let orderType: string;
+      const spreadThreshold = currentPrice * 0.0003;
+      if (direction === 'long') {
+        if (Math.abs(entryPrice - currentPrice) <= spreadThreshold) {
+          orderType = 'buy';
+        } else if (entryPrice < currentPrice) {
+          orderType = 'buy limit';
+        } else {
+          orderType = 'buy stop';
+        }
+      } else {
+        if (Math.abs(entryPrice - currentPrice) <= spreadThreshold) {
+          orderType = 'sell';
+        } else if (entryPrice > currentPrice) {
+          orderType = 'sell limit';
+        } else {
+          orderType = 'sell stop';
+        }
+      }
 
       // Save Signal to database
       const sigRes = await fetch(`${apiBase}/api/v1/trades/signals`, {
@@ -449,6 +512,7 @@ export default function LiveScannerWidget() {
       });
       const resBody = await sigRes.json().catch(() => ({}));
       const saved = sigRes.ok && resBody.success !== false;
+      const savedSignalId = resBody.data?.id;
 
       if (!saved) {
         const err = resBody.error || sigRes.statusText || 'Unknown error';
@@ -467,6 +531,8 @@ export default function LiveScannerWidget() {
       setLatestSetup({
         pair,
         direction,
+        orderType,
+        signalId: savedSignalId,
         entryPrice,
         stopLoss,
         takeProfit,
@@ -478,12 +544,12 @@ export default function LiveScannerWidget() {
       });
 
       if (isApproved) {
-        const activeDir = direction.toUpperCase();
+        const activeDir = orderType.toUpperCase();
         const histSummary = info.certificate?.historical_pattern_summary || '';
         const hasLesson = histSummary.includes('Lesson Applied') || histSummary.includes('AI Lesson');
 
         const successLogs = [
-          `[SIGNAL ✅] Approved high-probability setup for ${pair}! Direction: ${activeDir}`,
+          `[SIGNAL ✅] Approved high-probability setup for ${pair}! Order: ${activeDir}`,
           `  -> ENTRY: ${entryPrice.toFixed(5)} (SL: ${stopLoss.toFixed(5)}, TP: ${takeProfit.toFixed(5)})`,
           `  -> Confidence: ${confidence.toFixed(1)}% | Expected Trigger: ${expectedTrigger || 'Immediate'}`,
         ];
@@ -498,10 +564,12 @@ export default function LiveScannerWidget() {
         
         // Auto-Execution Check
         if (tradingMode === 'fully_automatic') {
-          setLogs(prev => [`[AUTO TRADE ⚡] Placing instant order on MT5 for ${pair} (${direction.toUpperCase()})...`, ...prev]);
+          setLogs(prev => [`[AUTO TRADE ⚡] Placing instant order on MT5 for ${pair} (${orderType.toUpperCase()})...`, ...prev]);
           const ticket = await sendOrderToMt5({
             pair,
             direction,
+            orderType,
+            signalId: savedSignalId,
             entryPrice,
             stopLoss,
             takeProfit,
@@ -706,10 +774,16 @@ export default function LiveScannerWidget() {
         <div className="card p-4 border border-[#1e293b] bg-[#0c101d] space-y-3">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-2">
-              <span className={`text-[10px] font-bold font-mono px-2 py-0.5 rounded uppercase ${
-                latestSetup.direction === 'long' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+              <span className={`text-[10px] font-bold font-mono px-2 py-0.5 rounded uppercase border ${
+                latestSetup.orderType?.includes('stop')
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                  : latestSetup.orderType?.includes('limit')
+                  ? 'bg-brand-500/10 text-brand-400 border-brand-500/30'
+                  : latestSetup.direction === 'long'
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                  : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
               }`}>
-                {latestSetup.direction === 'long' ? '▲ BUY' : '▼ SELL'}
+                {latestSetup.orderType ? latestSetup.orderType.toUpperCase() : (latestSetup.direction === 'long' ? '▲ BUY' : '▼ SELL')}
               </span>
               <h4 className="text-sm font-bold text-white font-mono">{latestSetup.pair}</h4>
               <span className="text-[10px] font-mono text-[#64748b]">@{latestSetup.timestamp}</span>

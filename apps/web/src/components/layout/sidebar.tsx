@@ -126,8 +126,8 @@ export default function Sidebar() {
           })}
         </nav>
 
-        {/* AI Mode Footer Indicator */}
-        <div className="p-4 border-t border-[#1e293b]">
+        {/* AI Mode Footer Indicator & Sign Out */}
+        <div className="p-3 border-t border-[#1e293b] space-y-2 bg-[#080c14]">
           <div className={cn('flex items-center gap-3', sidebarCollapsed ? 'justify-center' : '')}>
             <div className="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0 border border-emerald-500/20">
               <Shield className="w-4 h-4 text-emerald-400" />
@@ -143,6 +143,18 @@ export default function Sidebar() {
               </motion.div>
             )}
           </div>
+
+          <button
+            onClick={() => logout()}
+            className={cn(
+              'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-red-400/90 hover:text-red-300 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all',
+              sidebarCollapsed ? 'justify-center px-0' : ''
+            )}
+            title="Sign out of account"
+          >
+            <LogOut className="w-4 h-4 shrink-0 text-red-400" />
+            {!sidebarCollapsed && <span>Sign Out</span>}
+          </button>
         </div>
       </aside>
 

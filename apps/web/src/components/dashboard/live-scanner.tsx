@@ -83,10 +83,13 @@ const getSimulatedSetup = (pair: string, direction: 'long' | 'short') => {
 };
 
 export default function LiveScannerWidget() {
-  const [watchlist, setWatchlist] = useState<string[]>([]);
+  const [watchlist, setWatchlist] = useState<string[]>([
+    'EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD'
+  ]);
   const [activePair, setActivePair] = useState<string | null>(null);
-  const [logs, setLogs] = useState<string[]>(['Scanner initialized. Configure watchlist in Settings.']);
-  const [isScanningActive, setIsScanningActive] = useState(false);
+  const [logs, setLogs] = useState<string[]>([
+    'Institutional AI Scanner ready. Select an asset below to analyze its chart setup.'
+  ]);
   const [loading, setLoading] = useState(true);
 
   // MT5 Bridge Status
@@ -97,21 +100,18 @@ export default function LiveScannerWidget() {
   // From user_settings
   const [tradingMode, setTradingMode] = useState('fully_automatic');
   const [defaultLot, setDefaultLot] = useState(0.01);
-  const [dailySignalLimit, setDailySignalLimit] = useState(50);
+  const [dailySignalLimit, setDailySignalLimit] = useState(2);
   const [userId, setUserId] = useState<string | null>(null);
 
-  // Today's signal count (enforced limit)
+  // Today's signal count (enforced limit for auto-trading)
   const [todaySignalCount, setTodaySignalCount] = useState(0);
   const [selectedSinglePair, setSelectedSinglePair] = useState('EURUSD');
 
   useEffect(() => {
-    if (watchlist.length > 0) {
+    if (watchlist.length > 0 && !watchlist.includes(selectedSinglePair)) {
       setSelectedSinglePair(watchlist[0]);
     }
-  }, [watchlist]);
-
-  const scanIndex = useRef(0);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  }, [watchlist, selectedSinglePair]);
 
   // Probe local MT5 bridge status (runs on user's laptop)
   const probeMt5Bridge = useCallback(async () => {
@@ -154,21 +154,31 @@ export default function LiveScannerWidget() {
       const { data: s } = await supabase
         .from('user_settings').select('*').eq('user_id', user.id).maybeSingle();
 
+      const cryptoDefaults = ['BTCUSD', 'ETHUSD', 'SOLUSD'];
+      const baseList = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', ...cryptoDefaults];
+
       if (s) {
         setTradingMode(s.trading_mode || 'fully_automatic');
         setDefaultLot(Number(s.default_lot_size) || 0.01);
-        setDailySignalLimit(2); // Institutional discipline: strictly locked to 2 trades/day
+        setDailySignalLimit(Number(s.daily_signal_limit) || 2);
 
-        const wl = Array.isArray(s.watchlist) && s.watchlist.length > 0
+        const currentWl = Array.isArray(s.watchlist) && s.watchlist.length > 0
           ? s.watchlist
-          : ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD'];
-        setWatchlist(wl);
+          : ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD'];
+        const merged = Array.from(new Set([...currentWl, ...cryptoDefaults]));
+        setWatchlist(merged);
+
+        // Guarantee crypto pairs are persisted in Supabase
+        const missingCrypto = cryptoDefaults.some(c => !currentWl.includes(c));
+        if (missingCrypto) {
+          await supabase.from('user_settings').update({ watchlist: merged }).eq('user_id', user.id);
+        }
       } else {
         setDailySignalLimit(2);
-        setWatchlist(['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD']);
+        setWatchlist(baseList);
       }
 
-      // Count today's signals (to enforce daily limit)
+      // Count today's signals (to display daily target)
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       const { count } = await supabase
@@ -236,7 +246,7 @@ export default function LiveScannerWidget() {
 
     // ── GUARD 1: Trading Session Protection Shield ─────────────
     const sessionShield = checkTradingSession(setup.pair);
-    if (!sessionShield.isEligible) {
+    if (!setup.overrideSafety && !sessionShield.isEligible) {
       setLogs(prev => [
         `[SESSION SHIELD 🛡️] Trade execution vetoed: ${setup.pair} is outside active ${sessionShield.sessionName}!`,
         `  -> Current: ${sessionShield.currentUtcTime} | Session Hours: ${sessionShield.activeHours}`,
@@ -247,26 +257,28 @@ export default function LiveScannerWidget() {
     }
 
     // ── GUARD 2: Greed Shield — Max 2 Open Positions in MT5 ────
-    try {
-      const posRes = await fetch('http://127.0.0.1:5001/positions', { signal: AbortSignal.timeout(1500) });
-      if (posRes.ok) {
-        const posData = await posRes.json();
-        const activePositions = Array.isArray(posData.positions) ? posData.positions : [];
-        if (activePositions.length >= 2) {
-          setLogs(prev => [
-            `[GREED SHIELD 🛑] Trade vetoed: Maximum 2 open positions active in MT5 (${activePositions.length}/2).`,
-            `  -> Institutional discipline rule: No new trades will be executed until an existing position is closed.`,
-            ...prev,
-          ]);
-          return null;
+    if (!setup.overrideSafety) {
+      try {
+        const posRes = await fetch('http://127.0.0.1:5001/positions', { signal: AbortSignal.timeout(1500) });
+        if (posRes.ok) {
+          const posData = await posRes.json();
+          const activePositions = Array.isArray(posData.positions) ? posData.positions : [];
+          if (activePositions.length >= 2) {
+            setLogs(prev => [
+              `[GREED SHIELD 🛑] Trade vetoed: Maximum 2 open positions active in MT5 (${activePositions.length}/2).`,
+              `  -> Institutional discipline rule: No new trades will be executed until an existing position is closed.`,
+              ...prev,
+            ]);
+            return null;
+          }
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
 
     // ── GUARD 3: Greed Shield — Max 2 Trades Per Day ───────────
-    if (todaySignalCount >= 2) {
+    if (!setup.overrideSafety && todaySignalCount >= 2) {
       setLogs(prev => [
-        `[GREED SHIELD 🛑] Trade vetoed: Daily limit of 2 trades reached for today (${todaySignalCount}/2).`,
+        `[GREED SHIELD 🛑] MT5 auto-trade vetoed: Daily limit of 2 trades reached for today (${todaySignalCount}/2).`,
         `  -> Institutional rule: 2 trades/day maximum to eliminate overtrading and emotional greed. Resumes tomorrow.`,
         ...prev,
       ]);
@@ -274,26 +286,28 @@ export default function LiveScannerWidget() {
     }
 
     // ── GUARD 4: Loss Cool-Down Shield ─────────────────────────
-    try {
-      const histRes = await fetch('http://127.0.0.1:5001/history', { signal: AbortSignal.timeout(1500) });
-      if (histRes.ok) {
-        const histData = await histRes.json();
-        const trades = Array.isArray(histData.trades) ? histData.trades : [];
-        const todayStr = new Date().toISOString().slice(0, 10);
-        const todayTrades = trades.filter((t: any) => (t.time_close || t.time || '').startsWith(todayStr));
-        const hasLossToday = todayTrades.some((t: any) => typeof t.profit === 'number' && t.profit < 0);
-        const netDailyPnl = todayTrades.reduce((acc: number, t: any) => acc + (Number(t.profit) || 0), 0);
+    if (!setup.overrideSafety) {
+      try {
+        const histRes = await fetch('http://127.0.0.1:5001/history', { signal: AbortSignal.timeout(1500) });
+        if (histRes.ok) {
+          const histData = await histRes.json();
+          const trades = Array.isArray(histData.trades) ? histData.trades : [];
+          const todayStr = new Date().toISOString().slice(0, 10);
+          const todayTrades = trades.filter((t: any) => (t.time_close || t.time || '').startsWith(todayStr));
+          const netDailyPnl = todayTrades.reduce((acc: number, t: any) => acc + (Number(t.profit) || 0), 0);
 
-        if (hasLossToday || netDailyPnl < 0) {
-          setLogs(prev => [
-            `[COOL-DOWN SHIELD 🧊] Trade vetoed: A loss was detected today (-$${Math.abs(netDailyPnl).toFixed(2)}).`,
-            `  -> System in Cool-Down mode to protect capital and prevent revenge trading. Automatically unlocks tomorrow.`,
-            ...prev,
-          ]);
-          return null;
+          // Only cooldown if net closed daily PnL is in the red
+          if (netDailyPnl < -2.0 && todayTrades.length > 0) {
+            setLogs(prev => [
+              `[COOL-DOWN SHIELD 🧊] MT5 auto-trade vetoed: Net daily closed P&L is in drawdown (-$${Math.abs(netDailyPnl).toFixed(2)}).`,
+              `  -> System in Cool-Down mode to protect capital and prevent revenge trading. Automatically unlocks tomorrow.`,
+              ...prev,
+            ]);
+            return null;
+          }
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
 
     // 1. Send direct to local MT5 bridge (running on user's laptop at 127.0.0.1:5001)
     try {
@@ -421,47 +435,29 @@ export default function LiveScannerWidget() {
     }
   };
 
-  // The main scanning execution sequence
-  const runSingleScan = useCallback(async (specificPair?: string) => {
-    if (watchlist.length === 0 || !userId) return;
- 
-    // Enforce strict daily trade limit (institutional greed shield)
-    if (todaySignalCount >= 2) {
-      setLogs(prev => [
-        `[GREED SHIELD 🛑] Daily limit of 2 trades reached for today.`,
-        `  -> Institutional discipline rule: Maximum 2 trades per day to prevent overtrading and preserve capital.`,
-        `  -> Scanning paused. Automatically resumes tomorrow.`,
-        ...prev,
-      ]);
-      setIsScanningActive(false);
-      return;
-    }
+  // Single-pair chart analysis on demand
+  const handleAnalyzePair = useCallback(async (targetPair?: string) => {
+    const pair = targetPair || selectedSinglePair;
+    if (!pair || !userId) return;
 
-    if (!specificPair) {
-      if (scanIndex.current >= watchlist.length) {
-        scanIndex.current = 0;
-      }
-    }
+    setActivePair(pair);
 
-    const pair = specificPair || watchlist[scanIndex.current];
-
-    // Check Trading Session Shield before scanning/executing
+    // Check Trading Session status
     const sessionCheck = checkTradingSession(pair);
     if (!sessionCheck.isEligible) {
       setLogs(prev => [
-        `[SESSION SHIELD 🛡️] ${pair} is outside active session (${sessionCheck.currentUtcTime}).`,
+        `[SESSION NOTICE 🛡️] ${pair} is outside active session (${sessionCheck.currentUtcTime}).`,
         `  -> ${sessionCheck.message}`,
+        `  -> AI analyzing technical SMC levels & structure (Live MT5 execution paused outside session).`,
         ...prev,
       ]);
-      if (!specificPair) {
-        scanIndex.current = (scanIndex.current + 1) % watchlist.length;
-      }
-      return;
+    } else {
+      setLogs(prev => [
+        `[ANALYZING 🔍] AI reading 15M institutional market structure for ${pair} (${sessionCheck.sessionName})...`,
+        ...prev,
+      ]);
     }
 
-    setActivePair(pair);
-    setLogs(prev => [`[SCANNING] Requesting AI analysis for ${pair} (${sessionCheck.sessionName})...`, ...prev]);
- 
     try {
       const apiBase = getApiBaseUrl();
       const supabase = createClient();
@@ -484,23 +480,22 @@ export default function LiveScannerWidget() {
           } : undefined,
         }),
       });
- 
+
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
         const errMsg = errBody?.message || errBody?.detail || `HTTP ${res.status}`;
         if (errMsg.includes('502') || errMsg.includes('spinning up') || errMsg.includes('warming up') || errMsg.includes('cold start')) {
           setLogs(prev => [
-            `[AI ENGINE WAKING UP ⏳] AI service is warming up on cloud infrastructure (cold start).`,
-            `  -> Automatically waiting for warm-up... Next scan cycle in a few seconds.`,
+            `[AI ENGINE WAKING UP ⏳] AI service is warming up on cloud infrastructure.`,
+            `  -> Please wait 5-10 seconds and click "Analyze ${pair} Chart" again.`,
             ...prev
           ]);
-          await new Promise(r => setTimeout(r, 5000));
           return;
         }
         setLogs(prev => [`[ERROR] ${errMsg}`, ...prev]);
         return;
       }
- 
+
       const body = await res.json();
       const info = body?.data;
       if (!info) return;
@@ -548,23 +543,26 @@ export default function LiveScannerWidget() {
       let takeProfit = (typeof info.take_profit === 'number' && info.take_profit > 0) ? info.take_profit : priceInfo.tp;
 
       // Directional Invariants
+      const isDecimals2 = pair.toUpperCase().includes('XAU') || pair.toUpperCase().includes('BTC') || pair.toUpperCase().includes('ETH') || pair.toUpperCase().includes('SOL') || pair.toUpperCase().includes('JPY');
+      const numDec = isDecimals2 ? 2 : 5;
+
       if (direction === 'long') {
         if (stopLoss >= entryPrice) {
           const risk = Math.abs(entryPrice - stopLoss) || Math.abs(entryPrice - priceInfo.sl);
-          stopLoss = Number((entryPrice - risk).toFixed(entryPrice > 500 ? 2 : 5));
+          stopLoss = Number((entryPrice - risk).toFixed(numDec));
         }
         if (takeProfit <= entryPrice) {
           const reward = Math.abs(takeProfit - entryPrice) || (Math.abs(entryPrice - stopLoss) * 2.5);
-          takeProfit = Number((entryPrice + reward).toFixed(entryPrice > 500 ? 2 : 5));
+          takeProfit = Number((entryPrice + reward).toFixed(numDec));
         }
       } else {
         if (stopLoss <= entryPrice) {
           const risk = Math.abs(entryPrice - stopLoss) || Math.abs(priceInfo.sl - entryPrice);
-          stopLoss = Number((entryPrice + risk).toFixed(entryPrice > 500 ? 2 : 5));
+          stopLoss = Number((entryPrice + risk).toFixed(numDec));
         }
         if (takeProfit >= entryPrice) {
           const reward = Math.abs(takeProfit - entryPrice) || (Math.abs(stopLoss - entryPrice) * 2.5);
-          takeProfit = Number((entryPrice - reward).toFixed(entryPrice > 500 ? 2 : 5));
+          takeProfit = Number((entryPrice - reward).toFixed(numDec));
         }
       }
 
@@ -656,7 +654,7 @@ export default function LiveScannerWidget() {
 
         const successLogs = [
           `[SIGNAL ✅] Approved high-probability setup for ${pair}! Order: ${activeDir}`,
-          `  -> ENTRY: ${entryPrice.toFixed(5)} (SL: ${stopLoss.toFixed(5)}, TP: ${takeProfit.toFixed(5)})`,
+          `  -> ENTRY: ${entryPrice.toFixed(numDec)} (SL: ${stopLoss.toFixed(numDec)}, TP: ${takeProfit.toFixed(numDec)})`,
           `  -> Size: ${safeLot} Lots (MT5 Balance-Calibrated) | Confidence: ${confidence.toFixed(1)}%`,
         ];
 
@@ -698,7 +696,7 @@ export default function LiveScannerWidget() {
 
         // Auto-Execution Check
         if (tradingMode === 'fully_automatic') {
-          setLogs(prev => [`[AUTO TRADE ⚡] Placing smart-sized order on MT5 for ${pair} (${orderType.toUpperCase()}, ${safeLot} lots)...`, ...prev]);
+          setLogs(prev => [`[AUTO TRADE ⚡] Evaluating MT5 auto-execution for ${pair} (${orderType.toUpperCase()}, ${safeLot} lots)...`, ...prev]);
           const ticket = await sendOrderToMt5({
             pair,
             direction,
@@ -714,7 +712,7 @@ export default function LiveScannerWidget() {
           }
         } else {
           setLogs(prev => [
-            `[MANUAL MODE ℹ️] Signal approved! Sized at ${safeLot} lots. Click "⚡ Place on MT5 Now" button below to execute.`,
+            `[MANUAL READY ℹ️] Setup approved! Sized at ${safeLot} lots. Click "⚡ Place on MT5 Now" button below to execute.`,
             ...prev,
           ]);
         }
@@ -746,29 +744,14 @@ export default function LiveScannerWidget() {
       setLogs(prev => [`[EXCEPTION] ${err.message}`, ...prev]);
     } finally {
       setActivePair(null);
-      if (!specificPair) {
-        scanIndex.current += 1;
-      }
     }
-  }, [watchlist, userId, tradingMode, dailySignalLimit, todaySignalCount, defaultLot, probeMt5Bridge]);
-
-  // Start / stop scanner interval
-  useEffect(() => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    if (!isScanningActive || watchlist.length === 0 || !userId) return;
-
-    runSingleScan();
-    intervalRef.current = setInterval(runSingleScan, 45000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [isScanningActive, watchlist, userId, runSingleScan]);
+  }, [selectedSinglePair, userId, tradingMode, defaultLot, probeMt5Bridge, sendOrderToMt5]);
 
   if (loading) return (
     <div className="card p-6 flex items-center justify-center gap-2 text-xs font-mono text-[#64748b]">
       <Loader2 className="w-4 h-4 animate-spin text-brand-400" /> Loading scanner configuration...
     </div>
   );
-
-  const limitReached = todaySignalCount >= dailySignalLimit;
 
   return (
     <div className="space-y-4">
@@ -777,10 +760,10 @@ export default function LiveScannerWidget() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-[#1e293b] pb-3">
           <div className="flex items-center gap-2 flex-wrap">
-            <div className={`w-2 h-2 rounded-full ${isScanningActive && !limitReached ? 'bg-emerald-500 animate-ping' : 'bg-slate-600'}`} />
-            <h3 className="text-sm font-semibold text-white">AI Scanner</h3>
-            <span className="text-[9px] font-mono text-[#475569] bg-bg-secondary px-1.5 py-0.5 rounded">
-              {todaySignalCount}/{dailySignalLimit} signals today
+            <div className={`w-2.5 h-2.5 rounded-full ${activePair ? 'bg-brand-500 animate-ping' : 'bg-emerald-500'}`} />
+            <h3 className="text-sm font-semibold text-white">AI Single-Pair Chart Scanner</h3>
+            <span className="text-[9px] font-mono text-[#475569] bg-bg-secondary px-2 py-0.5 rounded border border-[#1e293b]">
+              {todaySignalCount}/{dailySignalLimit} daily target
             </span>
 
             {/* MT5 Bridge Live Status Pill */}
@@ -797,11 +780,11 @@ export default function LiveScannerWidget() {
             )}
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+          <div className="flex items-center gap-2">
             {/* Auto-Execution Toggle Button */}
             <button
               onClick={handleToggleAutoTrade}
-              className={`px-3 py-1 rounded text-[10px] font-bold font-mono transition-all flex items-center gap-1.5 border ${
+              className={`px-3 py-1.5 rounded text-[10px] font-bold font-mono transition-all flex items-center gap-1.5 border ${
                 tradingMode === 'fully_automatic'
                   ? 'bg-brand-500/20 text-brand-300 border-brand-500/40 hover:bg-brand-500/30'
                   : 'bg-bg-secondary text-[#64748b] border-[#1e293b] hover:text-[#94a3b8]'
@@ -811,107 +794,99 @@ export default function LiveScannerWidget() {
               <Zap className={`w-3 h-3 ${tradingMode === 'fully_automatic' ? 'text-brand-400 fill-brand-400' : ''}`} />
               {tradingMode === 'fully_automatic' ? '⚡ AUTO-TRADE: ON' : 'AUTO-TRADE: OFF'}
             </button>
-
-            {/* Start / Stop Scan Button */}
-            <button
-              onClick={() => setIsScanningActive(v => !v)}
-              disabled={limitReached}
-              className={`px-3.5 py-1 rounded text-[10px] font-bold font-mono uppercase transition-colors border disabled:opacity-40 disabled:cursor-not-allowed ${
-                isScanningActive
-                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
-                  : 'bg-bg-secondary text-[#94a3b8] border-[#1e293b] hover:text-white'
-              }`}
-            >
-              {isScanningActive ? '⬛ Stop Scan' : '▶ Start Scan'}
-            </button>
           </div>
         </div>
 
-        {/* Single Pair Manual Analyzer Panel */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#1e293b]/50 pb-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[10px] font-mono text-[#94a3b8]">Select Asset:</span>
-            <select
-              value={selectedSinglePair}
-              onChange={e => setSelectedSinglePair(e.target.value)}
-              className="bg-bg-secondary border border-[#1e293b] rounded px-2.5 py-1 text-xs text-white font-mono focus:outline-none focus:border-brand-505"
-            >
-              {watchlist.map(p => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-          </div>
-          
-          <button
-            onClick={() => runSingleScan(selectedSinglePair)}
-            disabled={isScanningActive || limitReached || watchlist.length === 0}
-            className="btn bg-bg-secondary hover:text-white text-[#94a3b8] border-[#1e293b] text-[10px] py-1 px-3 font-mono font-bold uppercase flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed border"
-          >
-            {activePair === selectedSinglePair ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-400" />
-            ) : (
-              <Scan className="w-3.5 h-3.5" />
-            )}
-            Analyze Single
-          </button>
-        </div>
-
-        {/* Greed Shield Limit Banner */}
-        {limitReached && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-mono">
-            <ShieldAlert className="w-4 h-4 shrink-0 text-blue-400" />
-            <span>
-              <strong>GREED SHIELD ENFORCED:</strong> Maximum daily trade limit reached ({todaySignalCount}/2).
-              Institutional discipline is active to eliminate emotional loss and overtrading. Next trading session opens tomorrow.
+        {/* Single Pair Selector Tabs */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-mono uppercase text-[#94a3b8] font-bold tracking-wider">
+              Select Pair to Analyze (1 Pair at a Time)
+            </span>
+            <span className="text-[10px] font-mono text-[#64748b]">
+              Selected: <strong className="text-white">{selectedSinglePair}</strong>
             </span>
           </div>
-        )}
 
-        {/* Active watchlist display */}
-        <div>
-          <p className="text-[9px] text-[#475569] font-mono uppercase mb-2">Scanning Watchlist</p>
-          {watchlist.length === 0 ? (
-            <p className="text-[10px] text-[#475569] font-mono">
-              No pairs configured. Go to <strong>Settings → Watchlist</strong> to add pairs.
-            </p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {watchlist.map(pair => {
-                const sInfo = checkTradingSession(pair);
-                return (
-                  <span
-                    key={pair}
-                    title={sInfo.message}
-                    className={`px-2.5 py-1 rounded-lg border text-[10px] font-mono font-semibold flex items-center gap-1.5 transition-all ${
-                      activePair === pair
-                        ? 'border-brand-500/50 bg-brand-500/10 text-brand-400'
-                        : 'border-[#1e293b] bg-bg-secondary text-white'
-                    }`}
-                  >
-                    {activePair === pair ? (
-                      <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                    ) : sInfo.isCrypto ? (
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" title="Crypto 24/7" />
-                    ) : sInfo.isEligible ? (
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Session Active" />
-                    ) : (
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400/80" title="Outside Session (Shield Active)" />
-                    )}
-                    {pair}
-                    {!sInfo.isEligible && (
-                      <span className="text-[8px] text-amber-400 font-mono font-normal">SHIELD</span>
-                    )}
-                    {sInfo.isCrypto && (
-                      <span className="text-[8px] text-cyan-400 font-mono font-normal">24/7</span>
-                    )}
-                  </span>
-                );
-              })}
-            </div>
-          )}
+          <div className="flex flex-wrap gap-2">
+            {watchlist.map(pair => {
+              const sInfo = checkTradingSession(pair);
+              const isSelected = selectedSinglePair === pair;
+              const isScanningThis = activePair === pair;
+
+              return (
+                <button
+                  key={pair}
+                  onClick={() => setSelectedSinglePair(pair)}
+                  className={`px-3 py-1.5 rounded-lg border text-xs font-mono font-semibold flex items-center gap-2 transition-all ${
+                    isSelected
+                      ? 'border-brand-500 bg-brand-500/20 text-brand-300 shadow-md shadow-brand-500/10'
+                      : 'border-[#1e293b] bg-bg-secondary text-[#94a3b8] hover:text-white hover:border-[#334155]'
+                  }`}
+                >
+                  {isScanningThis ? (
+                    <Loader2 className="w-3 h-3 animate-spin text-brand-400" />
+                  ) : sInfo.isCrypto ? (
+                    <span className="w-2 h-2 rounded-full bg-cyan-400" title="Crypto 24/7" />
+                  ) : sInfo.isEligible ? (
+                    <span className="w-2 h-2 rounded-full bg-emerald-400" title="Session Active" />
+                  ) : (
+                    <span className="w-2 h-2 rounded-full bg-amber-400/80" title="Outside Session Hours" />
+                  )}
+                  <span>{pair}</span>
+                  {sInfo.isCrypto ? (
+                    <span className="text-[8px] px-1 py-0.2 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">24/7</span>
+                  ) : sInfo.isEligible ? (
+                    <span className="text-[8px] px-1 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Active</span>
+                  ) : (
+                    <span className="text-[8px] px-1 py-0.2 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">Closed</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        {/* Mode display & details */}
+        {/* Selected Pair Session & Action Bar */}
+        {(() => {
+          const currSession = checkTradingSession(selectedSinglePair);
+          const isScanningThis = activePair === selectedSinglePair;
+
+          return (
+            <div className="p-3 rounded-xl bg-[#090d16] border border-[#1e293b] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-white font-mono">{selectedSinglePair}</span>
+                  <span className="text-[10px] font-mono text-[#64748b]">•</span>
+                  <span className="text-[10px] font-mono text-[#94a3b8]">{currSession.sessionName}</span>
+                </div>
+                <div className="text-[10px] font-mono text-[#64748b]">
+                  Hours: <span className="text-[#94a3b8]">{currSession.activeHours}</span> (Current: {currSession.currentUtcTime})
+                </div>
+              </div>
+
+              <button
+                onClick={() => handleAnalyzePair(selectedSinglePair)}
+                disabled={activePair !== null}
+                className="btn w-full sm:w-auto bg-brand-500 hover:bg-brand-600 text-white text-xs font-mono font-bold py-2 px-5 rounded-lg flex items-center justify-center gap-2 shadow-lg shadow-brand-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isScanningThis ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>Analyzing {selectedSinglePair}...</span>
+                  </>
+                ) : (
+                  <>
+                    <Scan className="w-4 h-4 text-white" />
+                    <span>Analyze {selectedSinglePair} Chart</span>
+                  </>
+                )}
+              </button>
+            </div>
+          );
+        })()}
+
+        {/* Sub-footer metadata */}
         <div className="flex flex-wrap items-center gap-3 pt-1 border-t border-[#1e293b]/50 text-[10px] font-mono text-[#475569]">
           <span>
             Mode:{' '}
@@ -922,11 +897,11 @@ export default function LiveScannerWidget() {
           <span>·</span>
           <span>Default Lot: <strong className="text-[#94a3b8]">{defaultLot}</strong></span>
           <span>·</span>
-          <span>Interval: <strong className="text-[#94a3b8]">45s</strong></span>
+          <span>Analysis: <strong className="text-white">Single-Pair On-Demand</strong></span>
           {mt5Status?.connected && (
             <>
               <span>·</span>
-              <span className="text-emerald-400 font-semibold">MT5 Terminal Synced</span>
+              <span className="text-emerald-400 font-semibold">MT5 Synced</span>
             </>
           )}
         </div>

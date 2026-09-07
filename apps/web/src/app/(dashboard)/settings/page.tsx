@@ -184,15 +184,19 @@ export default function SettingsPage() {
         setMaxLoss(Number(s.max_daily_loss) || 5.0);
         setDailySignalLimit(Number(s.daily_signal_limit) || 2);
         setApiKey(s.twelve_data_api_key || '');
+        const cryptoPairs = ['BTCUSD', 'ETHUSD', 'SOLUSD'];
         if (Array.isArray(s.watchlist) && s.watchlist.length > 0) {
-          setWatchlist(s.watchlist);
-          setLogPair(s.watchlist[0]);
+          const merged = Array.from(new Set([...s.watchlist, ...cryptoPairs]));
+          setWatchlist(merged);
+          setLogPair(merged[0]);
         } else {
-          const def = ['EURUSD','GBPUSD','USDJPY','XAUUSD'];
+          const def = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', ...cryptoPairs];
           setWatchlist(def);
+          setLogPair(def[0]);
         }
       } else {
         // Auto-create defaults
+        const def = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD'];
         await supabase.from('user_settings').upsert({
           user_id: user.id,
           trading_mode: 'manual',
@@ -201,9 +205,9 @@ export default function SettingsPage() {
           max_daily_loss: 5.00,
           max_open_trades: 5,
           daily_signal_limit: 2,
-          watchlist: ['EURUSD','GBPUSD','USDJPY','XAUUSD'],
+          watchlist: def,
         }, { onConflict: 'user_id' });
-        setWatchlist(['EURUSD','GBPUSD','USDJPY','XAUUSD']);
+        setWatchlist(def);
       }
 
       // Portfolio balance

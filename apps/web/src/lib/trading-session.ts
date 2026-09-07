@@ -74,8 +74,8 @@ export function checkTradingSession(pair: string, customDate?: Date): SessionShi
   // London / NY Overlap: 13:00 to 16:30 UTC
 
   if (isGold) {
-    // Gold peak institutional liquidity: 08:00 UTC to 21:00 UTC
-    const goldStart = 8 * 60; // 08:00 UTC
+    // Gold peak institutional liquidity: 07:00 UTC (London/Frankfurt Open) to 21:00 UTC (NY Close)
+    const goldStart = 7 * 60; // 07:00 UTC (08:00 BST / European open)
     const goldEnd = 21 * 60; // 21:00 UTC
     const isOpen = currentMinutes >= goldStart && currentMinutes < goldEnd;
 
@@ -85,29 +85,28 @@ export function checkTradingSession(pair: string, customDate?: Date): SessionShi
         isCrypto: false,
         currentUtcTime: timeStr,
         sessionName: 'London & New York Gold Session',
-        activeHours: '08:00 – 21:00 UTC',
-        nextOpenUtc: '08:00 UTC (London Open)',
-        message: `XAUUSD is outside active London & New York session hours (${timeStr}). Outside session, institutional spreads widen and erratic wicks occur. Please wait until 08:00 UTC.`,
+        activeHours: '07:00 – 21:00 UTC',
+        nextOpenUtc: '07:00 UTC (London Open)',
+        message: `XAUUSD is outside active London & New York session hours (${timeStr}). Outside session, institutional spreads widen and erratic wicks occur. Please wait until 07:00 UTC.`,
       };
     }
 
-    const isOverlap = currentMinutes >= 13 * 60 && currentMinutes <= 16 * 60 + 30;
+    const isOverlap = currentMinutes >= 12 * 60 && currentMinutes <= 16 * 60 + 30;
     return {
       isEligible: true,
       isCrypto: false,
       currentUtcTime: timeStr,
-      sessionName: isOverlap ? 'London / NY Overlap (Prime)' : 'Active London/NY Session',
-      activeHours: '08:00 – 21:00 UTC',
+      sessionName: isOverlap ? 'London / NY Overlap (Prime)' : 'London & NY Gold Session',
+      activeHours: '07:00 – 21:00 UTC',
       nextOpenUtc: 'Active Now',
       message: `XAUUSD in active high-liquidity session. Favorable execution spreads.`,
     };
   }
 
   if (isAsianPair) {
-    // JPY / AUD / NZD pairs are active during Asian Session (00:00 - 09:00 UTC), London (08:00 - 16:30 UTC), and NY (13:00 - 21:00 UTC)
-    // Only dead time: 21:00 UTC to 00:00 UTC (End of NY to Tokyo Open)
+    // JPY / AUD / NZD pairs are active during Asian Session (00:00 - 09:00 UTC), London (07:00 - 16:30 UTC), and NY (12:00 - 21:00 UTC)
+    // Dead zone: 21:00 UTC to 00:00 UTC (End of NY to Tokyo Open)
     const deadStart = 21 * 60;
-    const deadEnd = 24 * 60; // or 0:00
     const isDeadZone = currentMinutes >= deadStart;
 
     if (isDeadZone) {
@@ -126,7 +125,7 @@ export function checkTradingSession(pair: string, customDate?: Date): SessionShi
       isEligible: true,
       isCrypto: false,
       currentUtcTime: timeStr,
-      sessionName: currentMinutes < 9 * 60 ? 'Tokyo / Asian Session' : 'London / NY Session',
+      sessionName: currentMinutes < 7 * 60 ? 'Tokyo / Asian Session' : currentMinutes < 12 * 60 ? 'London Session' : 'London / NY Overlap',
       activeHours: '00:00 – 21:00 UTC',
       nextOpenUtc: 'Active Now',
       message: `${pair} in active trading session.`,
@@ -134,8 +133,8 @@ export function checkTradingSession(pair: string, customDate?: Date): SessionShi
   }
 
   // European / US Forex pairs (EURUSD, GBPUSD, EURGBP, USDCAD, USDCHF)
-  // Active London (08:00) through New York close (21:00 UTC)
-  const euroStart = 8 * 60; // 08:00 UTC
+  // Active London (07:00 UTC / 08:00 BST) through New York close (21:00 UTC)
+  const euroStart = 7 * 60; // 07:00 UTC
   const euroEnd = 21 * 60; // 21:00 UTC
   const isEuroActive = currentMinutes >= euroStart && currentMinutes < euroEnd;
 
@@ -145,19 +144,19 @@ export function checkTradingSession(pair: string, customDate?: Date): SessionShi
       isCrypto: false,
       currentUtcTime: timeStr,
       sessionName: 'London & New York Forex Session',
-      activeHours: '08:00 – 21:00 UTC',
-      nextOpenUtc: '08:00 UTC (London Open)',
-      message: `${pair} is outside active London & NY session hours (${timeStr}). Low volatility chop detected. Wait until 08:00 UTC London opening bells.`,
+      activeHours: '07:00 – 21:00 UTC',
+      nextOpenUtc: '07:00 UTC (London Open)',
+      message: `${pair} is outside active London & NY session hours (${timeStr}). Low volatility chop detected. Wait until 07:00 UTC London opening bells.`,
     };
   }
 
-  const isPrime = currentMinutes >= 13 * 60 && currentMinutes <= 16 * 60 + 30;
+  const isPrime = currentMinutes >= 12 * 60 && currentMinutes <= 16 * 60 + 30;
   return {
     isEligible: true,
     isCrypto: false,
     currentUtcTime: timeStr,
     sessionName: isPrime ? 'London / NY Overlap (Peak Volume)' : 'Active London Session',
-    activeHours: '08:00 – 21:00 UTC',
+    activeHours: '07:00 – 21:00 UTC',
     nextOpenUtc: 'Active Now',
     message: `${pair} in active session with strong institutional volume.`,
   };

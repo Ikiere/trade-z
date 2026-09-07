@@ -25,10 +25,45 @@ export default function GrowthRoadmapWidget() {
   const equity = account?.equity ?? summary?.equity ?? balance;
   const floatingPnl = summary?.total_floating_pnl ?? 0;
 
+  // Growth mode preset: 'aggressive' (+35%), 'momentum' (+20%), 'steady' (+10%), 'custom'
+  const [growthMode, setGrowthMode] = useState<'aggressive' | 'momentum' | 'steady' | 'custom'>('aggressive');
+  const [customGoal, setCustomGoal] = useState<number>(30);
+  const [isEditingCustom, setIsEditingCustom] = useState(false);
+
   // Cool-down and today's loss detection
   const [hasLossToday, setHasLossToday] = useState(false);
   const [todayPnl, setTodayPnl] = useState(0);
   const [todayTradesCount, setTodayTradesCount] = useState(0);
+
+  // Load saved growth mode from localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedMode = localStorage.getItem('tradez_growth_mode') as any;
+      if (savedMode && ['aggressive', 'momentum', 'steady', 'custom'].includes(savedMode)) {
+        setGrowthMode(savedMode);
+      }
+      const savedCustom = localStorage.getItem('tradez_growth_custom_goal');
+      if (savedCustom) {
+        const val = parseFloat(savedCustom);
+        if (!isNaN(val) && val > 0) setCustomGoal(val);
+      }
+    }
+  }, []);
+
+  const handleSelectMode = (mode: 'aggressive' | 'momentum' | 'steady' | 'custom') => {
+    setGrowthMode(mode);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('tradez_growth_mode', mode);
+    }
+  };
+
+  const handleSaveCustom = (val: number) => {
+    setCustomGoal(val);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('tradez_growth_custom_goal', String(val));
+    }
+    setIsEditingCustom(false);
+  };
 
   useEffect(() => {
     const probeTodayPerformance = async () => {
@@ -44,8 +79,10 @@ export default function GrowthRoadmapWidget() {
           const netPnl = todayTrades.reduce((acc: number, t: any) => acc + (Number(t.profit) || 0), 0);
           setTodayPnl(netPnl);
 
-          const hadLoss = todayTrades.some((t: any) => typeof t.profit === 'number' && t.profit < 0);
-          setHasLossToday(hadLoss || netPnl < 0);
+          // Only activate cool-down shield if today's NET closed P&L is negative (e.g. net loss > $2.00)
+          // If the trader is in profit (like making $52), do NOT lock them out!
+          const isNetDailyLoss = netPnl < -2.0 && todayTrades.length > 0;
+          setHasLossToday(isNetDailyLoss);
         }
       } catch (_) {}
     };
@@ -55,13 +92,28 @@ export default function GrowthRoadmapWidget() {
     return () => clearInterval(interval);
   }, []);
 
-  // Growth target calculations calibrated to current balance
-  // Target weekly: +4.0% of balance; Target monthly: +16.0% of balance
-  const weeklyTargetPct = 4.0;
-  const monthlyTargetPct = 16.0;
+  // Growth target calculations
+  let weeklyTargetPct = 35.0;
+  let monthlyTargetPct = 140.0;
+  let weeklyTargetDollars = (balance * (weeklyTargetPct / 100));
+  let monthlyTargetDollars = (balance * (monthlyTargetPct / 100));
 
-  const weeklyTargetDollars = (balance * (weeklyTargetPct / 100));
-  const monthlyTargetDollars = (balance * (monthlyTargetPct / 100));
+  if (growthMode === 'momentum') {
+    weeklyTargetPct = 20.0;
+    monthlyTargetPct = 80.0;
+    weeklyTargetDollars = (balance * (weeklyTargetPct / 100));
+    monthlyTargetDollars = (balance * (monthlyTargetPct / 100));
+  } else if (growthMode === 'steady') {
+    weeklyTargetPct = 10.0;
+    monthlyTargetPct = 40.0;
+    weeklyTargetDollars = (balance * (weeklyTargetPct / 100));
+    monthlyTargetDollars = (balance * (monthlyTargetPct / 100));
+  } else if (growthMode === 'custom') {
+    weeklyTargetDollars = customGoal;
+    monthlyTargetDollars = customGoal * 4;
+    weeklyTargetPct = balance > 0 ? Number(((weeklyTargetDollars / balance) * 100).toFixed(1)) : 35;
+    monthlyTargetPct = Number((weeklyTargetPct * 4).toFixed(1));
+  }
 
   // Weekly progress calculation
   const currentWeekProfit = Math.max(0, todayPnl + (floatingPnl > 0 ? floatingPnl : 0));
@@ -70,8 +122,8 @@ export default function GrowthRoadmapWidget() {
   // Determine user journey phase
   let phaseName = 'Phase 1: Capital Fortress';
   let phaseColor = 'text-brand-400 border-brand-500/30 bg-brand-500/10';
-  let phaseDesc = 'Disciplined capital preservation, 1-2% calibrated risk per trade, max 2 trades/day.';
-  let phaseMilestone = 'Target: Initial account safety & milestone consistency';
+  let phaseDesc = 'Disciplined high-conviction growth. 1-2% calibrated risk per trade, max 2 trades/day.';
+  let phaseMilestone = 'Target: Consistent execution & account milestone scaling';
 
   if (balance >= 50000) {
     phaseName = 'Phase 3: Institutional Scale';
@@ -91,13 +143,13 @@ export default function GrowthRoadmapWidget() {
       <div className="absolute top-0 right-0 w-72 h-72 bg-brand-500/5 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
 
       {/* Top Header Row */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-[#1e293b]/70 pb-3">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-[#1e293b]/70 pb-3">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-brand-500/10 border border-brand-500/20 flex items-center justify-center text-brand-400 shrink-0">
             <Compass className="w-4 h-4" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-1.5">
                 AI Trader Growth Roadmap
               </h3>
@@ -107,27 +159,97 @@ export default function GrowthRoadmapWidget() {
             </div>
             <p className="text-[11px] text-[#94a3b8] font-mono mt-0.5">
               Target calibrated to MT5 balance: <strong className="text-white">${balance.toFixed(2)}</strong>
+              {todayPnl > 0 && (
+                <span className="text-emerald-400 font-bold ml-2">
+                  (Today: +${todayPnl.toFixed(2)})
+                </span>
+              )}
             </p>
           </div>
         </div>
 
-        {/* Status Pills */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {hasLossToday ? (
-            <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-cyan-400 bg-cyan-500/10 border border-cyan-500/25 px-2.5 py-1 rounded-lg">
-              <Snowflake className="w-3.5 h-3.5 animate-pulse" />
-              <span>COOL-DOWN SHIELD ACTIVE (RESTING TODAY)</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-lg">
-              <Shield className="w-3.5 h-3.5" />
-              <span>CAPITAL PROTECTION VERIFIED</span>
-            </div>
-          )}
+        {/* Growth Strategy Presets */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[10px] font-mono text-[#64748b] mr-1 hidden sm:inline">Pace:</span>
+          <button
+            onClick={() => handleSelectMode('aggressive')}
+            className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold border transition-all ${
+              growthMode === 'aggressive'
+                ? 'bg-brand-500/20 text-brand-300 border-brand-500/40 shadow-sm'
+                : 'bg-[#111728] text-[#94a3b8] border-[#1e293b] hover:text-white'
+            }`}
+            title="Aggressive growth target: +35% weekly (+140% monthly)"
+          >
+            🔥 High Growth (+35%)
+          </button>
+          <button
+            onClick={() => handleSelectMode('momentum')}
+            className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold border transition-all ${
+              growthMode === 'momentum'
+                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-sm'
+                : 'bg-[#111728] text-[#94a3b8] border-[#1e293b] hover:text-white'
+            }`}
+            title="Momentum scaling: +20% weekly (+80% monthly)"
+          >
+            ⚡ Momentum (+20%)
+          </button>
+          <button
+            onClick={() => handleSelectMode('steady')}
+            className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold border transition-all ${
+              growthMode === 'steady'
+                ? 'bg-blue-500/20 text-blue-300 border-blue-500/40 shadow-sm'
+                : 'bg-[#111728] text-[#94a3b8] border-[#1e293b] hover:text-white'
+            }`}
+            title="Steady compounding: +10% weekly (+40% monthly)"
+          >
+            🛡️ Steady (+10%)
+          </button>
+          <button
+            onClick={() => {
+              handleSelectMode('custom');
+              setIsEditingCustom(true);
+            }}
+            className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold border transition-all ${
+              growthMode === 'custom'
+                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 shadow-sm'
+                : 'bg-[#111728] text-[#94a3b8] border-[#1e293b] hover:text-white'
+            }`}
+            title="Set your custom weekly target in dollars"
+          >
+            ✏️ Custom (${weeklyTargetDollars.toFixed(0)}/wk)
+          </button>
         </div>
       </div>
 
-      {/* Cool-Down Alert Banner (if loss occurred) */}
+      {/* Custom Goal Input Popup/Row */}
+      {isEditingCustom && (
+        <div className="p-3 rounded-lg bg-bg-card border border-cyan-500/30 flex items-center justify-between gap-3">
+          <span className="text-xs text-white font-mono">Set Weekly Goal ($):</span>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min="5"
+              max="50000"
+              step="5"
+              defaultValue={customGoal}
+              id="custom-goal-input"
+              className="px-2.5 py-1 rounded bg-[#090d16] border border-[#1e293b] text-xs text-cyan-300 font-mono w-28 focus:outline-none focus:border-cyan-400"
+            />
+            <button
+              onClick={() => {
+                const el = document.getElementById('custom-goal-input') as HTMLInputElement;
+                const val = parseFloat(el?.value || '30');
+                handleSaveCustom(val);
+              }}
+              className="px-3 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-semibold"
+            >
+              Save Target
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Cool-Down Alert Banner (only if true NET daily loss occurred) */}
       {hasLossToday && (
         <motion.div
           initial={{ opacity: 0, y: -4 }}
@@ -140,8 +262,8 @@ export default function GrowthRoadmapWidget() {
               Capital Defense Shield Active: System Paused for Today
             </div>
             <p className="text-[11px] text-cyan-200/90 leading-relaxed">
-              A trade loss was registered today ({todayPnl < 0 ? `-$${Math.abs(todayPnl).toFixed(2)}` : 'stop-out'}).
-              To preserve psychological discipline and eliminate revenge trading, the AI will not place new trades today.
+              A net loss of -${Math.abs(todayPnl).toFixed(2)} was registered today.
+              To preserve psychological discipline and eliminate emotional revenge trading, execution is paused for the remainder of the day.
               System recovers and unlocks automatically tomorrow at next session open.
             </p>
           </div>
@@ -193,7 +315,7 @@ export default function GrowthRoadmapWidget() {
               Projected balance: ${(balance + monthlyTargetDollars).toFixed(2)}
             </p>
             <p className="text-[9px] font-mono text-[#64748b] mt-0.5">
-              Achieved by 1:2 R:R at max 2 trades/day
+              Achieved with high-conviction intraday scalps
             </p>
           </div>
         </div>

@@ -86,10 +86,31 @@ class DecisionEngine(BaseEngine):
                 ma20 = float(closes.tail(20).mean())
                 direction = "bullish" if current_price >= ma20 else "bearish"
 
-        # Config threshold evaluation
-        min_threshold = getattr(settings, 'min_confidence_threshold', 65.0) or 65.0
-        if min_threshold > 80.0:
-            min_threshold = 70.0  # sensible threshold cap for high quality confluences
+        # Enforce strict institutional threshold: minimum 72.0% confidence required to authorize an entry
+        configured_threshold = getattr(settings, 'min_confidence_threshold', 72.0) or 72.0
+        min_threshold = max(72.0, min(85.0, configured_threshold))
+
+        # Strict SMC Premium/Discount Anti-Chasing Veto & Counter-Trend Protection
+        zone = struct_res.metrics.get("trading_zone") if struct_res else None
+        if not failed_layer:
+            # Rule 1: Never BUY in Premium without an institutional retracement or confirmed SFP sweep
+            if direction == "bullish" and zone == "premium":
+                is_sweep = liq_res and liq_res.result == "bullish_sweep"
+                if not is_sweep:
+                    failed_layer = ("smc_zone_filter", "SMC Rule Veto: Cannot BUY in Premium zone (above equilibrium). Entering here buys the high before liquidity pullbacks.")
+            # Rule 2: Never SELL in Discount without an institutional retracement or confirmed SFP sweep
+            elif direction == "bearish" and zone == "discount":
+                is_sweep = liq_res and liq_res.result == "bearish_sweep"
+                if not is_sweep:
+                    failed_layer = ("smc_zone_filter", "SMC Rule Veto: Cannot SELL in Discount zone (below equilibrium). Entering here sells the low before liquidity bounces.")
+            # Rule 3: Counter-Trend Veto against 4H Trend
+            if not failed_layer and higher_bias and higher_bias.result in ["bullish", "bearish"]:
+                if direction == "bullish" and higher_bias.result == "bearish":
+                    if not (liq_res and liq_res.result == "bullish_sweep"):
+                        failed_layer = ("higher_timeframe_veto", "Counter-Trend Veto: 4H timeframe is Bearish. Long entries blocked until structural reversal confirms.")
+                elif direction == "bearish" and higher_bias.result == "bullish":
+                    if not (liq_res and liq_res.result == "bearish_sweep"):
+                        failed_layer = ("higher_timeframe_veto", "Counter-Trend Veto: 4H timeframe is Bullish. Short entries blocked until structural reversal confirms.")
 
         # Altcoin Smart Liquidity & Momentum Strategy (ASLM)
         alt_meta = None

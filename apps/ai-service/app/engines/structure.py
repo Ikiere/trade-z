@@ -57,15 +57,23 @@ class MarketStructureEngine(BaseEngine):
             zone = "premium"
 
         bias = "neutral"
-        score = 60.0
+        score = 55.0
         if latest_break == "bullish_bos":
             bias = "bullish"
-            score = 90.0
+            # Overextended breakouts in Premium are prone to fakeouts/sweeps; discount pullbacks are high confidence
+            score = 65.0 if zone == "premium" else 85.0
         elif latest_break == "bearish_bos":
             bias = "bearish"
-            score = 90.0
+            # Overextended breakdowns in Discount are prone to bounces/sweeps; premium pullbacks are high confidence
+            score = 65.0 if zone == "discount" else 85.0
+        elif zone == "discount":
+            bias = "bullish"
+            score = 75.0
+        elif zone == "premium":
+            bias = "bearish"
+            score = 75.0
 
-        explanation = f"Market structure shows a {latest_break.upper()} breakout. Current price is in the {zone.upper()} zone."
+        explanation = f"Market structure shows a {latest_break.upper()} status. Current price is in the {zone.upper()} zone."
 
         return EngineResult(
             result=bias,

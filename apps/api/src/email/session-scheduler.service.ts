@@ -23,13 +23,25 @@ export class SessionSchedulerService implements OnApplicationBootstrap {
   onApplicationBootstrap() {
     this.logger.log('🚀 Session alert scheduler initialized.');
     
-    // Check session boundaries every 5 minutes
+    // Check session boundaries and keep cloud AI warm every 5 minutes
     this.checkInterval = setInterval(() => {
       this.checkMarketSessions();
+      this.keepAiServiceWarm();
     }, 5 * 60 * 1000);
 
     // Run a quick check on startup
     this.checkMarketSessions();
+    this.keepAiServiceWarm();
+  }
+
+  private async keepAiServiceWarm() {
+    const aiUrl = this.configService.get<string>('AI_SERVICE_URL') || 'https://trade-z-ai-service.onrender.com';
+    try {
+      await fetch(`${aiUrl}/health`, { signal: AbortSignal.timeout(5000) });
+      this.logger.log(`[AI Keep-Alive] Pinged AI engine on cloud to prevent idle spin-down.`);
+    } catch (_) {
+      // Quiet background warm-up
+    }
   }
 
   onModuleDestroy() {

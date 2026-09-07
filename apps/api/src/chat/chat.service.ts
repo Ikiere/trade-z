@@ -513,23 +513,23 @@ export class ChatService {
       let response: Response | null = null;
       let lastErrMsg = '';
 
-      // Try calling primary AI service, with 1 automatic retry on 502/503/504 (Render cold-start)
-      for (let attempt = 1; attempt <= 2; attempt++) {
+      // Try calling primary AI service, with robust automatic retry on 502/503/504 (Render cold-start)
+      for (let attempt = 1; attempt <= 4; attempt++) {
         try {
           response = await fetch(targetUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: postBody,
-            signal: AbortSignal.timeout(25000),
+            signal: AbortSignal.timeout(30000),
           });
 
           if (response.ok) {
             return await response.json();
           }
 
-          if ([502, 503, 504].includes(response.status) && attempt === 1) {
-            console.log(`[chat.service] AI service is warming up (HTTP ${response.status}). Retrying in 4 seconds...`);
-            await new Promise((resolve) => setTimeout(resolve, 4000));
+          if ([502, 503, 504].includes(response.status) && attempt < 4) {
+            console.log(`[chat.service] AI service is waking up from idle (HTTP ${response.status}). Attempt ${attempt}/4. Retrying in 5 seconds...`);
+            await new Promise((resolve) => setTimeout(resolve, 5000));
             continue;
           }
 
@@ -537,9 +537,9 @@ export class ChatService {
           lastErrMsg = errData?.detail || errData?.message || `AI service returned HTTP ${response.status}`;
           break;
         } catch (netErr: any) {
-          console.warn(`[chat.service] Attempt ${attempt} failed connecting to ${targetUrl}:`, netErr.message);
-          if (attempt === 1) {
-            await new Promise((resolve) => setTimeout(resolve, 3000));
+          console.warn(`[chat.service] Attempt ${attempt}/4 connecting to ${targetUrl}:`, netErr.message);
+          if (attempt < 4) {
+            await new Promise((resolve) => setTimeout(resolve, 4000));
           } else {
             lastErrMsg = netErr.message;
           }

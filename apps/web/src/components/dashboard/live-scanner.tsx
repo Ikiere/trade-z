@@ -780,12 +780,15 @@ export default function LiveScannerWidget() {
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
         const errMsg = errBody?.message || errBody?.detail || `HTTP ${res.status}`;
-        if (errMsg.includes('502') || errMsg.includes('spinning up') || errMsg.includes('warming up') || errMsg.includes('cold start')) {
+        if (errMsg.includes('502') || errMsg.includes('spinning up') || errMsg.includes('warming up') || errMsg.includes('cold start') || errMsg.includes('timed out')) {
           setLogs(prev => [
-            `[AI ENGINE WAKING UP ⏳] AI service is warming up on cloud infrastructure.`,
-            `  -> Please wait 5-10 seconds and click "Analyze ${pair} Chart" again.`,
+            `[AI ENGINE WAKING UP ⏳] AI service is waking up from idle on cloud infrastructure.`,
+            `  -> Auto-retrying analysis in 6 seconds... (No need to click)`,
             ...prev
           ]);
+          setTimeout(() => {
+            handleAnalyzePair(pair);
+          }, 6000);
           return;
         }
         setLogs(prev => [`[ERROR] ${errMsg}`, ...prev]);

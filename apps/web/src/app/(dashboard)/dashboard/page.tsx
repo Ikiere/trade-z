@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import LiveScannerWidget from '@/components/dashboard/live-scanner';
+import GrowthRoadmapWidget from '@/components/dashboard/growth-roadmap';
 import TradingViewChart from '@/components/charts/tradingview-chart';
 import {
   TrendingUp,
@@ -206,7 +207,10 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Main Core Grid: AI Scanner & Chart */}
+      {/* User Journey Growth Roadmap & Cool-Down Shield */}
+      <GrowthRoadmapWidget />
+
+      {/* Main Grid: Live AI Scanner + TradingView Chart */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6">
         {/* Left: AI Scanner & Auto-Execution */}
         <div className="lg:col-span-7 space-y-4">
@@ -220,7 +224,7 @@ export default function DashboardPage() {
               Market Action &bull; {activeChartPair}
             </span>
             <div className="flex gap-1">
-              {['EURUSD', 'XAUUSD', 'GBPUSD'].map((pair) => (
+              {['EURUSD', 'XAUUSD', 'BTCUSD', 'GBPUSD'].map((pair) => (
                 <button
                   key={pair}
                   onClick={() => setActiveChartPair(pair)}

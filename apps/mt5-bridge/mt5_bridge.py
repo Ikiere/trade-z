@@ -47,6 +47,12 @@ def get_broker_symbol(target_pair: str):
     aliases = []
     if 'XAU' in clean_target or 'GOLD' in clean_target:
         aliases.extend(['XAUUSD', 'GOLD', 'XAUUSDm', 'GOLDm', 'XAUUSD+', 'GOLD+', 'XAUUSD.m'])
+    elif 'BTC' in clean_target:
+        aliases.extend(['BTCUSD', 'BTCUSDm', 'BTCUSD+', 'BTCUSDT', 'BTCUSD.m', 'BTCUSD.pro', 'BTCUSD.raw', 'Bitcoin'])
+    elif 'ETH' in clean_target:
+        aliases.extend(['ETHUSD', 'ETHUSDm', 'ETHUSD+', 'ETHUSDT', 'ETHUSD.m', 'ETHUSD.pro', 'ETHUSD.raw', 'Ethereum'])
+    elif 'SOL' in clean_target:
+        aliases.extend(['SOLUSD', 'SOLUSDm', 'SOLUSD+', 'SOLUSDT', 'SOLUSD.m', 'SOLUSD.pro', 'SOLUSD.raw', 'Solana'])
     elif len(clean_target) == 6:
         aliases.extend([
             f"{clean_target}.m",

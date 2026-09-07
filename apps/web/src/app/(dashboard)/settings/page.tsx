@@ -13,6 +13,7 @@ import { getApiBaseUrl } from '@/lib/api';
 const SUPPORTED_PAIRS = [
   'EURUSD','GBPUSD','USDJPY','XAUUSD','AUDUSD',
   'USDCAD','EURGBP','GBPJPY','USDCHF','NZDUSD',
+  'BTCUSD','ETHUSD','SOLUSD',
 ];
 
 // ─── small reusable section card ───────────────────────────────────────────
@@ -249,7 +250,7 @@ export default function SettingsPage() {
           default_lot_size: lotSize,
           default_risk_per_trade: riskReward,
           max_daily_loss: maxLoss,
-          daily_signal_limit: dailySignalLimit,
+          daily_signal_limit: 2,
           updated_at: new Date().toISOString(),
         })
         .eq('user_id', userId);
@@ -397,12 +398,21 @@ export default function SettingsPage() {
                   onChange={e => setMaxLoss(Number(e.target.value))} className="input font-mono text-xs" />
               </div>
               <div>
-                <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">
-                  Daily Signal Limit
-                </label>
-                <input type="number" step="1" min="1" max="50" value={dailySignalLimit}
-                  onChange={e => setDailySignalLimit(Number(e.target.value))} className="input font-mono text-xs" />
-                <p className="text-[9px] text-[#475569] font-mono mt-1">Default: 2 signals/day</p>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-[#94a3b8] font-mono uppercase text-[10px]">
+                    Daily Trade Limit
+                  </label>
+                  <span className="text-[9px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                    DISCIPLINE LOCKED
+                  </span>
+                </div>
+                <div className="input font-mono text-xs bg-bg-secondary/40 border-[#1e293b] text-white flex items-center justify-between cursor-not-allowed opacity-90">
+                  <span>2 Trades / Day</span>
+                  <span className="text-[10px] text-brand-400 font-bold">MAX</span>
+                </div>
+                <p className="text-[9px] text-[#64748b] font-mono mt-1 leading-tight">
+                  Enforced by Institutional Shield to eliminate greed and revenge trading. Manual reset is permanently disabled.
+                </p>
               </div>
             </div>
             <SaveMsg msg={msgSettings} />

@@ -61,7 +61,10 @@ class HistoricalPatternEngine(BaseEngine):
         elif current_zone == "premium":
             candidate_direction = "short"
 
-        # 2. Consult the AI Cognitive Brain supervisor
+        # 2. Autonomous Timeline Reading & AI Cognitive Brain Consultation
+        timeline_reading = brain_supervisor.analyze_timeline_chart(snapshot.symbol, snapshot.df)
+        context["timeline_reading"] = timeline_reading
+
         current_close = float(snapshot.df["close"].iloc[-1]) if not snapshot.df.empty else 0.0
         directive: BrainGuidanceDirective = brain_supervisor.consult(
             symbol=snapshot.symbol,

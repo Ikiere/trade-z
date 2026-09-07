@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
-import { Scan, TrendingUp, TrendingDown, Loader2, AlertTriangle, Zap, CheckCircle2, ShieldAlert, Sparkles, Brain } from 'lucide-react';
+import { Scan, TrendingUp, TrendingDown, Loader2, AlertTriangle, Zap, CheckCircle2, ShieldAlert, Sparkles, Brain, Clock, ShieldCheck, Snowflake } from 'lucide-react';
 import { getApiBaseUrl } from '@/lib/api';
+import { checkTradingSession, SessionShieldStatus } from '@/lib/trading-session';
 
 interface Mt5AccountInfo {
   connected: boolean;
@@ -45,6 +46,7 @@ const getSimulatedPrice = (pair: string) => {
   if (u.includes('XAUUSD') || u.includes('GOLD')) return { entry: 2850.50, sl: 2844.50, tp: 2865.50 };
   if (u.includes('BTCUSD') || u.includes('BTC')) return { entry: 88500.0, sl: 87500.0, tp: 90500.0 };
   if (u.includes('ETHUSD') || u.includes('ETH')) return { entry: 2820.0, sl: 2780.0, tp: 2900.0 };
+  if (u.includes('SOLUSD') || u.includes('SOL')) return { entry: 195.50, sl: 191.00, tp: 204.50 };
   if (u.includes('AUDUSD')) return { entry: 0.6650, sl: 0.6635, tp: 0.6685 };
   if (u.includes('USDCAD')) return { entry: 1.3620, sl: 1.3605, tp: 1.3655 };
   return { entry: 1.0000, sl: 0.9980, tp: 1.0050 };
@@ -55,7 +57,7 @@ const getSimulatedSetup = (pair: string, direction: 'long' | 'short') => {
   const entry = base.entry;
   const isJpy = pair.toUpperCase().includes('JPY');
   const isGold = pair.toUpperCase().includes('XAU') || pair.toUpperCase().includes('GOLD');
-  const isCrypto = pair.toUpperCase().includes('BTC') || pair.toUpperCase().includes('ETH');
+  const isCrypto = pair.toUpperCase().includes('BTC') || pair.toUpperCase().includes('ETH') || pair.toUpperCase().includes('SOL');
   
   const pips = isJpy ? 0.01 : isGold ? 1.0 : isCrypto ? 10.0 : 0.0001;
   const decimals = isJpy ? 3 : isGold || isCrypto ? 2 : 5;
@@ -155,14 +157,15 @@ export default function LiveScannerWidget() {
       if (s) {
         setTradingMode(s.trading_mode || 'fully_automatic');
         setDefaultLot(Number(s.default_lot_size) || 0.01);
-        setDailySignalLimit(Number(s.daily_signal_limit) || 50);
+        setDailySignalLimit(2); // Institutional discipline: strictly locked to 2 trades/day
 
         const wl = Array.isArray(s.watchlist) && s.watchlist.length > 0
           ? s.watchlist
-          : ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD'];
+          : ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD'];
         setWatchlist(wl);
       } else {
-        setWatchlist(['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD']);
+        setDailySignalLimit(2);
+        setWatchlist(['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD']);
       }
 
       // Count today's signals (to enforce daily limit)
@@ -230,6 +233,67 @@ export default function LiveScannerWidget() {
     let executedTicket: number | null = null;
     let executedLot = setup.lotSize || defaultLot || 0.01;
     let pricePlaced = setup.entryPrice;
+
+    // ── GUARD 1: Trading Session Protection Shield ─────────────
+    const sessionShield = checkTradingSession(setup.pair);
+    if (!sessionShield.isEligible) {
+      setLogs(prev => [
+        `[SESSION SHIELD 🛡️] Trade execution vetoed: ${setup.pair} is outside active ${sessionShield.sessionName}!`,
+        `  -> Current: ${sessionShield.currentUtcTime} | Session Hours: ${sessionShield.activeHours}`,
+        `  -> ${sessionShield.message}`,
+        ...prev,
+      ]);
+      return null;
+    }
+
+    // ── GUARD 2: Greed Shield — Max 2 Open Positions in MT5 ────
+    try {
+      const posRes = await fetch('http://127.0.0.1:5001/positions', { signal: AbortSignal.timeout(1500) });
+      if (posRes.ok) {
+        const posData = await posRes.json();
+        const activePositions = Array.isArray(posData.positions) ? posData.positions : [];
+        if (activePositions.length >= 2) {
+          setLogs(prev => [
+            `[GREED SHIELD 🛑] Trade vetoed: Maximum 2 open positions active in MT5 (${activePositions.length}/2).`,
+            `  -> Institutional discipline rule: No new trades will be executed until an existing position is closed.`,
+            ...prev,
+          ]);
+          return null;
+        }
+      }
+    } catch (_) {}
+
+    // ── GUARD 3: Greed Shield — Max 2 Trades Per Day ───────────
+    if (todaySignalCount >= 2) {
+      setLogs(prev => [
+        `[GREED SHIELD 🛑] Trade vetoed: Daily limit of 2 trades reached for today (${todaySignalCount}/2).`,
+        `  -> Institutional rule: 2 trades/day maximum to eliminate overtrading and emotional greed. Resumes tomorrow.`,
+        ...prev,
+      ]);
+      return null;
+    }
+
+    // ── GUARD 4: Loss Cool-Down Shield ─────────────────────────
+    try {
+      const histRes = await fetch('http://127.0.0.1:5001/history', { signal: AbortSignal.timeout(1500) });
+      if (histRes.ok) {
+        const histData = await histRes.json();
+        const trades = Array.isArray(histData.trades) ? histData.trades : [];
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const todayTrades = trades.filter((t: any) => (t.time_close || t.time || '').startsWith(todayStr));
+        const hasLossToday = todayTrades.some((t: any) => typeof t.profit === 'number' && t.profit < 0);
+        const netDailyPnl = todayTrades.reduce((acc: number, t: any) => acc + (Number(t.profit) || 0), 0);
+
+        if (hasLossToday || netDailyPnl < 0) {
+          setLogs(prev => [
+            `[COOL-DOWN SHIELD 🧊] Trade vetoed: A loss was detected today (-$${Math.abs(netDailyPnl).toFixed(2)}).`,
+            `  -> System in Cool-Down mode to protect capital and prevent revenge trading. Automatically unlocks tomorrow.`,
+            ...prev,
+          ]);
+          return null;
+        }
+      }
+    } catch (_) {}
 
     // 1. Send direct to local MT5 bridge (running on user's laptop at 127.0.0.1:5001)
     try {
@@ -361,10 +425,12 @@ export default function LiveScannerWidget() {
   const runSingleScan = useCallback(async (specificPair?: string) => {
     if (watchlist.length === 0 || !userId) return;
  
-    // Enforce daily signal limit
-    if (todaySignalCount >= dailySignalLimit) {
+    // Enforce strict daily trade limit (institutional greed shield)
+    if (todaySignalCount >= 2) {
       setLogs(prev => [
-        `[LIMIT REACHED] Daily signal limit of ${dailySignalLimit} reached. Increase limit in Settings.`,
+        `[GREED SHIELD 🛑] Daily limit of 2 trades reached for today.`,
+        `  -> Institutional discipline rule: Maximum 2 trades per day to prevent overtrading and preserve capital.`,
+        `  -> Scanning paused. Automatically resumes tomorrow.`,
         ...prev,
       ]);
       setIsScanningActive(false);
@@ -378,8 +444,23 @@ export default function LiveScannerWidget() {
     }
 
     const pair = specificPair || watchlist[scanIndex.current];
+
+    // Check Trading Session Shield before scanning/executing
+    const sessionCheck = checkTradingSession(pair);
+    if (!sessionCheck.isEligible) {
+      setLogs(prev => [
+        `[SESSION SHIELD 🛡️] ${pair} is outside active session (${sessionCheck.currentUtcTime}).`,
+        `  -> ${sessionCheck.message}`,
+        ...prev,
+      ]);
+      if (!specificPair) {
+        scanIndex.current = (scanIndex.current + 1) % watchlist.length;
+      }
+      return;
+    }
+
     setActivePair(pair);
-    setLogs(prev => [`[SCANNING] Requesting AI analysis for ${pair}...`, ...prev]);
+    setLogs(prev => [`[SCANNING] Requesting AI analysis for ${pair} (${sessionCheck.sessionName})...`, ...prev]);
  
     try {
       const apiBase = getApiBaseUrl();
@@ -775,11 +856,14 @@ export default function LiveScannerWidget() {
           </button>
         </div>
 
-        {/* Limit warning */}
+        {/* Greed Shield Limit Banner */}
         {limitReached && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-500/5 border border-amber-500/20 text-amber-400 text-[10px] font-mono">
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-            Daily signal limit reached ({dailySignalLimit}). Go to <strong className="mx-1">Settings → Risk Rules</strong> to increase your limit.
+          <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-mono">
+            <ShieldAlert className="w-4 h-4 shrink-0 text-blue-400" />
+            <span>
+              <strong>GREED SHIELD ENFORCED:</strong> Maximum daily trade limit reached ({todaySignalCount}/2).
+              Institutional discipline is active to eliminate emotional loss and overtrading. Next trading session opens tomorrow.
+            </span>
           </div>
         )}
 
@@ -792,19 +876,37 @@ export default function LiveScannerWidget() {
             </p>
           ) : (
             <div className="flex flex-wrap gap-2">
-              {watchlist.map(pair => (
-                <span
-                  key={pair}
-                  className={`px-2.5 py-1 rounded-lg border text-[10px] font-mono font-semibold flex items-center gap-1.5 transition-all ${
-                    activePair === pair
-                      ? 'border-brand-500/50 bg-brand-500/10 text-brand-400'
-                      : 'border-[#1e293b] bg-bg-secondary text-white'
-                  }`}
-                >
-                  {activePair === pair && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
-                  {pair}
-                </span>
-              ))}
+              {watchlist.map(pair => {
+                const sInfo = checkTradingSession(pair);
+                return (
+                  <span
+                    key={pair}
+                    title={sInfo.message}
+                    className={`px-2.5 py-1 rounded-lg border text-[10px] font-mono font-semibold flex items-center gap-1.5 transition-all ${
+                      activePair === pair
+                        ? 'border-brand-500/50 bg-brand-500/10 text-brand-400'
+                        : 'border-[#1e293b] bg-bg-secondary text-white'
+                    }`}
+                  >
+                    {activePair === pair ? (
+                      <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                    ) : sInfo.isCrypto ? (
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" title="Crypto 24/7" />
+                    ) : sInfo.isEligible ? (
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Session Active" />
+                    ) : (
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400/80" title="Outside Session (Shield Active)" />
+                    )}
+                    {pair}
+                    {!sInfo.isEligible && (
+                      <span className="text-[8px] text-amber-400 font-mono font-normal">SHIELD</span>
+                    )}
+                    {sInfo.isCrypto && (
+                      <span className="text-[8px] text-cyan-400 font-mono font-normal">24/7</span>
+                    )}
+                  </span>
+                );
+              })}
             </div>
           )}
         </div>

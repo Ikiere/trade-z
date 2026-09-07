@@ -8,6 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { registerSchema, type RegisterInput } from '@trade-z/validation';
 import { Eye, EyeOff, Mail, Lock, User, Loader2, ArrowRight, Check } from 'lucide-react';
 import { createClient } from '@/lib/supabase';
+import { getApiBaseUrl } from '@/lib/api';
 import * as Sentry from '@sentry/nextjs';
 
 export default function RegisterPage() {
@@ -40,55 +41,99 @@ export default function RegisterPage() {
     setSuccessMsg(null);
 
     try {
-      const { data: signUpData, error } = await supabase.auth.signUp({
-        email: data.email,
-        password: data.password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/dashboard`,
-          data: {
-            full_name: data.fullName,
-          },
-        },
-      });
+      // 1. First attempt direct Supabase client signup
+      let signUpData: any = null;
+      let directError: any = null;
 
-      if (error) {
-        // error.message can be an empty string when a DB trigger crashes (500)
-        const msg = error.message?.trim();
-        Sentry.captureException(error, {
-          tags: { flow: 'signup', error_code: error.status?.toString() ?? 'unknown' },
-          extra: { email: data.email, supabase_error: error },
+      try {
+        const res = await supabase.auth.signUp({
+          email: data.email,
+          password: data.password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/dashboard`,
+            data: {
+              full_name: data.fullName,
+            },
+          },
         });
-        if (!msg || msg === 'Database error saving new user') {
+        signUpData = res.data;
+        directError = res.error;
+      } catch (clientErr) {
+        directError = clientErr;
+      }
+
+      // 2. If direct signup failed (e.g. 500 trigger error or network timeout), try backend API
+      if (directError || !signUpData?.user) {
+        try {
+          const apiBase = getApiBaseUrl();
+          const apiRes = await fetch(`${apiBase}/api/v1/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: data.email,
+              password: data.password,
+              fullName: data.fullName,
+            }),
+          });
+
+          if (apiRes.ok) {
+            const apiJson = await apiRes.json();
+            if (apiJson.success) {
+              // Try signing in immediately with the newly created credentials
+              const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
+                email: data.email,
+                password: data.password,
+              });
+
+              if (!signInErr && signInData?.session) {
+                router.push('/dashboard');
+                return;
+              } else {
+                setSuccessMsg('Account registered successfully! You can now log in.');
+                return;
+              }
+            }
+          } else {
+            const errBody = await apiRes.json().catch(() => ({}));
+            if (errBody?.message && typeof errBody.message === 'string' && errBody.message !== '{}') {
+              setErrorMsg(errBody.message);
+              return;
+            }
+          }
+        } catch (apiErr) {
+          console.warn('[Register] Backend fallback registration error:', apiErr);
+        }
+
+        // Parse directError if backend fallback also didn't succeed
+        let rawMsg = '';
+        if (directError) {
+          if (typeof directError === 'string') rawMsg = directError;
+          else if (directError.message && typeof directError.message === 'string') rawMsg = directError.message;
+          else if (directError.error_description) rawMsg = directError.error_description;
+        }
+
+        rawMsg = rawMsg.trim();
+        if (!rawMsg || rawMsg === '{}' || rawMsg === '[object Object]' || rawMsg === 'Database error saving new user') {
           setErrorMsg(
-            'Account setup failed — the database is not fully configured yet. Please contact support.'
+            'Registration could not be completed. If this email is already registered, please sign in. Otherwise, please try again shortly.'
           );
         } else {
-          setErrorMsg(msg);
+          setErrorMsg(rawMsg);
         }
-      } else if (!signUpData?.user) {
-        // User is null — server-side silent failure (trigger crash, 500, etc.)
-        Sentry.captureMessage('Signup returned null user with no error', {
-          level: 'error',
-          tags: { flow: 'signup' },
-          extra: { email: data.email, signUpData },
-        });
-        setErrorMsg(
-          'Registration failed due to a server error. Please try again in a moment.'
-        );
       } else if (signUpData.session) {
         // Email verification is disabled — user is immediately signed in
         router.push('/dashboard');
       } else {
-        // Email verification enabled — account created, needs email confirmation
-        setSuccessMsg('Account created! Please check your email to verify your account.');
+        // Account created, email verification enabled
+        setSuccessMsg('Account created! Please check your email to verify your account or proceed to login.');
       }
-    } catch (err) {
-      Sentry.captureException(err, {
-        tags: { flow: 'signup', type: 'unexpected' },
-        extra: { email: data.email },
-      });
+    } catch (err: any) {
       console.error('[Register] Unexpected error:', err);
-      setErrorMsg('An unexpected error occurred. Please try again.');
+      let fallbackMsg = err?.message || '';
+      if (!fallbackMsg || fallbackMsg === '{}' || fallbackMsg === '[object Object]') {
+        fallbackMsg = 'An unexpected error occurred. Please try again in a few moments.';
+      }
+      setErrorMsg(fallbackMsg);
     } finally {
       setIsLoading(false);
     }

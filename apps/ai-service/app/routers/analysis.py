@@ -241,6 +241,7 @@ async def quick_analysis(request: AnalysisRequest):
             "risk_reward": cert.get("risk_reward", rr),
             "recommended_lot_size": cert.get("recommended_lot_size", 0.01),
             "dollar_risk": cert.get("dollar_risk", 0.0),
+            "collaboration": cert.get("collaboration", {}),
             "certificate": cert,
             "timestamp": datetime.now(timezone.utc).isoformat()
         },

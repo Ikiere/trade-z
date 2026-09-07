@@ -101,17 +101,23 @@ export class ChatService {
     pair: string,
     timeframe: string,
     account?: { balance?: number; equity?: number; leverage?: number },
+    clientHistory?: any[],
   ): Promise<any> {
     try {
       // 1. Fetch last 10 closed trades matching this pair for AI loss autopsy & pattern learning
-      const { data: closedTrades } = await this.supabase
-        .from('trades')
-        .select('id, pair, direction, pnl, pips, status, entry_price, stop_loss, take_profit, opened_at, closed_at')
-        .eq('user_id', userId)
-        .eq('pair', pair)
-        .in('status', ['closed', 'stopped_out', 'take_profit'])
-        .order('closed_at', { ascending: false })
-        .limit(10);
+      let closedTrades = Array.isArray(clientHistory) && clientHistory.length > 0 ? clientHistory : null;
+
+      if (!closedTrades) {
+        const { data: dbTrades } = await this.supabase
+          .from('trades')
+          .select('id, pair, direction, pnl, pips, status, entry_price, stop_loss, take_profit, opened_at, closed_at')
+          .eq('user_id', userId)
+          .eq('pair', pair)
+          .in('status', ['closed', 'stopped_out', 'take_profit'])
+          .order('closed_at', { ascending: false })
+          .limit(10);
+        closedTrades = dbTrades || [];
+      }
 
       let balance = account?.balance;
       let equity = account?.equity;

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
-import { Scan, TrendingUp, TrendingDown, Loader2, AlertTriangle, Zap, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { Scan, TrendingUp, TrendingDown, Loader2, AlertTriangle, Zap, CheckCircle2, ShieldAlert, Sparkles, Brain } from 'lucide-react';
 import { getApiBaseUrl } from '@/lib/api';
 
 interface Mt5AccountInfo {
@@ -28,6 +28,13 @@ interface LatestTradeSetup {
   isApproved: boolean;
   timestamp: string;
   mt5Ticket?: number | null;
+  collaboration?: {
+    active?: boolean;
+    brain_verdict?: string;
+    teacher_lesson?: string;
+    student_adaptation?: string;
+    collaborative_rationale?: string;
+  };
 }
 
 const getSimulatedPrice = (pair: string) => {
@@ -535,6 +542,8 @@ export default function LiveScannerWidget() {
 
       setTodaySignalCount(n => n + 1);
 
+      const collab = info.collaboration || info.certificate?.collaboration;
+
       // Save as latest setup
       setLatestSetup({
         pair,
@@ -549,6 +558,7 @@ export default function LiveScannerWidget() {
         reasoning,
         isApproved,
         timestamp: new Date().toLocaleTimeString(),
+        collaboration: collab,
       });
 
       if (isApproved) {
@@ -564,7 +574,13 @@ export default function LiveScannerWidget() {
           `  -> ENTRY: ${entryPrice.toFixed(5)} (SL: ${stopLoss.toFixed(5)}, TP: ${takeProfit.toFixed(5)})`,
           `  -> Size: ${safeLot} Lots (MT5 Balance-Calibrated) | Confidence: ${confidence.toFixed(1)}%`,
         ];
-        if (hasLesson) {
+
+        if (collab?.active && collab.teacher_lesson) {
+          successLogs.push(`  -> [AI BRAIN ADVISOR 🧠] ${collab.teacher_lesson}`);
+          if (collab.student_adaptation && collab.student_adaptation.includes('Applied +')) {
+            successLogs.push(`  -> [AI COLLABORATION 🤝] ${collab.student_adaptation}`);
+          }
+        } else if (hasLesson) {
           successLogs.push(`  -> [AI LESSON 💡] Setup applied lessons from previous trades to avoid traps.`);
         }
 
@@ -619,7 +635,7 @@ export default function LiveScannerWidget() {
         }
       } else {
         const isShieldVeto = reasoning.includes('Capital Shield') || reasoning.includes('small capital') || reasoning.includes('tolerance') || reasoning.includes('Stop loss risk');
-        const isMemoryVeto = reasoning.includes('AI MEMORY') || reasoning.includes('AI Memory') || reasoning.includes('Pattern memory') || reasoning.includes('stopped-out');
+        const isBrainVeto = reasoning.includes('AI BRAIN VETO') || reasoning.includes('AI MEMORY') || reasoning.includes('AI Memory') || reasoning.includes('Pattern memory') || reasoning.includes('stopped-out');
 
         if (isShieldVeto) {
           setLogs(prev => [
@@ -627,9 +643,9 @@ export default function LiveScannerWidget() {
             `  -> ${reasoning}`,
             ...prev,
           ]);
-        } else if (isMemoryVeto) {
+        } else if (isBrainVeto) {
           setLogs(prev => [
-            `[AI MEMORY 🧠] Vetoed ${pair} ${direction.toUpperCase()} setup to avoid repeating past loss pattern:`,
+            `[AI BRAIN VETO 🧠] Vetoed ${pair} ${direction.toUpperCase()} setup to avoid repeating past loss pattern:`,
             `  -> ${reasoning}`,
             ...prev,
           ]);
@@ -870,6 +886,34 @@ export default function LiveScannerWidget() {
               <span className="text-brand-400 font-bold">{latestSetup.confidence.toFixed(1)}%</span>
             </div>
           </div>
+
+          {/* AI Brain Collaboration Adaptive Banner */}
+          {latestSetup.collaboration?.active && latestSetup.collaboration.teacher_lesson && (
+            <div className="p-3 rounded-xl bg-brand-500/5 border border-brand-500/20 flex items-start gap-2.5 text-[11px] font-mono">
+              <div className="w-5 h-5 rounded-md bg-brand-500/10 border border-brand-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                <Brain className="w-3.5 h-3.5 text-brand-400" />
+              </div>
+              <div className="space-y-1 flex-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-brand-300 font-bold flex items-center gap-1.5 text-[10px]">
+                    AI Brain Collaboration
+                    <span className="px-1.5 py-0.2 rounded text-[9px] bg-brand-500/20 text-brand-300 uppercase">
+                      {latestSetup.collaboration.brain_verdict || 'ADAPTED'}
+                    </span>
+                  </span>
+                  <span className="text-[9px] text-[#64748b]">Learned from Loss Autopsy & Backtests</span>
+                </div>
+                <p className="text-[#94a3b8] text-[10px] leading-relaxed">
+                  {latestSetup.collaboration.teacher_lesson}
+                </p>
+                {latestSetup.collaboration.student_adaptation && (
+                  <p className="text-emerald-400 text-[10px] pt-1 border-t border-[#1e293b]/50">
+                    ↳ <strong className="text-white">Trading AI Adaptation:</strong> {latestSetup.collaboration.student_adaptation}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -893,12 +937,18 @@ export default function LiveScannerWidget() {
             const isError = log.includes('[EXCEPTION]') || log.includes('[ERROR]');
             const isSignal = log.includes('[SIGNAL') || log.includes('[MT5 EXECUTED');
             const isRejected = log.includes('[REJECTED');
-            const isWarn = log.includes('[WARN]') || log.includes('[LIMIT') || log.includes('[MT5 NOTICE');
+            const isBrainVeto = log.includes('[AI BRAIN VETO');
+            const isBrainAdvisor = log.includes('[AI BRAIN ADVISOR');
+            const isCollaboration = log.includes('[AI COLLABORATION');
+            const isWarn = log.includes('[WARN]') || log.includes('[LIMIT') || log.includes('[MT5 NOTICE') || log.includes('[CAPITAL SHIELD');
             const isAuto = log.includes('[AUTO') || log.includes('[MT5');
             const isWaking = log.includes('[AI ENGINE WAKING UP');
             return (
               <div key={i} className={
                 isError ? 'text-red-400 font-bold' :
+                isBrainVeto ? 'text-rose-400 font-bold pl-2 border-l-2 border-rose-500' :
+                isBrainAdvisor ? 'text-purple-300 font-semibold pl-2 border-l-2 border-purple-500' :
+                isCollaboration ? 'text-cyan-300 font-semibold pl-2 border-l-2 border-cyan-500' :
                 isSignal ? 'text-emerald-400 font-bold pl-2 border-l-2 border-emerald-500' :
                 isRejected ? 'text-red-300 pl-2 border-l-2 border-red-500/50' :
                 isWaking ? 'text-amber-300 font-semibold' :

@@ -21,6 +21,7 @@ from app.engines.historical_pattern import HistoricalPatternEngine
 from app.engines.risk import RiskEngine
 from app.engines.confidence import ConfidenceEngine
 from app.engines.decision import DecisionEngine
+from app.services.brain_supervisor import brain_supervisor
 
 
 class AIBacktester:
@@ -353,18 +354,28 @@ class AIBacktester:
 
         current_win_rate = backtest_results.get("summary", {}).get("win_rate", 55.0)
         projected_win_rate = min(92.0, current_win_rate + 12.5)
+        target_pair = backtest_results.get("pair") or "EURUSD"
+        final_insights = insights if insights else [
+            "Enforced strict 1:2.5 minimum risk-to-reward ratio for high expectancy.",
+            "Boosted institutional order block entry confluences by +15%.",
+            "Applied multi-timeframe trend filter to eliminate counter-trend wicks."
+        ]
+
+        # Feed backtest learning into AI Cognitive Brain supervisor
+        brain_supervisor.ingest_backtest_learning(
+            pair=target_pair,
+            insights=final_insights,
+            optimized_weights=normalized_weights,
+            win_rate=current_win_rate
+        )
 
         return {
             "success": True,
-            "pair": backtest_results.get("pair"),
+            "pair": target_pair,
             "current_win_rate": current_win_rate,
             "projected_win_rate": round(projected_win_rate, 1),
             "optimized_weights": normalized_weights,
             "min_confidence_recommended": 72.0,
-            "insights": insights if insights else [
-                "Enforced strict 1:2.5 minimum risk-to-reward ratio for high expectancy.",
-                "Boosted institutional order block entry confluences by +15%.",
-                "Applied multi-timeframe trend filter to eliminate counter-trend wicks."
-            ],
+            "insights": final_insights,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }

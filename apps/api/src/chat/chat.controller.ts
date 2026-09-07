@@ -16,6 +16,9 @@ export class AnalysisDto {
     equity?: number;
     leverage?: number;
   };
+
+  @IsOptional()
+  history?: any[];
 }
 
 @Controller('chat')
@@ -48,6 +51,7 @@ export class ChatController {
         body.pair,
         body.timeframe || '4h',
         body.account,
+        body.history,
       );
       return result;
     } catch (err: any) {

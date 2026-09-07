@@ -1,30 +1,20 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from app.engines.base import BaseEngine, EngineResult
 from app.services.market_data import MarketSnapshot
+from app.services.brain_supervisor import brain_supervisor, BrainGuidanceDirective
 
 
 class HistoricalPatternEngine(BaseEngine):
     """
-    Layer 12: AI Loss Autopsy & Pattern Avoidance Learning Engine.
+    Layer 12: AI Loss Autopsy & Cognitive Pattern Collaboration Engine.
     
-    Performs root-cause analysis on past losing trades for the symbol,
-    extracts failure signatures, and actively vetoes candidate setups that
-    repeat the same failure patterns.
+    Consults the AI Cognitive Brain supervisor, cross-examining past losing trades
+    and backtest discoveries to advise or veto candidate setups.
     """
 
     def analyze(self, snapshot: MarketSnapshot, context: dict) -> EngineResult:
         history: List[Dict[str, Any]] = context.get("history", [])
         engine_results: Dict[str, EngineResult] = context.get("engine_results", {})
-
-        # If no previous trade history exists, return neutral baseline
-        if not history:
-            return EngineResult(
-                result="no_history",
-                confidence=50.0,
-                explanation="No previous closed trade patterns on record for this symbol. Standard confluence rules applied.",
-                metrics={"win_rate": 0.0, "total_samples": 0, "autopsy_count": 0},
-                validation_status="valid"
-            )
 
         # 1. Parse win/loss statistics
         wins = 0
@@ -71,7 +61,37 @@ class HistoricalPatternEngine(BaseEngine):
         elif current_zone == "premium":
             candidate_direction = "short"
 
-        # 2. Perform Loss Autopsy on recent losses
+        # 2. Consult the AI Cognitive Brain supervisor
+        current_close = float(snapshot.df["close"].iloc[-1]) if not snapshot.df.empty else 0.0
+        directive: BrainGuidanceDirective = brain_supervisor.consult(
+            symbol=snapshot.symbol,
+            candidate_direction=candidate_direction,
+            current_zone=current_zone,
+            htf_bias=current_htf_bias,
+            has_liquidity_sweep=has_liquidity_sweep,
+            history=history,
+            current_price=current_close,
+            proposed_sl=0.0
+        )
+        context["brain_directive"] = directive
+
+        # If Brain orders an active VETO, halt candidate setup immediately
+        if directive.verdict == "VETO":
+            return EngineResult(
+                result="pattern_blocked",
+                confidence=15.0,
+                explanation=f"AI BRAIN VETO: {directive.learned_lesson}",
+                metrics={
+                    "verdict": "VETO",
+                    "violation": directive.failure_mode_flagged or "brain_supervisory_veto",
+                    "brain_directive": directive.to_dict(),
+                    "win_rate": round(win_rate, 1),
+                    "total_pnl": round(total_pnl, 2),
+                },
+                validation_status="invalid"  # triggers Hard Fail in Decision Engine
+            )
+
+        # 3. Perform Loss Autopsy on recent losses
         failure_signatures: List[Dict[str, Any]] = []
         for loss_trade in losses[:5]:  # inspect the 5 most recent losses
             loss_dir = str(loss_trade.get("direction") or "").lower()
@@ -208,34 +228,46 @@ class HistoricalPatternEngine(BaseEngine):
                     f"confirming retail stop run is complete."
                 )
 
-        # Base confidence calculation adjusted by statistical reinforcement
+        # Base confidence calculation adjusted by statistical reinforcement and brain guidance
         base_confidence = 50.0 + (win_rate - 50.0) * 0.4
+        if directive and directive.confidence_adjustment != 0.0:
+            base_confidence += directive.confidence_adjustment
         if lesson_applied:
             base_confidence = min(95.0, base_confidence + 15.0)
 
+        base_confidence = max(25.0, min(95.0, base_confidence))
+
         # 5. Output successful pattern analysis
-        if lesson_applied:
+        if directive and directive.verdict == "ADJUST":
+            explanation = f"AI Brain Collaboration: {directive.learned_lesson}"
+            result_label = "brain_adjusted"
+            verdict_label = "ADAPTED"
+        elif lesson_applied:
             explanation = f"{lesson_note} Historical win rate: {win_rate:.1f}% ({wins}/{total_trades} setups)."
             result_label = "lesson_applied"
+            verdict_label = "LESSON_APPLIED"
         elif win_rate >= 60.0:
             explanation = f"Reinforcement Memory: Strong {win_rate:.1f}% win rate across {total_trades} trades on {snapshot.symbol}. Confluence models verified."
             result_label = "pattern_reinforced"
+            verdict_label = "APPROVED"
         else:
             explanation = f"Reinforcement Memory: Recent {total_trades} trades on {snapshot.symbol} show {win_rate:.1f}% win rate. Strict filters active."
             result_label = "stat_compiled"
+            verdict_label = "APPROVED"
 
         return EngineResult(
             result=result_label,
             confidence=round(base_confidence, 2),
             explanation=explanation,
             metrics={
-                "verdict": "APPROVED" if not lesson_applied else "LESSON_APPLIED",
+                "verdict": verdict_label,
                 "win_rate": round(win_rate, 2),
                 "total_pnl": round(total_pnl, 2),
                 "total_samples": total_trades,
                 "consecutive_losses": consecutive_losses,
-                "lesson_applied": lesson_applied,
+                "lesson_applied": lesson_applied or (directive and directive.verdict == "ADJUST"),
                 "diagnosed_failures": len(failure_signatures),
+                "brain_directive": directive.to_dict() if directive else None,
             },
             validation_status="valid"
         )

@@ -117,6 +117,11 @@ class DecisionEngine(BaseEngine):
         swing_low = struct_res.metrics.get("swing_low") if struct_res else None
 
         # Precision-engineered Stop Loss and Take Profit levels
+        # Consult AI Cognitive Brain supervisor directive for adaptive safety buffers
+        directive = context.get("brain_directive")
+        pip_unit = 0.01 if "JPY" in symbol else (0.1 if ("XAU" in symbol or "GOLD" in symbol) else 0.0001)
+        sl_buffer_val = (directive.recommended_sl_buffer_pips * pip_unit) if (directive and directive.recommended_sl_buffer_pips > 0) else 0.0
+
         if direction == "bullish":
             # Institutional SL below swing low with buffer
             if swing_low and float(swing_low) < entry:
@@ -124,6 +129,10 @@ class DecisionEngine(BaseEngine):
                 sl_dist = max(atr * 1.0, min(atr * 2.8, raw_dist))
             else:
                 sl_dist = atr * 1.5
+
+            # Apply Brain-guided SL safety buffer if recommended from loss autopsy
+            if sl_buffer_val > 0:
+                sl_dist += sl_buffer_val
 
             sl = entry - sl_dist
             tp = entry + (sl_dist * rr)
@@ -142,6 +151,10 @@ class DecisionEngine(BaseEngine):
                 sl_dist = max(atr * 1.0, min(atr * 2.8, raw_dist))
             else:
                 sl_dist = atr * 1.5
+
+            # Apply Brain-guided SL safety buffer if recommended from loss autopsy
+            if sl_buffer_val > 0:
+                sl_dist += sl_buffer_val
 
             sl = entry + sl_dist
             tp = entry - (sl_dist * rr)
@@ -176,6 +189,26 @@ class DecisionEngine(BaseEngine):
         else:
             expected_trigger = "Trigger zone entry within 4-12 hours."
 
+        # Dynamically scaled lot size
+        base_lot = results.get("risk").metrics.get("recommended_lot_size", 0.01) if results.get("risk") else 0.01
+        if directive and directive.lot_scale_factor < 1.0 and base_lot > 0.01:
+            adapted_lot = max(0.01, round(base_lot * directive.lot_scale_factor, 2))
+        else:
+            adapted_lot = base_lot
+
+        # Collaboration summary
+        collaboration_data = {
+            "active": directive is not None,
+            "brain_verdict": directive.verdict if directive else "STANDARD",
+            "teacher_lesson": directive.learned_lesson if directive else "No historical loss signatures found.",
+            "student_adaptation": (
+                f"Applied +{directive.recommended_sl_buffer_pips:.1f} pip SL buffer ({sl_buffer_val:.5f}). Scaled lot to {adapted_lot} lots."
+                if (directive and directive.recommended_sl_buffer_pips > 0)
+                else "Standard 15-layer SMC execution parameters maintained."
+            ),
+            "collaborative_rationale": directive.collaborative_rationale if directive else "All confluences verified.",
+        }
+
         # Construct Audit Trade Certificate
         cert_id = str(uuid.uuid4())
         certificate = {
@@ -188,7 +221,7 @@ class DecisionEngine(BaseEngine):
             "take_profit": round(tp, decimals),
             "confidence": round(final_confidence, 2),
             "risk_reward": round(rr, 2),
-            "recommended_lot_size": results.get("risk").metrics.get("recommended_lot_size", 0.01) if results.get("risk") else 0.01,
+            "recommended_lot_size": adapted_lot,
             "dollar_risk": results.get("risk").metrics.get("dollar_risk", 0.0) if results.get("risk") else 0.0,
             "higher_timeframe_bias": higher_bias.result if higher_bias else "neutral",
             "market_structure_summary": struct_res.explanation if struct_res else "",
@@ -201,6 +234,7 @@ class DecisionEngine(BaseEngine):
             "historical_pattern_summary": results.get("historical_pattern").explanation if results.get("historical_pattern") else "",
             "pattern_memory_verdict": results.get("historical_pattern").metrics.get("verdict", "APPROVED") if results.get("historical_pattern") else "APPROVED",
             "loss_autopsy_count": results.get("historical_pattern").metrics.get("diagnosed_failures", 0) if results.get("historical_pattern") else 0,
+            "collaboration": collaboration_data,
             "decision": decision.upper(),
             "expected_trigger": expected_trigger,
             "full_explanation": explanation,

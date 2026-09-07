@@ -12,8 +12,8 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { createClient } from '@/lib/supabase';
 import { getApiBaseUrl } from '@/lib/api';
+import { mt5Fetch } from '@/lib/mt5-client';
 
-const BRIDGE_URL = 'http://localhost:5001';
 const SYNC_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
 
 export interface Mt5SyncState {
@@ -45,15 +45,10 @@ export function useMt5Sync(): Mt5SyncState {
     setState(prev => ({ ...prev, syncing: true, error: null }));
 
     try {
-      // 2. Fetch last 90 days of closed trade history from local MT5 bridge
-      const bridgeRes = await fetch(BRIDGE_URL + '/history?days=90', {
-        signal: AbortSignal.timeout(8000),
-      });
+      // 2. Fetch last 90 days of closed trade history from MT5 bridge (direct or backend proxy)
+      const bridgeData = await mt5Fetch('/history?days=90');
 
-      if (!bridgeRes.ok) throw new Error('Bridge /history returned error');
-      const bridgeData = await bridgeRes.json();
-
-      if (!bridgeData.success || !Array.isArray(bridgeData.trades)) {
+      if (!bridgeData || !bridgeData.success || !Array.isArray(bridgeData.trades)) {
         setState(prev => ({ ...prev, bridgeConnected: false, syncing: false }));
         return;
       }
@@ -69,12 +64,12 @@ export function useMt5Sync(): Mt5SyncState {
       // 3. Optionally fetch live account info for portfolio balance update
       let account: { balance?: number; equity?: number } = {};
       try {
-        const accRes = await fetch(BRIDGE_URL + '/account', {
-          signal: AbortSignal.timeout(3000),
-        });
-        if (accRes.ok) {
-          const accData = await accRes.json();
-          account = { balance: accData.balance, equity: accData.equity };
+        const accData = await mt5Fetch('/account');
+        if (accData && (accData.balance || accData.account?.balance)) {
+          account = {
+            balance: accData.account?.balance ?? accData.balance,
+            equity: accData.account?.equity ?? accData.equity,
+          };
         }
       } catch { /* account fetch is optional */ }
 

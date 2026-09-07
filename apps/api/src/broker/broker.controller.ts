@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Headers, UnauthorizedException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Headers, Query, UnauthorizedException } from '@nestjs/common';
 import { BrokerService } from './broker.service';
 
 @Controller('broker')
@@ -53,17 +53,39 @@ export class BrokerController {
   }
 
   @Get('mt5/positions')
-  async getMt5Positions(@Headers('authorization') auth: string) {
+  async getMt5Positions() {
     const data = await this.brokerService.getMt5Positions();
     return data;
   }
 
   @Post('mt5/close')
-  async closeMt5Position(
-    @Headers('authorization') auth: string,
-    @Body() body: { ticket: number },
-  ) {
+  async closeMt5Position(@Body() body: { ticket: number }) {
     const data = await this.brokerService.closeMt5Position(body.ticket);
+    return data;
+  }
+
+  @Post('mt5/close-all')
+  async closeAllMt5Positions() {
+    const data = await this.brokerService.closeAllMt5Positions();
+    return data;
+  }
+
+  @Post('mt5/modify')
+  async modifyMt5Position(@Body() body: { ticket: number; sl?: number; tp?: number }) {
+    const data = await this.brokerService.modifyMt5Position(body.ticket, body.sl, body.tp);
+    return data;
+  }
+
+  @Post('mt5/cancel-order')
+  async cancelMt5Order(@Body() body: { ticket: number }) {
+    const data = await this.brokerService.cancelMt5Order(body.ticket);
+    return data;
+  }
+
+  @Get('mt5/history')
+  async getMt5History(@Query('days') days?: string) {
+    const numDays = days ? parseInt(days, 10) : 60;
+    const data = await this.brokerService.getMt5History(numDays);
     return data;
   }
 

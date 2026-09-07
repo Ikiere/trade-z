@@ -10,6 +10,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { getApiBaseUrl } from '@/lib/api';
 import { CURATED_ASSETS, CATEGORIZED_ASSETS, SUPPORTED_PAIRS, normalizePairSymbol, isCryptoAsset, AssetDefinition } from '@/lib/assets-registry';
+import { mt5Fetch } from '@/lib/mt5-client';
 
 // ─── small reusable section card ───────────────────────────────────────────
 function Section({ icon: Icon, title, children }: {
@@ -83,57 +84,74 @@ export default function SettingsPage() {
   const [savingKeys, setSavingKeys] = useState(false);
   const [msgKeys, setMsgKeys] = useState('');
 
-  // ── MetaTrader 5 (MT5) Desktop Bridge ──────────────────
+  // ── MetaTrader 5 (MT5) Desktop & Cloud VPS Bridge ──────────────────
   const [mt5Status, setMt5Status] = useState<{
     loading: boolean;
     connected: boolean;
     account?: any;
     error?: string;
-  }>({ loading: false, connected: false });
+  }>(() => {
+    if (typeof window !== 'undefined' && localStorage.getItem('tradez_bridge_connected') === 'true') {
+      return { loading: false, connected: true };
+    }
+    return { loading: false, connected: false };
+  });
+
+  const [vpsBridgeUrl, setVpsBridgeUrl] = useState<string>('');
+  const [msgVpsUrl, setMsgVpsUrl] = useState<string>('');
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setVpsBridgeUrl(localStorage.getItem('tradez_vps_bridge_url') || '');
+    }
+  }, []);
+
+  const handleSaveVpsUrl = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('tradez_vps_bridge_url', vpsBridgeUrl.trim());
+      setMsgVpsUrl('Cloud VPS Bridge URL saved! Testing connection...');
+      setTimeout(() => setMsgVpsUrl(''), 4000);
+      checkMt5Connection();
+    }
+  };
 
   const checkMt5Connection = useCallback(async () => {
     setMt5Status(prev => ({ ...prev, loading: true }));
     try {
-      // 1. First probe local laptop bridge directly
-      const directRes = await fetch('http://127.0.0.1:5001/account').catch(() => null);
-      if (directRes && directRes.ok) {
-        const directData = await directRes.json();
+      const data = await mt5Fetch('/account');
+      if (data && (data.connected || data.account)) {
+        const acc = data.account || data;
         setMt5Status({
           loading: false,
-          connected: Boolean(directData.connected),
-          account: directData.account,
-          error: directData.error,
+          connected: true,
+          account: acc,
         });
-        if (directData.account?.balance) {
-          setNewBalance(Number(directData.account.balance).toFixed(2));
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('tradez_bridge_connected', 'true');
+        }
+        if (acc?.balance) {
+          setNewBalance(Number(acc.balance).toFixed(2));
         }
         return;
       }
-
-      // 2. Fall back to querying via backend API
-      const apiBase = getApiBaseUrl();
-      const supabase = createClient();
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      const apiRes = await fetch(`${apiBase}/api/v1/broker/mt5/account`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const apiData = await apiRes.json();
       setMt5Status({
         loading: false,
-        connected: Boolean(apiData?.data?.connected),
-        account: apiData?.data?.account,
-        error: apiData?.data?.error || 'Local MT5 bridge offline',
+        connected: false,
+        error: data?.error || 'Cannot reach MT5 Bridge. Ensure start_mt5_bridge.bat is running on your VPS or laptop.',
       });
-      if (apiData?.data?.account?.balance) {
-        setNewBalance(Number(apiData.data.account.balance).toFixed(2));
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('tradez_bridge_connected', 'false');
       }
     } catch (e: any) {
       setMt5Status({
         loading: false,
         connected: false,
-        error: 'Cannot reach local MT5 Bridge on http://127.0.0.1:5001. Start apps/mt5-bridge/start_mt5_bridge.bat.',
+        error: e.message || 'Cannot reach MT5 Bridge.',
       });
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('tradez_bridge_connected', 'false');
+      }
     }
   }, []);
 
@@ -702,6 +720,33 @@ export default function SettingsPage() {
               )}
             </div>
           )}
+
+          {/* Cloud VPS Bridge URL (Optional) */}
+          <form onSubmit={handleSaveVpsUrl} className="p-3 bg-[#060810] border border-[#1e293b] rounded-xl space-y-2 font-mono">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] text-[#94a3b8] uppercase font-bold">Cloud VPS Bridge URL (Optional)</label>
+              <span className="text-[9px] text-cyan-400 font-bold">24/7 ONLINE</span>
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="http://YOUR_AZURE_IP:5001 or https://xxxx.ngrok-free.app"
+                value={vpsBridgeUrl}
+                onChange={e => setVpsBridgeUrl(e.target.value)}
+                className="input text-xs font-mono flex-1 placeholder-[#475569]"
+              />
+              <button
+                type="submit"
+                className="btn btn-secondary px-3 text-xs shrink-0"
+              >
+                Save URL
+              </button>
+            </div>
+            <SaveMsg msg={msgVpsUrl} />
+            <p className="text-[9px] text-[#64748b]">
+              If running MT5 on Azure or a remote VPS, enter its public URL here so your browser can connect directly.
+            </p>
+          </form>
 
           <div className="flex items-center gap-2 pt-2">
             <button

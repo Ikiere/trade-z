@@ -11,6 +11,7 @@ import { getApiBaseUrl } from '@/lib/api';
 import { checkTradingSession, SessionShieldStatus } from '@/lib/trading-session';
 import { resolveAssetMeta, normalizePairSymbol, isCryptoAsset, CURATED_ASSETS } from '@/lib/assets-registry';
 import { useMt5, Mt5Position } from '@/lib/mt5-sync-context';
+import { mt5Fetch } from '@/lib/mt5-client';
 
 export interface SentinelEvaluation {
   ticket: number;
@@ -116,11 +117,33 @@ export default function LiveScannerWidget() {
     closePosition,
     bridgeStatus,
     refreshPositions,
+    account: contextAccount,
   } = useMt5();
 
-  const [mt5Status, setMt5Status] = useState<Mt5AccountInfo | null>(null);
+  const [mt5Status, setMt5Status] = useState<Mt5AccountInfo | null>(() => {
+    if (typeof window !== 'undefined' && localStorage.getItem('tradez_bridge_connected') === 'true') {
+      return { connected: true };
+    }
+    return null;
+  });
   const [isExecutingManual, setIsExecutingManual] = useState(false);
   const [latestSetup, setLatestSetup] = useState<LatestTradeSetup | null>(null);
+
+  // Sync with context account
+  useEffect(() => {
+    if (contextAccount && bridgeStatus === 'connected') {
+      setMt5Status({
+        connected: true,
+        login: contextAccount.login,
+        server: contextAccount.server,
+        balance: contextAccount.balance,
+        equity: contextAccount.equity,
+        leverage: contextAccount.leverage,
+      });
+    } else if (bridgeStatus === 'disconnected') {
+      setMt5Status({ connected: false });
+    }
+  }, [contextAccount, bridgeStatus]);
 
   // AI Sentinel Guardian state
   const [sentinelMap, setSentinelMap] = useState<Record<number, SentinelEvaluation>>({});
@@ -133,6 +156,28 @@ export default function LiveScannerWidget() {
   const [defaultLot, setDefaultLot] = useState(0.01);
   const [dailySignalLimit, setDailySignalLimit] = useState(2);
   const [userId, setUserId] = useState<string | null>(null);
+
+  // Probe MT5 bridge status (runs on user's laptop or VPS)
+  const probeMt5Bridge = useCallback(async () => {
+    try {
+      const json = await mt5Fetch('/account');
+      if (json && (json.connected || json.account)) {
+        const acc = json.account || json;
+        setMt5Status({
+          connected: true,
+          login: acc.login,
+          server: acc.server,
+          balance: acc.balance,
+          equity: acc.equity,
+          leverage: acc.leverage,
+        });
+        return;
+      }
+      setMt5Status({ connected: false });
+    } catch (_) {
+      setMt5Status({ connected: false });
+    }
+  }, []);
 
   // Today's signal count (enforced limit for auto-trading)
   const [todaySignalCount, setTodaySignalCount] = useState(0);
@@ -198,29 +243,7 @@ export default function LiveScannerWidget() {
     }
   }, [watchlist, selectedSinglePair]);
 
-  // Probe local MT5 bridge status (runs on user's laptop)
-  const probeMt5Bridge = useCallback(async () => {
-    try {
-      const res = await fetch('http://127.0.0.1:5001/account', { signal: AbortSignal.timeout(3000) });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.connected && json.account) {
-          setMt5Status({
-            connected: true,
-            login: json.account.login,
-            server: json.account.server,
-            balance: json.account.balance,
-            equity: json.account.equity,
-            leverage: json.account.leverage,
-          });
-          return;
-        }
-      }
-      setMt5Status({ connected: false });
-    } catch (_) {
-      setMt5Status({ connected: false });
-    }
-  }, []);
+
 
   useEffect(() => {
     probeMt5Bridge();
@@ -565,9 +588,8 @@ export default function LiveScannerWidget() {
     // ── GUARD 4: Loss Cool-Down Shield ─────────────────────────
     if (!setup.overrideSafety) {
       try {
-        const histRes = await fetch('http://127.0.0.1:5001/history', { signal: AbortSignal.timeout(1500) });
-        if (histRes.ok) {
-          const histData = await histRes.json();
+        const histData = await mt5Fetch('/history');
+        if (histData && histData.success) {
           const trades = Array.isArray(histData.trades) ? histData.trades : [];
           const todayStr = new Date().toISOString().slice(0, 10);
           const todayTrades = trades.filter((t: any) => (t.time_close || t.time || '').startsWith(todayStr));
@@ -586,11 +608,10 @@ export default function LiveScannerWidget() {
       } catch (_) {}
     }
 
-    // 1. Send direct to local MT5 bridge (running on user's laptop at 127.0.0.1:5001)
+    // 1. Send to MT5 bridge (direct or via backend API)
     try {
-      const bridgeRes = await fetch('http://127.0.0.1:5001/order', {
+      const bridgeJson = await mt5Fetch('/order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           pair: setup.pair,
           direction: setup.direction,
@@ -604,9 +625,7 @@ export default function LiveScannerWidget() {
         }),
       });
 
-      const bridgeJson = await bridgeRes.json().catch(() => ({}));
-
-      if (bridgeRes.ok && bridgeJson.success) {
+      if (bridgeJson && bridgeJson.success) {
         executedTicket = bridgeJson.ticket;
         executedLot = bridgeJson.volume || executedLot;
         pricePlaced = bridgeJson.price || pricePlaced;
@@ -800,15 +819,10 @@ export default function LiveScannerWidget() {
       let liveBid: number | null = null;
       let liveAsk: number | null = null;
       try {
-        const qRes = await fetch(`http://127.0.0.1:5001/quote?pair=${encodeURIComponent(pair)}`, {
-          signal: AbortSignal.timeout(1200),
-        });
-        if (qRes.ok) {
-          const qData = await qRes.json();
-          if (qData.success && typeof qData.bid === 'number') {
-            liveBid = qData.bid;
-            liveAsk = qData.ask;
-          }
+        const qData = await mt5Fetch(`/quote?pair=${encodeURIComponent(pair)}`);
+        if (qData && qData.success && typeof qData.bid === 'number') {
+          liveBid = qData.bid;
+          liveAsk = qData.ask;
         }
       } catch (_) {}
 
@@ -961,9 +975,8 @@ export default function LiveScannerWidget() {
         
         // Auto-Management: Check for opposing position to close early on reversal
         try {
-          const posRes = await fetch('http://127.0.0.1:5001/positions', { signal: AbortSignal.timeout(2000) });
-          if (posRes.ok) {
-            const posJson = await posRes.json();
+          const posJson = await mt5Fetch('/positions');
+          if (posJson && posJson.success) {
             const opposing = (posJson.positions || []).find((p: any) => 
               p.pair.toUpperCase() === pair.toUpperCase() && p.direction !== direction
             );
@@ -972,9 +985,8 @@ export default function LiveScannerWidget() {
                 `[AI AUTO-EXIT 🎯] Reversal detected! Closing opposing ${opposing.direction.toUpperCase()} position #${opposing.ticket} on ${pair}...`,
                 ...prev,
               ]);
-              await fetch('http://127.0.0.1:5001/close', {
+              await mt5Fetch('/close', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ticket: opposing.ticket }),
               });
             }

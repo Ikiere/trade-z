@@ -183,7 +183,67 @@ export class BrokerService {
       });
       return await res.json();
     } catch (e: any) {
-      throw new BadRequestException(`Failed to contact local MT5 Bridge: ${e.message}`);
+      throw new BadRequestException(`Failed to contact MT5 Bridge: ${e.message}`);
+    }
+  }
+
+  /**
+   * Close all positions on MetaTrader 5
+   */
+  async closeAllMt5Positions() {
+    try {
+      const res = await fetch(`${this.getBridgeUrl()}/close-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      return await res.json();
+    } catch (e: any) {
+      throw new BadRequestException(`Failed to close all positions via MT5 Bridge: ${e.message}`);
+    }
+  }
+
+  /**
+   * Modify position SL/TP on MetaTrader 5
+   */
+  async modifyMt5Position(ticket: number, sl?: number, tp?: number) {
+    try {
+      const res = await fetch(`${this.getBridgeUrl()}/modify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket, sl, tp }),
+      });
+      return await res.json();
+    } catch (e: any) {
+      throw new BadRequestException(`Failed to modify position via MT5 Bridge: ${e.message}`);
+    }
+  }
+
+  /**
+   * Cancel pending order on MetaTrader 5
+   */
+  async cancelMt5Order(ticket: number) {
+    try {
+      const res = await fetch(`${this.getBridgeUrl()}/cancel-order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket }),
+      });
+      return await res.json();
+    } catch (e: any) {
+      throw new BadRequestException(`Failed to cancel order via MT5 Bridge: ${e.message}`);
+    }
+  }
+
+  /**
+   * Get closed trade history from MetaTrader 5
+   */
+  async getMt5History(days: number = 60) {
+    try {
+      const res = await fetch(`${this.getBridgeUrl()}/history?days=${days}`);
+      return await res.json();
+    } catch (e: any) {
+      return { success: false, trades: [] };
     }
   }
 

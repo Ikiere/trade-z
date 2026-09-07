@@ -4,7 +4,8 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { createClient } from '@/lib/supabase';
 import { getApiBaseUrl } from '@/lib/api';
 
-const BRIDGE_URL = 'http://localhost:5001';
+import { mt5Fetch, getDirectBridgeUrl } from '@/lib/mt5-client';
+
 const POSITIONS_POLL_INTERVAL_MS = 3000; // 3 seconds
 const HISTORY_SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -87,7 +88,12 @@ interface Mt5ContextType {
 const Mt5Context = createContext<Mt5ContextType | null>(null);
 
 export function Mt5SyncProvider({ children }: { children: React.ReactNode }) {
-  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>('loading');
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('tradez_bridge_connected') === 'true' ? 'connected' : 'loading';
+    }
+    return 'loading';
+  });
   const [positions, setPositions] = useState<Mt5Position[]>([]);
   const [orders, setOrders] = useState<Mt5Order[]>([]);
   const [summary, setSummary] = useState<Mt5AccountSummary | null>(null);
@@ -102,34 +108,30 @@ export function Mt5SyncProvider({ children }: { children: React.ReactNode }) {
   // 1. Fetch live positions and account summary
   const fetchPositions = useCallback(async () => {
     try {
-      const res = await fetch(`${BRIDGE_URL}/positions`, {
-        signal: AbortSignal.timeout(4000),
-      });
-      if (!res.ok) throw new Error('Bridge error');
-      const data = await res.json();
-      if (data.success) {
+      const data = await mt5Fetch('/positions');
+      if (data && data.success) {
         setPositions(data.positions || []);
         setOrders(data.orders || []);
         setSummary(data.summary || null);
         setBridgeStatus('connected');
+        if (typeof window !== 'undefined') localStorage.setItem('tradez_bridge_connected', 'true');
         setLastUpdated(new Date());
+      } else {
+        setBridgeStatus('disconnected');
+        if (typeof window !== 'undefined') localStorage.setItem('tradez_bridge_connected', 'false');
       }
     } catch {
       setBridgeStatus('disconnected');
+      if (typeof window !== 'undefined') localStorage.setItem('tradez_bridge_connected', 'false');
     }
   }, []);
 
   // 2. Fetch full account info (margin, leverage, currency)
   const fetchAccount = useCallback(async () => {
     try {
-      const res = await fetch(`${BRIDGE_URL}/account`, {
-        signal: AbortSignal.timeout(3000),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.connected && data.account) {
-          setAccount(data.account);
-        }
+      const data = await mt5Fetch('/account');
+      if (data && data.connected && data.account) {
+        setAccount(data.account);
       }
     } catch {
       // Handled by fetchPositions
@@ -144,12 +146,8 @@ export function Mt5SyncProvider({ children }: { children: React.ReactNode }) {
 
     setSyncing(true);
     try {
-      const bridgeRes = await fetch(`${BRIDGE_URL}/history?days=90`, {
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!bridgeRes.ok) throw new Error('Bridge history error');
-      const bridgeData = await bridgeRes.json();
-      if (!bridgeData.success || !Array.isArray(bridgeData.trades)) {
+      const bridgeData = await mt5Fetch('/history?days=90');
+      if (!bridgeData || !bridgeData.success || !Array.isArray(bridgeData.trades)) {
         setSyncing(false);
         return;
       }
@@ -163,10 +161,9 @@ export function Mt5SyncProvider({ children }: { children: React.ReactNode }) {
 
       let accInfo: { balance?: number; equity?: number } = {};
       try {
-        const accRes = await fetch(`${BRIDGE_URL}/account`, { signal: AbortSignal.timeout(3000) });
-        if (accRes.ok) {
-          const accData = await accRes.json();
-          accInfo = { balance: accData.account?.balance, equity: accData.account?.equity };
+        const accData = await mt5Fetch('/account');
+        if (accData && accData.account) {
+          accInfo = { balance: accData.account.balance, equity: accData.account.equity };
         }
       } catch { /* optional */ }
 
@@ -197,18 +194,15 @@ export function Mt5SyncProvider({ children }: { children: React.ReactNode }) {
   // 4. Direct Close Single Position
   const closePosition = useCallback(async (ticket: number) => {
     try {
-      const res = await fetch(`${BRIDGE_URL}/close`, {
+      const data = await mt5Fetch('/close', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticket }),
-        signal: AbortSignal.timeout(6000),
       });
-      const data = await res.json();
-      if (data.success) {
+      if (data && data.success) {
         await fetchPositions();
         return { success: true, message: data.message };
       } else {
-        return { success: false, error: data.error || 'Failed to close position' };
+        return { success: false, error: data?.error || 'Failed to close position' };
       }
     } catch (err: any) {
       return { success: false, error: err.message || 'Bridge unreachable' };
@@ -218,18 +212,15 @@ export function Mt5SyncProvider({ children }: { children: React.ReactNode }) {
   // 5. Emergency Panic Close All Positions
   const closeAllPositions = useCallback(async () => {
     try {
-      const res = await fetch(`${BRIDGE_URL}/close-all`, {
+      const data = await mt5Fetch('/close-all', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
-        signal: AbortSignal.timeout(12000),
       });
-      const data = await res.json();
-      if (data.success) {
+      if (data && data.success) {
         await fetchPositions();
         return { success: true, message: data.message };
       } else {
-        return { success: false, error: data.error || 'Failed to close positions' };
+        return { success: false, error: data?.error || 'Failed to close positions' };
       }
     } catch (err: any) {
       return { success: false, error: err.message || 'Bridge unreachable' };
@@ -239,18 +230,15 @@ export function Mt5SyncProvider({ children }: { children: React.ReactNode }) {
   // 6. Cancel Pending Order
   const cancelOrder = useCallback(async (ticket: number) => {
     try {
-      const res = await fetch(`${BRIDGE_URL}/cancel-order`, {
+      const data = await mt5Fetch('/cancel-order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticket }),
-        signal: AbortSignal.timeout(6000),
       });
-      const data = await res.json();
-      if (data.success) {
+      if (data && data.success) {
         await fetchPositions();
         return { success: true, message: data.message };
       } else {
-        return { success: false, error: data.error || 'Failed to cancel order' };
+        return { success: false, error: data?.error || 'Failed to cancel order' };
       }
     } catch (err: any) {
       return { success: false, error: err.message || 'Bridge unreachable' };
@@ -260,18 +248,15 @@ export function Mt5SyncProvider({ children }: { children: React.ReactNode }) {
   // 7. Modify Position SL / TP (Breakeven or Trailing Stop)
   const modifyPosition = useCallback(async (ticket: number, sl: number, tp?: number) => {
     try {
-      const res = await fetch(`${BRIDGE_URL}/modify`, {
+      const data = await mt5Fetch('/modify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticket, sl, ...(tp !== undefined ? { tp } : {}) }),
-        signal: AbortSignal.timeout(6000),
       });
-      const data = await res.json();
-      if (data.success) {
+      if (data && data.success) {
         await fetchPositions();
         return { success: true, message: data.message };
       } else {
-        return { success: false, error: data.error || 'Failed to modify position' };
+        return { success: false, error: data?.error || 'Failed to modify position' };
       }
     } catch (err: any) {
       return { success: false, error: err.message || 'Bridge unreachable' };

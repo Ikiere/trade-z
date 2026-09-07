@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useMt5 } from '@/lib/mt5-sync-context';
+import { mt5Fetch } from '@/lib/mt5-client';
 
 export default function GrowthRoadmapWidget() {
   const { bridgeStatus, account, summary, positions } = useMt5();
@@ -68,9 +69,8 @@ export default function GrowthRoadmapWidget() {
   useEffect(() => {
     const probeTodayPerformance = async () => {
       try {
-        const res = await fetch('http://127.0.0.1:5001/history', { signal: AbortSignal.timeout(2000) });
-        if (res.ok) {
-          const data = await res.json();
+        const data = await mt5Fetch('/history');
+        if (data && data.success) {
           const trades = Array.isArray(data.trades) ? data.trades : [];
           const todayStr = new Date().toISOString().slice(0, 10);
           const todayTrades = trades.filter((t: any) => (t.time_close || t.time || '').startsWith(todayStr));

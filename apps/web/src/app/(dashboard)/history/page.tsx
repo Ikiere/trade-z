@@ -7,8 +7,7 @@ import {
   History, ArrowUpRight, ArrowDownRight, RefreshCw, Loader2,
   WifiOff, Brain, TrendingUp, TrendingDown, CheckCircle2, XCircle
 } from 'lucide-react';
-
-const BRIDGE_URL = 'http://localhost:5001';
+import { mt5Fetch } from '@/lib/mt5-client';
 
 interface Mt5ClosedTrade {
   ticket: number;
@@ -56,14 +55,12 @@ export default function TradeHistoryPage() {
 
   const fetchMt5History = useCallback(async () => {
     try {
-      const res = await fetch(`${BRIDGE_URL}/history?days=60`, {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!res.ok) throw new Error('Bridge error');
-      const data = await res.json();
-      if (data.success) {
+      const data = await mt5Fetch('/history?days=60');
+      if (data && data.success) {
         setMt5Trades(data.trades || []);
         setBridgeConnected(true);
+      } else {
+        setBridgeConnected(false);
       }
     } catch {
       setBridgeConnected(false);

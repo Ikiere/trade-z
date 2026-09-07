@@ -126,7 +126,6 @@ export default function LiveScannerWidget() {
     }
     return null;
   });
-  const [isExecutingManual, setIsExecutingManual] = useState(false);
   const [latestSetup, setLatestSetup] = useState<LatestTradeSetup | null>(null);
 
   // Sync with context account
@@ -497,30 +496,12 @@ export default function LiveScannerWidget() {
 
   useEffect(() => { loadConfig(); }, [loadConfig]);
 
-  // Toggle MT5 Auto-Execution Mode
+  // MT5 Execution Mode (Locked to 100% Autonomous AI)
   const handleToggleAutoTrade = async () => {
-    const nextMode = tradingMode === 'fully_automatic' ? 'manual' : 'fully_automatic';
-    setTradingMode(nextMode);
-    
-    if (userId) {
-      const supabase = createClient();
-      await supabase
-        .from('user_settings')
-        .update({ trading_mode: nextMode })
-        .eq('user_id', userId);
-    }
-
-    if (nextMode === 'fully_automatic') {
-      setLogs(prev => [
-        `[MODE TOGGLE ⚡] MT5 Auto-Execution ACTIVATED! Verified signals will immediately place trades on MT5.`,
-        ...prev
-      ]);
-    } else {
-      setLogs(prev => [
-        `[MODE TOGGLE 🛑] MT5 Auto-Execution turned OFF. Signals will be generated without auto-placing orders.`,
-        ...prev
-      ]);
-    }
+    setLogs(prev => [
+      `[AUTONOMOUS LOCK ⚡] 100% AI Execution is permanently engaged. Manual trading is eliminated to enforce institutional discipline.`,
+      ...prev
+    ]);
   };
 
   // Direct Execution on MT5 Bridge
@@ -702,33 +683,6 @@ export default function LiveScannerWidget() {
     } catch (_) {}
 
     return executedTicket;
-  };
-
-  // Manual button click on latest setup
-  const handleManualExecute = async () => {
-    if (!latestSetup) return;
-    setIsExecutingManual(true);
-    try {
-      setLogs(prev => [
-        `[MANUAL ORDER ⚡] Sending ${latestSetup.pair} (${(latestSetup.orderType || latestSetup.direction).toUpperCase()}) to MT5...`,
-        ...prev
-      ]);
-      const ticket = await sendOrderToMt5({
-        pair: latestSetup.pair,
-        direction: latestSetup.direction,
-        orderType: latestSetup.orderType,
-        signalId: latestSetup.signalId,
-        entryPrice: latestSetup.entryPrice,
-        stopLoss: latestSetup.stopLoss,
-        takeProfit: latestSetup.takeProfit,
-        overrideSafety: true,
-      });
-      if (ticket) {
-        setLatestSetup(prev => prev ? { ...prev, mt5Ticket: ticket } : null);
-      }
-    } finally {
-      setIsExecutingManual(false);
-    }
   };
 
   // Single-pair chart analysis on demand
@@ -996,25 +950,22 @@ export default function LiveScannerWidget() {
           }
         } catch (_) {}
 
-        // Auto-Execution Check
-        if (tradingMode === 'fully_automatic') {
-          setLogs(prev => [`[AUTO TRADE ⚡] Evaluating MT5 auto-execution for ${pair} (${orderType.toUpperCase()}, ${safeLot} lots)...`, ...prev]);
-          const ticket = await sendOrderToMt5({
-            pair,
-            direction,
-            orderType,
-            signalId: savedSignalId,
-            entryPrice,
-            stopLoss,
-            takeProfit,
-            lotSize: safeLot,
-          });
-          if (ticket) {
-            setLatestSetup(prev => prev ? { ...prev, mt5Ticket: ticket } : null);
-          }
-        } else {
+        // 100% Autonomous AI MT5 Auto-Execution
+        setLogs(prev => [`[AUTONOMOUS AI ⚡] Placing wholesale ${orderType.toUpperCase()} on MT5 for ${pair} (Sized: ${safeLot} lots)...`, ...prev]);
+        const ticket = await sendOrderToMt5({
+          pair,
+          direction,
+          orderType,
+          signalId: savedSignalId,
+          entryPrice,
+          stopLoss,
+          takeProfit,
+          lotSize: safeLot,
+        });
+        if (ticket) {
+          setLatestSetup(prev => prev ? { ...prev, mt5Ticket: ticket } : null);
           setLogs(prev => [
-            `[MANUAL READY ℹ️] Setup approved! Sized at ${safeLot} lots. Click "⚡ Place on MT5 Now" button below to execute.`,
+            `[AUTO-EXECUTED ✅] Order #${ticket} successfully placed on MT5! AI Sentinel Guardian is now actively managing this trade.`,
             ...prev,
           ]);
         }
@@ -1115,8 +1066,8 @@ export default function LiveScannerWidget() {
                   </div>
                 </div>
               </div>
-              <span className="text-[9px] font-mono text-[#475569] bg-bg-secondary px-2.5 py-1 rounded border border-[#1e293b] shrink-0">
-                Auto-Guard: {tradingMode === 'fully_automatic' ? '⚡ ENGAGED' : 'MANUAL CONFIRM'}
+              <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded border border-emerald-500/20 shrink-0 font-bold">
+                Auto-Guard: ⚡ 100% ENGAGED
               </span>
             </div>
           ) : (
@@ -1208,37 +1159,16 @@ export default function LiveScannerWidget() {
                         )}
                       </div>
 
-                      {/* Right: Quick Action Buttons */}
+                      {/* Right: Sentinel Automation Status */}
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {/* Lock Breakeven Button */}
-                        <button
-                          onClick={() => handleManualLockBreakeven(pos, evalData?.target_sl)}
-                          disabled={isActionBusy[pos.ticket] || isSafe}
-                          className={`px-2 py-1 rounded text-[10px] font-mono font-bold flex items-center gap-1 transition-all border ${
-                            isSafe
-                              ? 'bg-bg-secondary text-[#475569] border-[#1e293b] cursor-default'
-                              : 'bg-cyan-500/10 hover:bg-cyan-500/25 text-cyan-300 border-cyan-500/30 shadow-sm shadow-cyan-500/20'
-                          }`}
-                          title={isSafe ? 'Trade is already risk-free at breakeven' : 'Move Stop Loss to Entry + Spread'}
-                        >
-                          <Lock className="w-3 h-3 text-cyan-400" />
-                          {isSafe ? 'BE Locked' : 'Lock BE'}
-                        </button>
-
-                        {/* Emergency Protective Close */}
-                        <button
-                          onClick={() => handleManualEmergencyClose(pos.ticket)}
-                          disabled={isActionBusy[pos.ticket]}
-                          className="px-2 py-1 rounded text-[10px] font-mono font-bold flex items-center gap-1 transition-all bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30"
-                          title="Instant market exit"
-                        >
-                          {isActionBusy[pos.ticket] ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : (
-                            <XCircle className="w-3 h-3 text-rose-400" />
-                          )}
-                          Close
-                        </button>
+                        <span className={`px-2.5 py-1 rounded text-[10px] font-mono font-bold flex items-center gap-1.5 border ${
+                          isSafe
+                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                            : 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+                        }`}>
+                          <Shield className="w-3 h-3 text-cyan-400" />
+                          {isSafe ? '🛡️ Risk-Free (BE Locked)' : '⚡ Sentinel Auto-Guard Active'}
+                        </span>
                       </div>
                     </div>
 
@@ -1505,25 +1435,26 @@ export default function LiveScannerWidget() {
         {/* Sub-footer metadata */}
         <div className="flex flex-wrap items-center gap-3 pt-1 border-t border-[#1e293b]/50 text-[10px] font-mono text-[#475569]">
           <span>
-            Mode:{' '}
-            <strong className={tradingMode === 'fully_automatic' ? 'text-emerald-400' : 'text-[#94a3b8]'}>
-              {tradingMode === 'fully_automatic' ? '⚡ MT5 AUTO-EXECUTION' : 'MANUAL ALERTS'}
+            Execution:{' '}
+            <strong className="text-emerald-400 font-bold flex items-center gap-1 inline-flex">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              100% AUTONOMOUS AI ENGINE
             </strong>
           </span>
           <span>·</span>
-          <span>Default Lot: <strong className="text-[#94a3b8]">{defaultLot}</strong></span>
+          <span>Sizing: <strong className="text-white">Live MT5 Balance-Adaptive</strong></span>
           <span>·</span>
-          <span>Analysis: <strong className="text-white">Single-Pair On-Demand</strong></span>
+          <span>Watchlist: <strong className="text-white">Forex + Gold + Crypto</strong></span>
           {mt5Status?.connected && (
             <>
               <span>·</span>
-              <span className="text-emerald-400 font-semibold">MT5 Synced</span>
+              <span className="text-emerald-400 font-semibold">MT5 VPS Synced</span>
             </>
           )}
         </div>
       </div>
 
-      {/* Latest Generated Setup Card with One-Click MT5 Execution */}
+      {/* Latest Generated Setup Card with Autonomous MT5 Status */}
       {latestSetup && (
         <div className="card p-4 border border-[#1e293b] bg-[#0c101d] space-y-3">
           <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
@@ -1549,22 +1480,19 @@ export default function LiveScannerWidget() {
 
             <div className="flex items-center gap-2">
               {latestSetup.mt5Ticket ? (
-                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3" /> Placed on MT5 (Ticket #{latestSetup.mt5Ticket})
+                <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded flex items-center gap-1.5 font-bold shadow-sm">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  Auto-Executed on MT5 (#{latestSetup.mt5Ticket})
+                </span>
+              ) : latestSetup.isApproved ? (
+                <span className="text-[10px] font-mono text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-2.5 py-1 rounded flex items-center gap-1.5 font-bold animate-pulse">
+                  <Zap className="w-3.5 h-3.5 text-cyan-400" />
+                  Auto-Placed on MT5 Bridge
                 </span>
               ) : (
-                <button
-                  onClick={handleManualExecute}
-                  disabled={isExecutingManual}
-                  className="btn bg-brand-500 hover:bg-brand-600 text-white text-[11px] py-1 px-3 font-mono font-bold flex items-center gap-1.5 shadow-lg shadow-brand-500/20"
-                >
-                  {isExecutingManual ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Zap className="w-3.5 h-3.5 fill-white" />
-                  )}
-                  ⚡ Place on MT5 Now
-                </button>
+                <span className="text-[10px] font-mono text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded flex items-center gap-1">
+                  Setup Logged to Signals
+                </span>
               )}
             </div>
           </div>

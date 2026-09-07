@@ -54,12 +54,12 @@ const scaleIn: Variants = {
 // ============================================================================
 
 const AI_STATUSES = [
-  { text: 'Scanning EURUSD charts...', icon: '🔍', color: '#0055ff' },
-  { text: 'Checking Gold support levels...', icon: '📈', color: '#f59e0b' },
-  { text: 'GBPJPY setup skipped — weak volume', icon: '⏸️', color: '#ef4444' },
-  { text: 'USDJPY target matched — executing trade', icon: '✅', color: '#10b981' },
-  { text: 'Waiting on AUDUSD — economic news in 12 min', icon: '⏱️', color: '#64748b' },
-  { text: 'EURUSD updated — shifted stop loss to entry', icon: '🛡️', color: '#2563eb' },
+  { text: 'Tirelessly scanning EURUSD 15m order flow...', icon: '🧠', color: '#0055ff' },
+  { text: 'Gold wholesale discount limit order placed on MT5', icon: '⚡', color: '#10b981' },
+  { text: 'GBPJPY rejected: Stop-loss exceeds $3.50 risk shield', icon: '🛡️', color: '#ef4444' },
+  { text: 'BTCUSD +1.0R hit: Moved stop loss to Breakeven (Risk-Free)', icon: '🔒', color: '#2563eb' },
+  { text: 'ETHUSD +1.5R hit: Banking 50% partial cash profit', icon: '💰', color: '#10b981' },
+  { text: 'AI Brain completed 200-bar micro-backtest replay', icon: '🔄', color: '#8b5cf6' },
 ];
 
 function AIStatusTicker() {
@@ -381,9 +381,9 @@ export default function LandingPage() {
             transition={{ delay: 0.4, duration: 0.7 }}
             className="text-4xl sm:text-5xl md:text-7xl font-bold leading-tight tracking-tight"
           >
-            <span className="text-white">Trade Forex with</span>{' '}
+            <span className="text-white">100% Autonomous</span>{' '}
             <br className="hidden sm:block" />
-            <span className="text-gradient">AI discipline.</span>
+            <span className="text-gradient">AI Trading Machine.</span>
           </motion.h1>
 
           {/* Subtitle */}
@@ -393,8 +393,7 @@ export default function LandingPage() {
             transition={{ delay: 0.6 }}
             className="text-base sm:text-lg text-[#94a3b8] max-w-2xl mx-auto leading-relaxed"
           >
-            No emotions. No manual mistakes. Trade-Z is your automated co-pilot. 
-            It scans markets, tracks risk, and triggers trades only when conditions are 100% right.
+            Zero emotions. Zero hesitation. Pure institutional SMC edge. Set your Forex &amp; Crypto watchlist and let Trade-Z's AI engine scan tirelessly 24/7, size dynamically to your live MT5 balance to prevent blowout, place wholesale limit orders, and manage every trade autonomously.
           </motion.p>
 
           {/* CTA Buttons */}
@@ -406,16 +405,16 @@ export default function LandingPage() {
           >
             <Link
               href="/register"
-              className="btn btn-primary px-8 py-3.5 text-xs font-bold group w-full sm:w-auto text-center"
+              className="btn btn-primary px-8 py-3.5 text-xs font-bold group w-full sm:w-auto text-center shadow-lg shadow-brand-500/25"
             >
-              Start Trading Smarter
+              Launch 100% Autonomous AI
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform inline ml-1" />
             </Link>
             <a
-              href="#features"
+              href="#pillars"
               className="btn btn-secondary px-8 py-3.5 text-xs font-bold w-full sm:w-auto text-center"
             >
-              See How It Works
+              How AI Operates
             </a>
           </motion.div>
 
@@ -426,9 +425,10 @@ export default function LandingPage() {
             transition={{ delay: 1.0, duration: 0.7 }}
             className="max-w-sm mx-auto"
           >
-            <ConfidenceMeter value={76} required={85} />
-            <p className="text-[10px] text-red-400 mt-2 font-mono uppercase tracking-wider">
-              AI Decision: PASS (Market volume low, high impact news approaching)
+            <ConfidenceMeter value={91} required={72} />
+            <p className="text-[10px] text-emerald-400 mt-2 font-mono uppercase tracking-wider flex items-center justify-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+              AI Decision: AUTO-EXECUTED (Discount FVG swept, MT5 0.01 lot sized)
             </p>
           </motion.div>
         </div>
@@ -451,12 +451,12 @@ export default function LandingPage() {
               <span className="text-xs text-brand-300 font-medium font-mono uppercase">Designed to Protect Capital</span>
             </motion.div>
             <motion.h2 variants={fadeInUp} className="text-2xl sm:text-4xl font-bold text-white">
-              Not a signal website.{' '}
-              <span className="text-gradient">A risk-first system.</span>
+              Not a signal channel.{' '}
+              <span className="text-gradient">A 100% Autonomous AI Machine.</span>
             </motion.h2>
             <motion.p variants={fadeInUp} className="text-sm text-[#94a3b8] max-w-2xl mx-auto leading-relaxed">
-              Most traders lose because of bad emotions and lack of discipline. Trade-Z solves this. 
-              The system calculates correct sizes, moves stops, and checks news blocks automatically.
+              Human emotion, hesitation, and greed blow accounts. Trade-Z eliminates them permanently. 
+              The AI works tirelessly 24/7—scanning your watchlist, calculating dynamic balance risk, placing wholesale limit orders, and managing positions autonomously.
             </motion.p>
           </motion.div>
 
@@ -469,48 +469,48 @@ export default function LandingPage() {
           >
             <FeatureCard
               icon={Brain}
-              title="Smart Scanner"
-              description="Scans 40+ currency pairs across multiple timeframes. No setup goes unchecked, and false breakouts are filtered."
+              title="Tireless 24/7 Market Scanner"
+              description="Spends hours scanning your Forex & Crypto watchlist across 15m, 1h, and 4h. Identifies institutional liquidity sweeps and order blocks without fatigue."
             />
             <FeatureCard
               icon={Shield}
-              title="Capital Shield"
-              description="Automatic lot-size calculation, strict daily loss caps, and drawdown protect systems built directly into the core."
+              title="Live MT5 Balance Shield"
+              description="Dynamically sizes every trade against your live MT5 equity. Sub-$150 accounts are capped at 5% ($3.50 max risk) and 0.01 micro-lots to prevent blowout."
             />
             <FeatureCard
-              icon={Eye}
-              title="Technical Checks"
-              description="Reads market structures, identifies high-probability order blocks, and tracks fair value gaps in real-time."
-            />
-            <FeatureCard
-              icon={Target}
-              title="Confluence Matching"
-              description="Ensures higher timeframe trends align with short-term entries. If timeframes disagree, the system passes on the trade."
+              icon={Zap}
+              title="Wholesale Limit Orders"
+              description="Never chases candles at market highs or lows. Automatically places institutional Buy Limits at Discount and Sell Limits at Premium."
             />
             <FeatureCard
               icon={Activity}
-              title="Dynamic Position Control"
-              description="Locks in profit automatically. Automatically shifts stops to entry (break-even) and clips partial wins."
+              title="Autonomous Sentinel Guardian"
+              description="Zero human intervention needed. Stops automatically shift to Breakeven at +1.0R, and 50% partial cash profit is banked at +1.5R."
             />
             <FeatureCard
               icon={Lock}
-              title="Knows When to Pass"
-              description="Skipping bad setups is a skill. The AI exits or passes during low volume, high news events, or wide spreads."
+              title="Adverse Structure Early Cut"
+              description="If market structure breaks against the trade (CHoCH), the AI closes the position early, salvaging 50%–70% of risk before Stop Loss is hit."
             />
             <FeatureCard
-              icon={Bot}
-              title="AI Conversational Chat"
-              description="Ask questions like 'What is my current margin?' or 'Why was Gold skipped?' in simple English and get instant answers."
+              icon={Sparkles}
+              title="Self-Learning AI Brain Loop"
+              description="Continuously replays trades, runs micro-backtests on your watchlist, conducts automated loss autopsies, and refines layer weights every minute."
             />
             <FeatureCard
-              icon={LineChart}
-              title="TradingView Chart Engine"
-              description="Professional live charts with active markups, support lines, and target boundaries visible instantly."
+              icon={Target}
+              title="Transparent SMC Rationale"
+              description="The AI clearly explains why it chose every setup: liquidity pool sweeps, fair value gap mitigation, HTF trend confluence, and exact risk/reward."
             />
             <FeatureCard
               icon={Globe}
-              title="Multi-Broker Integrations"
-              description="Connect to your favorite brokerage accounts. Run simulation paper accounts or live execution slots."
+              title="24/7 Cloud VPS Sync"
+              description="Connected directly to your Azure or local MT5 terminal via sub-millisecond REST bridge. Keeps executing even when your computer is asleep."
+            />
+            <FeatureCard
+              icon={BarChart3}
+              title="Permanent Signals Ledger"
+              description="Every single trade the AI executes is recorded in the Signals ledger with entry price, stop loss, take profit, confidence, and timestamp."
             />
           </motion.div>
         </div>
@@ -629,9 +629,9 @@ export default function LandingPage() {
       </section>
 
       {/* ================================================================
-          TRADING MODES SECTION
+          AUTONOMOUS PILLARS SECTION
           ================================================================ */}
-      <section className="py-24 px-4 border-t border-[#12121a]">
+      <section id="pillars" className="py-24 px-4 border-t border-[#12121a]">
         <div className="max-w-7xl mx-auto">
           <motion.div
             initial="hidden"
@@ -641,11 +641,11 @@ export default function LandingPage() {
             className="text-center mb-16 space-y-3"
           >
             <h2 className="text-2xl sm:text-4xl font-bold text-white">
-              Three ways to trade.{' '}
-              <span className="text-gradient">Your choice.</span>
+              The 3 Pillars of{' '}
+              <span className="text-gradient">Autonomous Operation.</span>
             </h2>
             <p className="text-sm text-[#94a3b8] max-w-2xl mx-auto">
-              Decide how much control you want to retain or hand over to the AI co-pilot.
+              How Trade-Z's AI eliminates human emotion and executes with cold mathematical precision.
             </p>
           </motion.div>
 
@@ -658,25 +658,25 @@ export default function LandingPage() {
           >
             {[
               {
-                title: 'Co-Pilot Mode',
-                icon: BarChart3,
-                description: 'AI does all the hard research. You get detailed alerts and place trades manually.',
-                features: ['Full research & rationale', 'Calculated SL/TP parameters', 'Confidence matches', 'You place trades'],
-                color: '#94a3b8',
-              },
-              {
-                title: 'One-Tap Mode',
-                icon: TrendingUp,
-                description: 'AI alerts you when a trade setup forms. Tap once to approve, and the AI handles the rest.',
-                features: ['Instant push alerts', 'One-tap execution', 'Automated management', 'Review before entry'],
+                title: '1. Watchlist & 24/7 Scan',
+                icon: Brain,
+                description: 'You select your preferred currency & crypto pairs. The AI works tirelessly analyzing order flow, institutional sweeps, and fair value gaps 24/7.',
+                features: ['Forex, Gold & Crypto support', 'Multi-timeframe 15m/1h/4h confluence', 'Continuous market monitoring', 'Zero chart fatigue'],
                 color: '#0055ff',
               },
               {
-                title: 'Auto-Pilot Mode',
-                icon: Zap,
-                description: 'The AI executes trades, manages sizes, and closes positions automatically 24/5.',
-                features: ['Fully automated setup', 'Automatic stop loss moves', 'Daily loss protection caps', 'Hands-free execution'],
+                title: '2. Dynamic Balance Shield',
+                icon: Shield,
+                description: 'Live MT5 balance checked before every order. Sub-$150 accounts are capped at $3.50 max risk and 0.01 micro-lots. Wholesale limit orders placed automatically.',
+                features: ['Anti-blowout risk math', 'Sub-$150 account protection', 'Wholesale limit orders (Discount/Premium)', 'Zero market chasing'],
                 color: '#10b981',
+              },
+              {
+                title: '3. Autonomous Sentinel & Brain',
+                icon: Zap,
+                description: 'Zero human intervention. Moves stops to Breakeven at +1.0R, banks partials at +1.5R, cuts adverse structures early, and backtests continuously.',
+                features: ['Auto-Breakeven at +1.0R', 'Auto-Partials banked at +1.5R', 'Early structural invalidation cuts', 'Micro-backtest learning loop'],
+                color: '#8b5cf6',
               },
             ].map(({ title, icon: Icon, description, features, color }) => (
               <motion.div
@@ -737,54 +737,54 @@ export default function LandingPage() {
             className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto"
           >
             <PricingCard
-              name="Free Plan"
+              name="Starter Autonomous"
               price={0}
-              description="Basic AI signal setups for beginners"
+              description="Full 100% Autonomous AI execution on 1 watchlist asset"
               cta="Start Free"
               isPopular={false}
               features={[
-                { name: 'AI Market Scan parameters', included: true },
-                { name: 'Up to 5 trade alerts daily', included: true },
-                { name: 'Manual trading support', included: true },
-                { name: '1 simulation demo account', included: true },
-                { name: 'Digital trade journal', included: true },
-                { name: 'AI Chat integration', included: false },
-                { name: 'Auto-pilot execution', included: false },
-                { name: 'Live broker slots', included: false },
+                { name: '100% Autonomous AI execution', included: true },
+                { name: 'Live MT5 Balance Shield (<$150 protect)', included: true },
+                { name: 'Wholesale SMC Limit Orders', included: true },
+                { name: 'Auto-Breakeven at +1.0R (Risk-Free)', included: true },
+                { name: 'Signals Ledger with Entry, SL & TP', included: true },
+                { name: 'Daily Discipline Circuit Breaker', included: true },
+                { name: 'Multi-Asset Watchlist (Gold + Crypto)', included: false },
+                { name: 'Auto-Banking 50% Partials at +1.5R', included: false },
               ]}
             />
             <PricingCard
-              name="Pro Plan"
+              name="Pro Autonomous"
               price={49}
-              description="Complete co-pilot utilities for regular traders"
+              description="Unlimited Forex & Crypto watchlist with full Sentinel Automation"
               cta="Get Pro"
               isPopular={true}
               features={[
-                { name: 'Unlimited trade alerts', included: true },
-                { name: 'All 3 execution modes', included: true },
-                { name: 'Up to 5 live broker slots', included: true },
-                { name: 'Interactive AI Chat helper', included: true },
-                { name: 'Detailed execution logs', included: true },
-                { name: 'Drawdown safety modifiers', included: true },
-                { name: 'News filter protection', included: true },
-                { name: 'Priority alert routing', included: false },
+                { name: '100% Autonomous AI execution', included: true },
+                { name: 'Unlimited Watchlist (Forex + Gold + Crypto)', included: true },
+                { name: 'Live MT5 Balance Shield & Dynamic Sizing', included: true },
+                { name: 'Auto-Breakeven at +1.0R & Partials at +1.5R', included: true },
+                { name: 'Adverse Structure CHoCH Early Cut', included: true },
+                { name: 'Continuous AI Brain Micro-Backtests', included: true },
+                { name: 'Signals Ledger with Full History', included: true },
+                { name: '24/7 Cloud Azure VPS Bridge Sync', included: true },
               ]}
             />
             <PricingCard
-              name="Expert Plan"
+              name="Institutional AI"
               price={199}
-              description="Full scale power for high volume operators"
+              description="Maximum computational power, self-learning brain & prop firm mode"
               cta="Contact Sales"
               isPopular={false}
               features={[
-                { name: 'Everything inside Pro Plan', included: true },
-                { name: 'Unlimited AI Chat messages', included: true },
-                { name: 'Unlimited live broker connections', included: true },
-                { name: 'Direct strategy API access', included: true },
-                { name: 'Custom AI strategy scripting', included: true },
-                { name: 'White-label layout adjustments', included: true },
-                { name: 'Dedicated system manager', included: true },
-                { name: 'Priority developer assistance', included: true },
+                { name: 'Everything inside Pro Autonomous', included: true },
+                { name: 'Continuous Self-Learning Brain Loop', included: true },
+                { name: 'Automated Loss Autopsy & Weight Tuning', included: true },
+                { name: 'Prop Firm Challenge Rules Guardian', included: true },
+                { name: 'Multi-Terminal MT5 VPS Co-location', included: true },
+                { name: 'Sub-millisecond REST execution', included: true },
+                { name: 'Dedicated Algorithmic System Manager', included: true },
+                { name: 'Custom Quantitative Strategy Scripts', included: true },
               ]}
             />
           </motion.div>

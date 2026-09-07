@@ -11,6 +11,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { getApiBaseUrl } from '@/lib/api';
 import { CURATED_ASSETS, CATEGORIZED_ASSETS, SUPPORTED_PAIRS, normalizePairSymbol, isCryptoAsset, AssetDefinition } from '@/lib/assets-registry';
 import { mt5Fetch } from '@/lib/mt5-client';
+import { useMt5 } from '@/lib/mt5-sync-context';
 
 // ─── small reusable section card ───────────────────────────────────────────
 function Section({ icon: Icon, title, children }: {
@@ -45,14 +46,16 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
 
+  const { account: contextAccount, bridgeStatus: contextBridgeStatus } = useMt5();
+
   // ── Profile ─────────────────────────────────────────────
   const [profileName, setProfileName] = useState('');
   const [email, setEmail] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
   const [msgProfile, setMsgProfile] = useState('');
 
-  // ── Trading settings ─────────────────────────────────────
-  const [mode, setMode] = useState('manual');
+  // ── Trading settings (100% Autonomous AI Execution) ─────
+  const [mode, setMode] = useState('fully_automatic');
   const [lotSize, setLotSize] = useState(0.01);
   const [riskReward, setRiskReward] = useState(2.0);
   const [maxLoss, setMaxLoss] = useState(5.0);
@@ -66,14 +69,6 @@ export default function SettingsPage() {
   const [customPairText, setCustomPairText] = useState('');
   const [savingWatch, setSavingWatch] = useState(false);
   const [msgWatch, setMsgWatch] = useState('');
-
-  // ── Journal / Manual Trade Log ───────────────────────────
-  const [logPair, setLogPair] = useState('EURUSD');
-  const [logDirection, setLogDirection] = useState<'long' | 'short'>('long');
-  const [logLot, setLogLot] = useState('0.1');
-  const [logPnl, setLogPnl] = useState('50.00');
-  const [isLogging, setIsLogging] = useState(false);
-  const [msgLog, setMsgLog] = useState('');
 
   // ── Account Balance ──────────────────────────────────────
   const [newBalance, setNewBalance] = useState('10000.00');
@@ -192,7 +187,7 @@ export default function SettingsPage() {
       const { data: s } = await supabase
         .from('user_settings').select('*').eq('user_id', user.id).maybeSingle();
       if (s) {
-        setMode(s.trading_mode || 'manual');
+        setMode('fully_automatic');
         setLotSize(Number(s.default_lot_size) || 0.01);
         setRiskReward(Number(s.default_risk_per_trade) || 2.0);
         setMaxLoss(Number(s.max_daily_loss) || 5.0);
@@ -202,18 +197,16 @@ export default function SettingsPage() {
         if (Array.isArray(s.watchlist) && s.watchlist.length > 0) {
           const merged = Array.from(new Set([...s.watchlist, ...cryptoPairs]));
           setWatchlist(merged);
-          setLogPair(merged[0]);
         } else {
           const def = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', ...cryptoPairs];
           setWatchlist(def);
-          setLogPair(def[0]);
         }
       } else {
         // Auto-create defaults
         const def = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'BTCUSD', 'ETHUSD', 'SOLUSD'];
         await supabase.from('user_settings').upsert({
           user_id: user.id,
-          trading_mode: 'manual',
+          trading_mode: 'fully_automatic',
           default_lot_size: 0.01,
           default_risk_per_trade: 2.00,
           max_daily_loss: 5.00,
@@ -310,30 +303,6 @@ export default function SettingsPage() {
     saveWatchlist(watchlist.filter(p => p !== pair));
   };
 
-  // ── Journal trade log ────────────────────────────────────
-  const handleLogTrade = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!userId) return;
-    setIsLogging(true); setMsgLog('');
-    const supabase = createClient();
-    try {
-      const apiBase = getApiBaseUrl();
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-
-      const res = await fetch(`${apiBase}/api/v1/trades/log`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ pair: logPair, direction: logDirection, lotSize: parseFloat(logLot), pnl: parseFloat(logPnl) }),
-      });
-
-      if (!res.ok) { const e = await res.json(); throw new Error(e?.message || res.statusText); }
-      setMsgLog(`Trade logged! ${logDirection === 'long' ? '▲' : '▼'} ${logPair} · P&L: $${parseFloat(logPnl).toFixed(2)}`);
-      setLogPnl('0.00');
-    } catch (err: any) { setMsgLog(`Error: ${err.message}`); }
-    finally { setIsLogging(false); setTimeout(() => setMsgLog(''), 5000); }
-  };
-
   // ── Balance update ───────────────────────────────────────
   const handleUpdateBalance = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -398,12 +367,22 @@ export default function SettingsPage() {
         <Section icon={Shield} title="Risk & Automation Rules">
           <form className="space-y-4 text-xs" onSubmit={handleSaveSettings}>
             <div>
-              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">Trading Mode</label>
-              <select value={mode} onChange={e => setMode(e.target.value)} className="input font-mono text-xs select-dark">
-                <option value="manual">MANUAL EXECUTION</option>
-                <option value="semi_automatic">SEMI AUTOMATIC (ONE-TAP)</option>
-                <option value="fully_automatic">FULLY AUTOMATIC (AUTONOMOUS)</option>
-              </select>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-[#94a3b8] font-mono uppercase text-[10px]">Trading Execution Engine</label>
+                <span className="text-[9px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                  100% AUTONOMOUS AI
+                </span>
+              </div>
+              <div className="input font-mono text-xs bg-bg-secondary/40 border-brand-500/30 text-white flex items-center justify-between cursor-not-allowed">
+                <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  FULLY AUTONOMOUS (AI EXECUTION ONLY)
+                </span>
+                <span className="text-[10px] text-[#64748b]">MANUAL TRADING ELIMINATED</span>
+              </div>
+              <p className="text-[9px] text-[#64748b] font-mono mt-1 leading-tight">
+                All trades are scanned, sized, placed, and managed 100% autonomously by the AI to eliminate human greed and emotional errors.
+              </p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -604,47 +583,60 @@ export default function SettingsPage() {
       {/* ── Row 3: Trade Journal + API Keys ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-        {/* Manual Trade Journal */}
-        <Section icon={FileSpreadsheet} title="Journal Manual Trade">
-          <p className="text-[10px] text-[#64748b] font-mono -mt-1">
-            Log trades you placed manually in your broker so the system can track your P&amp;L.
-          </p>
-          <form className="space-y-4 text-xs" onSubmit={handleLogTrade}>
-            <div className="grid grid-cols-2 gap-3 font-mono">
+        {/* Live MT5 Balance & Capital Shield */}
+        <Section icon={Shield} title="Live MT5 Balance & Capital Shield">
+          <div className="space-y-3 font-mono text-xs">
+            <div className="p-3 rounded-xl bg-[#060810] border border-[#1e293b] flex items-center justify-between">
               <div>
-                <label className="block text-[#94a3b8] mb-1.5 uppercase text-[10px]">Pair</label>
-                <select value={logPair} onChange={e => setLogPair(e.target.value)} className="input text-xs select-dark">
-                  {(watchlist.length > 0 ? watchlist : SUPPORTED_PAIRS).map((p: string) => (
-                    <option key={p} value={p}>{p}</option>
-                  ))}
-                </select>
+                <span className="text-[10px] text-[#64748b] block uppercase">Live MT5 Balance</span>
+                <span className="text-base font-bold text-white">
+                  ${contextAccount?.balance ? contextAccount.balance.toLocaleString(undefined, { minimumFractionDigits: 2 }) : (parseFloat(newBalance) || 0).toFixed(2)}
+                </span>
               </div>
-              <div>
-                <label className="block text-[#94a3b8] mb-1.5 uppercase text-[10px]">Direction</label>
-                <select value={logDirection} onChange={e => setLogDirection(e.target.value as 'long' | 'short')}
-                  className="input text-xs select-dark">
-                  <option value="long">▲ BUY (LONG)</option>
-                  <option value="short">▼ SELL (SHORT)</option>
-                </select>
+              <div className="text-right">
+                <span className="text-[10px] text-[#64748b] block uppercase">Live Equity</span>
+                <span className="text-base font-bold text-emerald-400">
+                  ${contextAccount?.equity ? contextAccount.equity.toLocaleString(undefined, { minimumFractionDigits: 2 }) : (parseFloat(newBalance) || 0).toFixed(2)}
+                </span>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3 font-mono">
-              <div>
-                <label className="block text-[#94a3b8] mb-1.5 uppercase text-[10px]">Lot Size</label>
-                <input type="number" step="0.01" min="0.01" value={logLot}
-                  onChange={e => setLogLot(e.target.value)} className="input text-xs" required />
+
+            {/* Small Account Capital Shield Status */}
+            <div className="p-3 rounded-xl bg-brand-500/5 border border-brand-500/20 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-brand-300 font-bold text-[11px] flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-brand-400" />
+                  Anti-Blowout Capital Shield
+                </span>
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  ACTIVE
+                </span>
               </div>
-              <div>
-                <label className="block text-[#94a3b8] mb-1.5 uppercase text-[10px]">Profit / Loss ($)</label>
-                <input type="number" step="0.01" placeholder="+150.00 or -45.00" value={logPnl}
-                  onChange={e => setLogPnl(e.target.value)} className="input text-xs" required />
+              <p className="text-[10px] text-[#94a3b8] leading-relaxed">
+                {(contextAccount?.equity || parseFloat(newBalance) || 0) < 150 ? (
+                  <>
+                    Small Account Guard: Equity is under $150. Sizing is strictly capped at <strong className="text-white">0.01 micro-lots</strong> and <strong className="text-emerald-400">max $3.50 risk</strong> (5%). High-volatility pairs with wide stops are automatically vetoed to prevent blowout.
+                  </>
+                ) : (
+                  <>
+                    Standard Account Guard: Sizing dynamically scaled at <strong className="text-emerald-400">1.0% institutional risk</strong> per trade based on exact stop-loss distance.
+                  </>
+                )}
+              </p>
+            </div>
+
+            {/* Sentinel Guardian Protection */}
+            <div className="grid grid-cols-2 gap-2 text-[10px]">
+              <div className="p-2.5 rounded-lg bg-bg-secondary border border-[#1e293b]">
+                <span className="text-[#64748b] block uppercase text-[9px]">Auto-Breakeven</span>
+                <span className="text-white font-bold">+1.0R (Risk-Free)</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-bg-secondary border border-[#1e293b]">
+                <span className="text-[#64748b] block uppercase text-[9px]">Auto-Partial Bank</span>
+                <span className="text-emerald-400 font-bold">+1.5R (50% Cash)</span>
               </div>
             </div>
-            <SaveMsg msg={msgLog} />
-            <button type="submit" disabled={isLogging} className="btn btn-primary w-full text-xs">
-              {isLogging ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto" /> : 'Confirm & Log Trade'}
-            </button>
-          </form>
+          </div>
         </Section>
 
         {/* MetaTrader 5 (MT5) Desktop Bridge */}

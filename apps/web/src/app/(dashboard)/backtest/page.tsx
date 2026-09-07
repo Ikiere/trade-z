@@ -140,8 +140,12 @@ export default function BacktestPage() {
       if (res.ok) {
         const body = await res.json();
         const data = body.data || body;
-        setLearningReport(data);
-        setRulesApplied(true);
+        if (data && data.success !== false && Array.isArray(data.insights)) {
+          setLearningReport(data);
+          setRulesApplied(true);
+        } else {
+          console.warn('AI Teaching returned non-standard report:', data);
+        }
       }
     } catch (err) {
       console.error('Teach AI error:', err);
@@ -328,7 +332,7 @@ export default function BacktestPage() {
       )}
 
       {/* ── AI Learning & Optimization Report ── */}
-      {learningReport && (
+      {learningReport && Array.isArray(learningReport.insights) && (
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
@@ -347,7 +351,7 @@ export default function BacktestPage() {
             <div className="flex items-center gap-3">
               <span className="text-[10px] text-[#64748b] font-mono">PROJECTED WIN RATE:</span>
               <span className="text-sm font-bold font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-lg">
-                {learningReport.projected_win_rate}% (+{(learningReport.projected_win_rate - learningReport.current_win_rate).toFixed(1)}%)
+                {learningReport.projected_win_rate ?? 0}% (+{((learningReport.projected_win_rate ?? 0) - (learningReport.current_win_rate ?? 0)).toFixed(1)}%)
               </span>
             </div>
           </div>
@@ -356,7 +360,7 @@ export default function BacktestPage() {
             <div className="space-y-2">
               <h4 className="text-[10px] font-bold text-[#64748b] font-mono uppercase tracking-wider">Learned Insights & Safeguards</h4>
               <ul className="space-y-1.5">
-                {learningReport.insights.map((insight, idx) => (
+                {(learningReport.insights || []).map((insight, idx) => (
                   <li key={idx} className="flex items-start gap-2 text-xs font-mono text-[#cbd5e1] bg-bg-card p-2.5 rounded-lg border border-[#1e293b]">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                     <span>{insight}</span>
@@ -368,10 +372,10 @@ export default function BacktestPage() {
             <div className="space-y-2">
               <h4 className="text-[10px] font-bold text-[#64748b] font-mono uppercase tracking-wider">Trained Confluence Weights</h4>
               <div className="grid grid-cols-2 gap-2 p-3 bg-bg-card rounded-xl border border-[#1e293b] font-mono text-xs">
-                {Object.entries(learningReport.optimized_weights).map(([k, v]) => (
+                {Object.entries(learningReport.optimized_weights || {}).map(([k, v]) => (
                   <div key={k} className="flex justify-between items-center py-1 border-b border-[#1e293b]/40">
                     <span className="text-[10px] text-[#64748b] capitalize">{k.replace('_', ' ')}</span>
-                    <span className="text-white font-bold">{(v * 100).toFixed(0)}%</span>
+                    <span className="text-white font-bold">{((Number(v) || 0) * 100).toFixed(0)}%</span>
                   </div>
                 ))}
               </div>
@@ -381,7 +385,7 @@ export default function BacktestPage() {
       )}
 
       {/* ── Visual Equity Curve ── */}
-      {equityCurve.length > 1 && (
+      {Array.isArray(equityCurve) && equityCurve.length > 1 && (
         <div className="card p-5 space-y-3">
           <div className="flex justify-between items-center">
             <h3 className="text-xs font-bold text-white font-mono uppercase tracking-wider flex items-center gap-2">
@@ -392,7 +396,7 @@ export default function BacktestPage() {
           </div>
 
           <div className="h-28 flex items-end gap-1.5 pt-4 border-b border-[#1e293b] overflow-x-auto no-scrollbar">
-            {equityCurve.map((pt, idx) => {
+            {(equityCurve || []).map((pt, idx) => {
               const diff = pt.equity - 10000;
               const isProfit = diff >= 0;
               const height = Math.min(100, Math.max(12, Math.abs(diff) / 18));
@@ -415,12 +419,12 @@ export default function BacktestPage() {
       )}
 
       {/* ── Trade Audit Table ── */}
-      {trades.length > 0 && (
+      {Array.isArray(trades) && trades.length > 0 && (
         <div className="card p-5 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-bold text-white font-mono">BACKTESTED TRADES AUDIT LOG</h3>
-              <span className="text-[10px] text-[#64748b] font-mono">({filteredTrades.length} trades)</span>
+              <span className="text-[10px] text-[#64748b] font-mono">({(filteredTrades || []).length} trades)</span>
             </div>
 
             <div className="flex bg-bg-secondary p-1 rounded-lg border border-[#1e293b] text-xs font-semibold">
@@ -454,7 +458,7 @@ export default function BacktestPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#1e293b]/60">
-                {filteredTrades.map((trade) => {
+                {(filteredTrades || []).map((trade) => {
                   const isLong = trade.direction === 'long';
                   const isWin = trade.outcome === 'WIN';
 

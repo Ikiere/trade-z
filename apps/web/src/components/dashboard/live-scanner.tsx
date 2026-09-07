@@ -159,6 +159,15 @@ export default function LiveScannerWidget() {
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
         const errMsg = errBody?.message || errBody?.detail || `HTTP ${res.status}`;
+        if (errMsg.includes('502') || errMsg.includes('spinning up') || errMsg.includes('warming up') || errMsg.includes('cold start')) {
+          setLogs(prev => [
+            `[AI ENGINE WAKING UP ⏳] AI service is warming up on cloud infrastructure (cold start).`,
+            `  -> Automatically waiting for warm-up... Next scan cycle in a few seconds.`,
+            ...prev
+          ]);
+          await new Promise(r => setTimeout(r, 5000));
+          return;
+        }
         setLogs(prev => [`[ERROR] ${errMsg}`, ...prev]);
         return;
       }

@@ -4,18 +4,39 @@ import { useState, useEffect } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { useNotificationStore } from '@/stores/notification-store';
 import { formatCurrency, getCurrentTradingSession, isMarketOpen } from '@trade-z/utils';
-import { Bell, Search, Activity, Sun, Moon, LogOut, ChevronDown, CheckCheck, Trash2 } from 'lucide-react';
+import { Bell, Search, LogOut, ChevronDown, CheckCheck, Trash2, Brain, Loader2 } from 'lucide-react';
 import Link from 'next/link';
+import { useMt5Sync } from '@/lib/use-mt5-sync';
 
 export default function Header() {
   const { user, logout } = useAuthStore();
   const { notifications, unreadCount, markAsRead, markAllAsRead, removeNotification } = useNotificationStore();
+  const mt5Sync = useMt5Sync();
 
   const [sessionInfo, setSessionInfo] = useState({ session: 'off_hours', isHighLiquidity: false, overlap: false });
   const [marketOpen, setMarketOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [mt5Balance, setMt5Balance] = useState<number | null>(null);
+
+  // Poll MT5 account balance for the header equity display
+  useEffect(() => {
+    const fetchBalance = async () => {
+      try {
+        const res = await fetch('http://localhost:5001/account', {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setMt5Balance(data.equity ?? data.balance ?? null);
+        }
+      } catch { /* bridge may not be running */ }
+    };
+    fetchBalance();
+    const timer = setInterval(fetchBalance, 15000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     setSessionInfo(getCurrentTradingSession());
@@ -60,10 +81,46 @@ export default function Header() {
 
       {/* Right side — Notifications, Portfolio Quick stats, Profile */}
       <div className="flex items-center gap-4">
-        {/* Mock Portfolio Equity Indicator */}
-        <div className="hidden lg:flex flex-col text-right text-xs">
-          <span className="text-[#64748b] uppercase tracking-wider font-mono">Total Equity</span>
-          <span className="font-semibold text-white font-mono">$105,642.20</span>
+        {/* MT5 Live Equity + AI Sync Status */}
+        <div className="hidden lg:flex items-center gap-3">
+          {/* Equity */}
+          <div className="flex flex-col text-right text-xs">
+            <span className="text-[#64748b] uppercase tracking-wider font-mono">
+              {mt5Balance !== null ? 'MT5 Equity' : 'Equity'}
+            </span>
+            <span className="font-semibold text-white font-mono">
+              {mt5Balance !== null
+                ? '$' + mt5Balance.toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                : '—'}
+            </span>
+          </div>
+
+          {/* AI Sync Badge */}
+          <div
+            title={mt5Sync.lastSyncAt
+              ? 'AI last synced: ' + mt5Sync.lastSyncAt.toLocaleTimeString() + ' — ' + mt5Sync.syncedCount + ' trades'
+              : 'AI sync: waiting for MT5 bridge'}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-mono font-bold transition-all ${
+              mt5Sync.syncing
+                ? 'bg-brand-500/15 border-brand-500/30 text-brand-400'
+                : mt5Sync.bridgeConnected
+                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                : 'bg-[#1e293b] border-[#334155] text-[#475569]'
+            }`}
+          >
+            {mt5Sync.syncing ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <Brain className="w-3 h-3" />
+            )}
+            <span>
+              {mt5Sync.syncing
+                ? 'SYNCING'
+                : mt5Sync.bridgeConnected
+                ? 'AI LIVE'
+                : 'AI OFFLINE'}
+            </span>
+          </div>
         </div>
 
         {/* Notification Bell */}

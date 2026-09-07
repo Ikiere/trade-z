@@ -9,6 +9,7 @@ import json
 import traceback
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+from datetime import datetime, timedelta, timezone
 
 try:
     import MetaTrader5 as mt5
@@ -34,16 +35,19 @@ def get_broker_symbol(target_pair: str):
     if info:
         return clean_target
 
-    # Alias mapping for Gold / Oil / Crypto
+    # Common broker symbol suffixes
+    suffixes = ['', 'm', '_i', '+', '.pro', '.raw', '.m', '#']
+    for s in suffixes:
+        candidate = clean_target + s
+        info = mt5.symbol_info(candidate)
+        if info:
+            return candidate
+
+    # Common gold aliases
     aliases = []
     if 'XAU' in clean_target or 'GOLD' in clean_target:
-        aliases.extend(['XAUUSD', 'GOLD', 'XAUUSDm', 'XAUUSD.m', 'GOLDm', 'XAUUSD+'])
-    elif 'BTC' in clean_target:
-        aliases.extend(['BTCUSD', 'BTCUSDT', 'BITCOIN', 'BTCUSD.m'])
-    elif 'ETH' in clean_target:
-        aliases.extend(['ETHUSD', 'ETHUSDT', 'ETHEREUM'])
+        aliases.extend(['XAUUSD', 'GOLD', 'XAUUSDm', 'GOLDm', 'XAUUSD+', 'GOLD+', 'XAUUSD.m'])
     elif len(clean_target) == 6:
-        # Standard Forex aliases
         aliases.extend([
             f"{clean_target}.m",
             f"{clean_target}+",
@@ -66,6 +70,15 @@ def get_broker_symbol(target_pair: str):
                 return s.name
 
     return clean_target
+
+
+def clean_symbol(sym: str) -> str:
+    """Normalizes broker-specific symbol back to standard pair (e.g. XAUUSDm -> XAUUSD)."""
+    s = sym.upper().replace('/', '').replace(' ', '')
+    for suf in ['_I', '+', '.PRO', '.RAW', '.M', '#', 'M']:
+        if s.endswith(suf) and len(s) > len(suf) + 2:
+            return s[:-len(suf)]
+    return s
 
 
 def calculate_safe_lot_size(symbol_info, equity: float, sl_dist_points: float, risk_percent: float = 1.0) -> float:
@@ -132,8 +145,10 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
             self._handle_health()
         elif path == '/account':
             self._handle_account()
-        elif path == '/positions':
+        elif path in ['/positions', '/orders', '/trades']:
             self._handle_positions()
+        elif path in ['/history', '/deals']:
+            self._handle_history(parsed.query)
         elif path in ['/quote', '/price', '/tick']:
             self._handle_quote(parsed.query)
         else:
@@ -155,8 +170,10 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
 
         if path in ['/order', '/trade']:
             self._handle_order(body_data)
-        elif path == '/close':
+        elif path in ['/close', '/close_position']:
             self._handle_close(body_data)
+        elif path in ['/cancel', '/cancel_order']:
+            self._handle_cancel_order(body_data)
         else:
             self._send_json(404, {'success': False, 'error': 'Not Found'})
 
@@ -236,28 +253,158 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
             return
 
         raw_positions = mt5.positions_get()
-        if raw_positions is None:
-            self._send_json(200, {'success': True, 'positions': []})
+        raw_orders = mt5.orders_get()
+
+        pos_formatted = []
+        total_floating_pnl = 0.0
+        if raw_positions:
+            for p in raw_positions:
+                p_profit = round(p.profit, 2)
+                total_floating_pnl += p_profit
+                pos_formatted.append({
+                    'ticket': p.ticket,
+                    'symbol': p.symbol,
+                    'pair': clean_symbol(p.symbol),
+                    'type': 'BUY' if p.type == mt5.POSITION_TYPE_BUY else 'SELL',
+                    'direction': 'long' if p.type == mt5.POSITION_TYPE_BUY else 'short',
+                    'volume': p.volume,
+                    'price_open': p.price_open,
+                    'price_current': p.price_current,
+                    'sl': p.sl,
+                    'tp': p.tp,
+                    'profit': p_profit,
+                    'swap': p.swap,
+                    'comment': p.comment,
+                    'time': p.time,
+                    'opened_at': datetime.fromtimestamp(p.time, timezone.utc).isoformat()
+                })
+
+        ord_type_names = {
+            mt5.ORDER_TYPE_BUY: 'BUY',
+            mt5.ORDER_TYPE_SELL: 'SELL',
+            mt5.ORDER_TYPE_BUY_LIMIT: 'BUY LIMIT',
+            mt5.ORDER_TYPE_SELL_LIMIT: 'SELL LIMIT',
+            mt5.ORDER_TYPE_BUY_STOP: 'BUY STOP',
+            mt5.ORDER_TYPE_SELL_STOP: 'SELL STOP',
+        }
+
+        orders_formatted = []
+        if raw_orders:
+            for o in raw_orders:
+                orders_formatted.append({
+                    'ticket': o.ticket,
+                    'symbol': o.symbol,
+                    'pair': clean_symbol(o.symbol),
+                    'order_type': ord_type_names.get(o.type, 'PENDING'),
+                    'direction': 'long' if o.type in [mt5.ORDER_TYPE_BUY, mt5.ORDER_TYPE_BUY_LIMIT, mt5.ORDER_TYPE_BUY_STOP] else 'short',
+                    'volume': o.volume_current,
+                    'price_open': o.price_open,
+                    'price_current': o.price_current,
+                    'sl': o.sl,
+                    'tp': o.tp,
+                    'time': o.time_setup,
+                    'created_at': datetime.fromtimestamp(o.time_setup, timezone.utc).isoformat()
+                })
+
+        acc = mt5.account_info()
+        self._send_json(200, {
+            'success': True,
+            'positions': pos_formatted,
+            'orders': orders_formatted,
+            'summary': {
+                'open_positions_count': len(pos_formatted),
+                'pending_orders_count': len(orders_formatted),
+                'total_floating_pnl': round(total_floating_pnl, 2),
+                'balance': round(acc.balance, 2) if acc else 0.0,
+                'equity': round(acc.equity, 2) if acc else 0.0,
+            }
+        })
+
+    def _handle_history(self, query_str: str):
+        """
+        Reconstructs all closed trades from MT5 history deals with realized PnL and exit prices.
+        """
+        if not MT5_AVAILABLE or not mt5.initialize():
+            self._send_json(503, {'success': False, 'error': 'MT5 terminal unavailable'})
             return
 
-        formatted = []
-        for p in raw_positions:
-            formatted.append({
-                'ticket': p.ticket,
-                'symbol': p.symbol,
-                'type': 'BUY' if p.type == mt5.POSITION_TYPE_BUY else 'SELL',
-                'volume': p.volume,
-                'price_open': p.price_open,
-                'price_current': p.price_current,
-                'sl': p.sl,
-                'tp': p.tp,
-                'profit': round(p.profit, 2),
-                'swap': p.swap,
-                'comment': p.comment,
-                'time': p.time
-            })
+        params = parse_qs(query_str)
+        days = int(params.get('days', ['60'])[0])
+        now = datetime.now()
+        past = now - timedelta(days=days)
+        deals = mt5.history_deals_get(past, now)
 
-        self._send_json(200, {'success': True, 'positions': formatted})
+        if not deals:
+            self._send_json(200, {'success': True, 'trades': []})
+            return
+
+        pos_map = {}
+        for d in deals:
+            if not d.symbol:
+                continue
+            pid = d.position_id
+            if pid not in pos_map:
+                pos_map[pid] = {'entry': None, 'exit': None}
+            if d.entry == 0:  # DEAL_ENTRY_IN
+                pos_map[pid]['entry'] = d
+            elif d.entry in [1, 2]:  # DEAL_ENTRY_OUT or DEAL_ENTRY_INOUT
+                pos_map[pid]['exit'] = d
+
+        closed_trades = []
+        for pid, data in pos_map.items():
+            if data['exit']:
+                d_exit = data['exit']
+                d_entry = data['entry']
+                profit = round(d_exit.profit, 2)
+                exit_price = d_exit.price
+                entry_price = d_entry.price if d_entry else exit_price
+                direction = 'long' if (d_entry.type == 0 if d_entry else d_exit.type == 1) else 'short'
+                comment = str(d_exit.comment or '')
+                status = 'take_profit' if '[tp' in comment else 'stopped_out' if '[sl' in comment else ('won' if profit > 0 else 'closed')
+
+                closed_trades.append({
+                    'ticket': pid,
+                    'symbol': d_exit.symbol,
+                    'pair': clean_symbol(d_exit.symbol),
+                    'direction': direction,
+                    'volume': d_exit.volume,
+                    'entry_price': entry_price,
+                    'exit_price': exit_price,
+                    'profit': profit,
+                    'status': status,
+                    'commission': round(d_exit.commission, 2),
+                    'swap': round(d_exit.swap, 2),
+                    'comment': comment,
+                    'opened_at': datetime.fromtimestamp(d_entry.time, timezone.utc).isoformat() if d_entry else None,
+                    'closed_at': datetime.fromtimestamp(d_exit.time, timezone.utc).isoformat()
+                })
+
+        closed_trades.sort(key=lambda x: x.get('closed_at') or '', reverse=True)
+        self._send_json(200, {'success': True, 'trades': closed_trades})
+
+    def _handle_cancel_order(self, data: dict):
+        """
+        Cancels a pending limit or stop order by ticket.
+        """
+        if not MT5_AVAILABLE or not mt5.initialize():
+            self._send_json(503, {'success': False, 'error': 'MT5 terminal unavailable'})
+            return
+
+        ticket = int(data.get('ticket') or 0)
+        if ticket <= 0:
+            self._send_json(400, {'success': False, 'error': 'Valid ticket required'})
+            return
+
+        req = {
+            "action": mt5.TRADE_ACTION_REMOVE,
+            "order": ticket,
+        }
+        res = mt5.order_send(req)
+        if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+            self._send_json(200, {'success': True, 'message': f'Pending order #{ticket} cancelled successfully.'})
+        else:
+            err = res.comment if res else mt5.last_error()
+            self._send_json(400, {'success': False, 'error': f'Failed to cancel order #{ticket}: {err}'})
 
     def _handle_quote(self, query_str: str):
         """

@@ -369,6 +369,105 @@ export class TradesService {
     return data;
   }
 
+  async syncMt5Trades(
+    userId: string,
+    data: {
+      closedTrades?: Array<{
+        ticket: number;
+        symbol: string;
+        pair?: string;
+        direction: 'long' | 'short';
+        volume: number;
+        entry_price: number;
+        exit_price: number;
+        profit: number;
+        status: string;
+        commission?: number;
+        swap?: number;
+        comment?: string;
+        opened_at?: string;
+        closed_at?: string;
+      }>;
+      account?: {
+        balance?: number;
+        equity?: number;
+      };
+    },
+  ) {
+    const closedList = data.closedTrades || [];
+    let synced = 0;
+
+    for (const t of closedList) {
+      if (!t.ticket) continue;
+      const brokerId = `MT5-#${t.ticket}`;
+      let pair = (t.pair || t.symbol || 'EURUSD').toUpperCase();
+      if (pair.endsWith('M') && pair.length > 4) pair = pair.slice(0, -1);
+      
+      const isJpy = pair.includes('JPY');
+      const isGold = pair.includes('XAU') || pair.includes('GOLD');
+      const pipMult = isJpy ? 100 : isGold ? 10 : 10000;
+      const rawDiff = t.direction === 'long' ? (t.exit_price - t.entry_price) : (t.entry_price - t.exit_price);
+      const pips = Number((rawDiff * pipMult).toFixed(1));
+
+      const { data: existing } = await this.supabase
+        .from('trades')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('broker_id', brokerId)
+        .maybeSingle();
+
+      const tradePayload: Record<string, any> = {
+        status: t.status || (t.profit >= 0 ? 'take_profit' : 'stopped_out'),
+        entry_price: t.entry_price,
+        exit_price: t.exit_price,
+        pnl: t.profit,
+        pips,
+        closed_at: t.closed_at || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      if (existing) {
+        await this.supabase
+          .from('trades')
+          .update(tradePayload)
+          .eq('id', existing.id);
+        synced++;
+      } else {
+        const insertPayload = {
+          user_id: userId,
+          pair,
+          type: 'market',
+          direction: t.direction || 'long',
+          lot_size: t.volume || 0.01,
+          stop_loss: 0,
+          take_profit: 0,
+          broker_id: brokerId,
+          opened_at: t.opened_at || new Date().toISOString(),
+          ai_reasoning: `Synced from MetaTrader 5 Terminal (Ticket #${t.ticket})`,
+          ...tradePayload,
+        };
+        const { error: insErr } = await this.supabase
+          .from('trades')
+          .insert(insertPayload);
+        if (!insErr) synced++;
+      }
+    }
+
+    if (data.account && (data.account.balance || data.account.equity)) {
+      await this.supabase
+        .from('portfolios')
+        .update({
+          balance: data.account.balance,
+          equity: data.account.equity,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId)
+        .eq('is_default', true);
+    }
+
+    return { synced, totalReceived: closedList.length };
+  }
+
   async logManualTrade(
     userId: string,
     data: {

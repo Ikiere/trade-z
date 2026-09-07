@@ -118,6 +118,17 @@ export class TradesController {
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
+  @Post('sync-mt5')
+  async syncMt5Trades(
+    @Headers('authorization') auth: string,
+    @Body() body: any,
+  ) {
+    const userId = this.extractUserId(auth);
+    if (!userId) throw new UnauthorizedException('Valid session token required');
+    const data = await this.tradesService.syncMt5Trades(userId, body);
+    return { success: true, data, timestamp: new Date().toISOString() };
+  }
+
   /**
    * POST /trades/log
    * Log a manually closed trade and update portfolio balance.

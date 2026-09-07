@@ -11,6 +11,8 @@ import { useEffect } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
 import { useNotificationStore } from '@/stores/notification-store';
 import { createClient } from '@/lib/supabase';
+import { useMt5Sync } from '@/lib/use-mt5-sync';
+
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { sidebarCollapsed } = useUIStore();
@@ -22,6 +24,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const setLoading = useAuthStore((state) => state.setLoading);
   const logout = useAuthStore((state) => state.logout);
   const addNotification = useNotificationStore((state) => state.addNotification);
+
+  // Background MT5 sync: silently syncs closed trades to Supabase every 5 minutes
+  // This feeds the AI's HistoricalPatternEngine (Layer 12) with live trade data
+  const mt5Sync = useMt5Sync();
+
+  // Log sync events for debugging (visible in browser console)
+  useEffect(() => {
+    if (mt5Sync.lastSyncAt && mt5Sync.syncedCount > 0) {
+      console.log(`[Dashboard] MT5 AI Sync: ${mt5Sync.syncedCount} trades synced at ${mt5Sync.lastSyncAt.toLocaleTimeString()}`);
+    }
+  }, [mt5Sync.lastSyncAt, mt5Sync.syncedCount]);
+
 
   useEffect(() => {
     const supabase = createClient();

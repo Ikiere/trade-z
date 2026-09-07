@@ -22,6 +22,10 @@ export class TradesService {
     );
   }
 
+  private getBridgeUrl(): string {
+    return process.env.MT5_BRIDGE_URL || 'http://127.0.0.1:5001';
+  }
+
   async getOpenTrades(userId: string) {
     const { data, error } = await this.supabase
       .from('trades')
@@ -63,7 +67,7 @@ export class TradesService {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 1200);
-      const mt5Res = await fetch('http://127.0.0.1:5001/account', { signal: controller.signal });
+      const mt5Res = await fetch(`${this.getBridgeUrl()}/account`, { signal: controller.signal });
       clearTimeout(timeoutId);
       if (mt5Res.ok) {
         const mt5Data = (await mt5Res.json()) as any;
@@ -129,7 +133,7 @@ export class TradesService {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3000);
-      const mt5OrderRes = await fetch('http://127.0.0.1:5001/order', {
+      const mt5OrderRes = await fetch(`${this.getBridgeUrl()}/order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

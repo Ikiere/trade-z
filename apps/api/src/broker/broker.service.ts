@@ -74,15 +74,19 @@ export class BrokerService {
     return data;
   }
 
+  private getBridgeUrl(): string {
+    return process.env.MT5_BRIDGE_URL || 'http://127.0.0.1:5001';
+  }
+
   /**
-   * Fetch live MetaTrader 5 account data from local laptop bridge
+   * Fetch live MetaTrader 5 account data from local laptop or VPS bridge
    */
   async getMt5Status(userId: string) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
 
-      const res = await fetch('http://127.0.0.1:5001/account', {
+      const res = await fetch(`${this.getBridgeUrl()}/account`, {
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
@@ -138,7 +142,7 @@ export class BrokerService {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-      const res = await fetch('http://127.0.0.1:5001/order', {
+      const res = await fetch(`${this.getBridgeUrl()}/order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(orderData),
@@ -150,7 +154,7 @@ export class BrokerService {
       return result;
     } catch (e: any) {
       throw new BadRequestException(
-        `Failed to reach local MT5 Bridge: ${e.message}. Ensure start_mt5_bridge.bat is running on your laptop.`,
+        `Failed to reach MT5 Bridge: ${e.message}. Ensure MT5 Bridge is running on your laptop or VPS.`,
       );
     }
   }
@@ -160,7 +164,7 @@ export class BrokerService {
    */
   async getMt5Positions() {
     try {
-      const res = await fetch('http://127.0.0.1:5001/positions');
+      const res = await fetch(`${this.getBridgeUrl()}/positions`);
       return await res.json();
     } catch (e: any) {
       return { success: false, positions: [] };
@@ -172,7 +176,7 @@ export class BrokerService {
    */
   async closeMt5Position(ticket: number) {
     try {
-      const res = await fetch('http://127.0.0.1:5001/close', {
+      const res = await fetch(`${this.getBridgeUrl()}/close`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticket }),

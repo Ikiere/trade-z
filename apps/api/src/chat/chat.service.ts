@@ -16,11 +16,12 @@ export class ChatService {
   }
 
   async sendQuery(prompt: string, context?: any): Promise<string> {
-    // If context is missing positions or positions is empty, fetch live from local MT5 Bridge
+    // If context is missing positions or positions is empty, fetch live from local MT5 Bridge or VPS
+    const bridgeUrl = process.env.MT5_BRIDGE_URL || 'http://127.0.0.1:5001';
     let enrichedContext = context ? { ...context } : {};
     if (!enrichedContext.positions || enrichedContext.positions.length === 0) {
       try {
-        const mt5Res = await fetch('http://127.0.0.1:5001/positions', {
+        const mt5Res = await fetch(`${bridgeUrl}/positions`, {
           signal: AbortSignal.timeout(1500),
         });
         if (mt5Res.ok) {
@@ -45,7 +46,7 @@ export class ChatService {
 
     if (!enrichedContext.history || enrichedContext.history.length === 0) {
       try {
-        const histRes = await fetch('http://127.0.0.1:5001/history?days=30', {
+        const histRes = await fetch(`${bridgeUrl}/history?days=30`, {
           signal: AbortSignal.timeout(4000),
         });
         if (histRes.ok) {

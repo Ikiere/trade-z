@@ -853,11 +853,11 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
 
 
 def run_bridge():
-    server_address = ('127.0.0.1', PORT)
+    server_address = ('0.0.0.0', PORT)
     httpd = ThreadingHTTPServer(server_address, MT5BridgeHandler)
     print(f"=========================================================")
     print(f"  Trade-Z MetaTrader 5 (MT5) Desktop Bridge")
-    print(f"  Listening on: http://127.0.0.1:{PORT}")
+    print(f"  Listening on: http://0.0.0.0:{PORT} (all interfaces)")
     print(f"  MetaTrader5 Python Library: {'LOADED [OK]' if MT5_AVAILABLE else 'MISSING [ERROR]'}")
     print(f"  Keep this window open while auto-trading is active.")
     print(f"=========================================================")

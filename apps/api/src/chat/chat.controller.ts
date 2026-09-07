@@ -24,8 +24,8 @@ export class ChatController {
 
   @Post()
   @HttpCode(HttpStatus.OK)
-  async query(@Body() body: { prompt: string }) {
-    const reply = await this.chatService.sendQuery(body.prompt);
+  async query(@Body() body: { prompt: string; context?: any }) {
+    const reply = await this.chatService.sendQuery(body.prompt, body.context);
     return {
       success: true,
       data: { reply },

@@ -27,19 +27,20 @@ class DecisionEngine(BaseEngine):
         current_price = float(snapshot.df["close"].iloc[-1])
         symbol = snapshot.symbol.upper().replace("/", "")
 
-        # Determine asset-specific decimal precision and fallback ATR
-        if "JPY" in symbol:
-            decimals = 3
+        # Dynamically classify asset and determine precision, pip scale, and ATR parameters
+        from app.services.asset_classifier import classify_asset
+        asset_info = classify_asset(symbol)
+        decimals = asset_info.get("decimals", 5)
+        pip_unit = asset_info.get("pip_size", 0.0001)
+
+        if asset_info.get("is_crypto", False):
+            fallback_atr = max(current_price * 0.02, pip_unit * 10)
+        elif "JPY" in symbol:
             fallback_atr = 0.35
         elif "XAU" in symbol or "GOLD" in symbol:
-            decimals = 2
             fallback_atr = 6.50
-        elif any(crypto in symbol for crypto in ["BTC", "ETH", "SOL"]):
-            decimals = 2
-            fallback_atr = current_price * 0.015
         else:
-            decimals = 5
-            fallback_atr = 0.0018
+            fallback_atr = pip_unit * 20
 
         # Calculate true ATR (Average True Range)
         highs = snapshot.df["high"]
@@ -90,6 +91,27 @@ class DecisionEngine(BaseEngine):
         if min_threshold > 80.0:
             min_threshold = 70.0  # sensible threshold cap for high quality confluences
 
+        # Altcoin Smart Liquidity & Momentum Strategy (ASLM)
+        alt_meta = None
+        if asset_info.get("is_crypto", False):
+            try:
+                from app.services.altcoin_strategy import analyze_altcoin_strategy
+                btc_df = context.get("btc_df")
+                alt_res = analyze_altcoin_strategy(symbol, snapshot.df, btc_df)
+                if alt_res.get("valid"):
+                    alt_meta = alt_res
+                    # Regime filter: Guard against altcoin longs during BTC flash crash
+                    if alt_res.get("btc_regime") == "btc_flash_dump" and direction == "bullish":
+                        failed_layer = ("crypto_regime", "BTC Flash Dump Detected: Altcoin longs suspended until BTC finds structural support.")
+                    elif alt_res.get("setup_found"):
+                        # Boost confidence when altcoin relative strength and liquidity sweeps align
+                        if (alt_res["bias"] == "bullish" and direction == "bullish") or (alt_res["bias"] == "bearish" and direction == "bearish"):
+                            final_confidence = min(96.0, final_confidence + 6.0)
+                        elif alt_res["bias"] in ["bullish", "bearish"] and direction != alt_res["bias"]:
+                            final_confidence = max(40.0, final_confidence - 12.0)
+            except Exception as alt_err:
+                print(f"[decision.py] Altcoin strategy warning: {alt_err}")
+
         # Decision Matrix
         if failed_layer:
             decision = "reject"
@@ -97,7 +119,8 @@ class DecisionEngine(BaseEngine):
         elif final_confidence >= min_threshold:
             decision = "approve"
             action = "BUY" if direction == "bullish" else "SELL"
-            explanation = f"{action} setup approved with {final_confidence:.1f}% confidence confluence."
+            aslm_note = f" [ASLM: {alt_meta['key_catalyst']}]" if (alt_meta and alt_meta.get("setup_found")) else ""
+            explanation = f"{action} setup approved with {final_confidence:.1f}% confidence confluence.{aslm_note}"
         elif final_confidence >= (min_threshold - 15.0):
             decision = "wait"
             explanation = f"WAIT: Setup is promising ({direction.upper()}) but confidence ({final_confidence:.1f}%) is below {min_threshold:.0f}% threshold."
@@ -117,9 +140,7 @@ class DecisionEngine(BaseEngine):
         swing_low = struct_res.metrics.get("swing_low") if struct_res else None
 
         # Precision-engineered Stop Loss and Take Profit levels
-        # Consult AI Cognitive Brain supervisor directive for adaptive safety buffers
         directive = context.get("brain_directive")
-        pip_unit = 0.01 if "JPY" in symbol else (0.1 if ("XAU" in symbol or "GOLD" in symbol) else 0.0001)
         sl_buffer_val = (directive.recommended_sl_buffer_pips * pip_unit) if (directive and directive.recommended_sl_buffer_pips > 0) else 0.0
 
         if direction == "bullish":
@@ -234,6 +255,13 @@ class DecisionEngine(BaseEngine):
             "historical_pattern_summary": results.get("historical_pattern").explanation if results.get("historical_pattern") else "",
             "pattern_memory_verdict": results.get("historical_pattern").metrics.get("verdict", "APPROVED") if results.get("historical_pattern") else "APPROVED",
             "loss_autopsy_count": results.get("historical_pattern").metrics.get("diagnosed_failures", 0) if results.get("historical_pattern") else 0,
+            "asset_classification": {
+                "asset_class": asset_info.get("asset_class", "forex"),
+                "is_crypto": asset_info.get("is_crypto", False),
+                "is_altcoin": asset_info.get("is_altcoin", False),
+                "sub_category": asset_info.get("sub_category", "standard")
+            },
+            "altcoin_strategy": alt_meta,
             "collaboration": collaboration_data,
             "decision": decision.upper(),
             "expected_trigger": expected_trigger,

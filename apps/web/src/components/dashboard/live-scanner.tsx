@@ -2,9 +2,14 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
-import { Scan, TrendingUp, TrendingDown, Loader2, AlertTriangle, Zap, CheckCircle2, ShieldAlert, Sparkles, Brain, Clock, ShieldCheck, Snowflake } from 'lucide-react';
+import { 
+  Scan, TrendingUp, TrendingDown, Loader2, AlertTriangle, Zap, 
+  CheckCircle2, ShieldAlert, Sparkles, Brain, Clock, ShieldCheck, 
+  Snowflake, Plus, X, Search, Coins, Compass 
+} from 'lucide-react';
 import { getApiBaseUrl } from '@/lib/api';
 import { checkTradingSession, SessionShieldStatus } from '@/lib/trading-session';
+import { resolveAssetMeta, normalizePairSymbol, isCryptoAsset, CURATED_ASSETS } from '@/lib/assets-registry';
 
 interface Mt5AccountInfo {
   connected: boolean;
@@ -36,33 +41,26 @@ interface LatestTradeSetup {
     student_adaptation?: string;
     collaborative_rationale?: string;
   };
+  altcoinStrategy?: {
+    btc_regime?: string;
+    relative_strength_score?: number;
+    key_catalyst?: string;
+    setup_type?: string;
+    liquidity_sweep_price?: number;
+    altcoin_confluence_score?: number;
+  };
 }
 
-const getSimulatedPrice = (pair: string) => {
-  const u = pair.toUpperCase();
-  if (u.includes('EURUSD')) return { entry: 1.0845, sl: 1.0830, tp: 1.0880 };
-  if (u.includes('GBPUSD')) return { entry: 1.2680, sl: 1.2665, tp: 1.2720 };
-  if (u.includes('USDJPY')) return { entry: 154.20, sl: 153.95, tp: 154.75 };
-  if (u.includes('XAUUSD') || u.includes('GOLD')) return { entry: 2850.50, sl: 2844.50, tp: 2865.50 };
-  if (u.includes('BTCUSD') || u.includes('BTC')) return { entry: 88500.0, sl: 87500.0, tp: 90500.0 };
-  if (u.includes('ETHUSD') || u.includes('ETH')) return { entry: 2820.0, sl: 2780.0, tp: 2900.0 };
-  if (u.includes('SOLUSD') || u.includes('SOL')) return { entry: 195.50, sl: 191.00, tp: 204.50 };
-  if (u.includes('AUDUSD')) return { entry: 0.6650, sl: 0.6635, tp: 0.6685 };
-  if (u.includes('USDCAD')) return { entry: 1.3620, sl: 1.3605, tp: 1.3655 };
-  return { entry: 1.0000, sl: 0.9980, tp: 1.0050 };
-};
-
 const getSimulatedSetup = (pair: string, direction: 'long' | 'short') => {
-  const base = getSimulatedPrice(pair);
-  const entry = base.entry;
-  const isJpy = pair.toUpperCase().includes('JPY');
-  const isGold = pair.toUpperCase().includes('XAU') || pair.toUpperCase().includes('GOLD');
-  const isCrypto = pair.toUpperCase().includes('BTC') || pair.toUpperCase().includes('ETH') || pair.toUpperCase().includes('SOL');
-  
-  const pips = isJpy ? 0.01 : isGold ? 1.0 : isCrypto ? 10.0 : 0.0001;
-  const decimals = isJpy ? 3 : isGold || isCrypto ? 2 : 5;
+  const meta = resolveAssetMeta(pair);
+  const entry = meta.basePrice;
+  const pips = meta.pipSize;
+  const decimals = meta.decimals;
 
-  const slDist = Math.abs(entry - base.sl) || (pips * 15);
+  // Calibrate stop loss distance dynamically based on asset volatility and price magnitude
+  const slDist = meta.isCrypto 
+    ? Math.max(entry * 0.02, pips * 15)
+    : Math.max(entry * 0.002, pips * 20);
   const tpDist = slDist * 2.5;
 
   if (direction === 'long') {
@@ -70,14 +68,16 @@ const getSimulatedSetup = (pair: string, direction: 'long' | 'short') => {
       entry: Number(entry.toFixed(decimals)),
       sl: Number((entry - slDist).toFixed(decimals)),
       tp: Number((entry + tpDist).toFixed(decimals)),
-      current: Number((entry - (pips * 2)).toFixed(decimals))
+      current: Number((entry - (pips * 2)).toFixed(decimals)),
+      decimals,
     };
   } else {
     return {
       entry: Number(entry.toFixed(decimals)),
       sl: Number((entry + slDist).toFixed(decimals)),
       tp: Number((entry - tpDist).toFixed(decimals)),
-      current: Number((entry + (pips * 2)).toFixed(decimals))
+      current: Number((entry + (pips * 2)).toFixed(decimals)),
+      decimals,
     };
   }
 };
@@ -106,6 +106,60 @@ export default function LiveScannerWidget() {
   // Today's signal count (enforced limit for auto-trading)
   const [todaySignalCount, setTodaySignalCount] = useState(0);
   const [selectedSinglePair, setSelectedSinglePair] = useState('EURUSD');
+
+  // Pair filtering and dynamic altcoin addition
+  const [customPairInput, setCustomPairInput] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState<'all' | 'crypto' | 'forex' | 'commodity'>('all');
+  const [isAddingPair, setIsAddingPair] = useState(false);
+
+  const handleAddPairToWatchlist = async (rawSymbol: string) => {
+    if (!rawSymbol || !rawSymbol.trim()) return;
+    const normalized = normalizePairSymbol(rawSymbol);
+    if (!normalized) return;
+
+    if (watchlist.includes(normalized)) {
+      setSelectedSinglePair(normalized);
+      setCustomPairInput('');
+      return;
+    }
+
+    setIsAddingPair(true);
+    const updated = [...watchlist, normalized];
+    setWatchlist(updated);
+    setSelectedSinglePair(normalized);
+    setCustomPairInput('');
+
+    const meta = resolveAssetMeta(normalized);
+    setLogs(prev => [
+      `[ASSET ADDED 🪙] Added ${normalized} (${meta.name} • ${meta.subCategory.toUpperCase()}) to scanner watchlist.`,
+      `  -> Base: ~$${meta.basePrice.toLocaleString()} | Precision: ${meta.decimals} dec | Trading: ${meta.isCrypto ? '24/7 Global Crypto' : 'Market Session Hours'}`,
+      ...prev
+    ]);
+
+    if (userId) {
+      const supabase = createClient();
+      await supabase.from('user_settings').update({ watchlist: updated }).eq('user_id', userId);
+    }
+    setIsAddingPair(false);
+  };
+
+  const handleRemovePairFromWatchlist = async (pairToRemove: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (watchlist.length <= 1) return;
+    const updated = watchlist.filter(p => p !== pairToRemove);
+    setWatchlist(updated);
+    if (selectedSinglePair === pairToRemove) {
+      setSelectedSinglePair(updated[0]);
+    }
+    setLogs(prev => [
+      `[WATCHLIST] Removed ${pairToRemove} from scanner watchlist.`,
+      ...prev
+    ]);
+    if (userId) {
+      const supabase = createClient();
+      await supabase.from('user_settings').update({ watchlist: updated }).eq('user_id', userId);
+    }
+  };
 
   useEffect(() => {
     if (watchlist.length > 0 && !watchlist.includes(selectedSinglePair)) {
@@ -543,8 +597,8 @@ export default function LiveScannerWidget() {
       let takeProfit = (typeof info.take_profit === 'number' && info.take_profit > 0) ? info.take_profit : priceInfo.tp;
 
       // Directional Invariants
-      const isDecimals2 = pair.toUpperCase().includes('XAU') || pair.toUpperCase().includes('BTC') || pair.toUpperCase().includes('ETH') || pair.toUpperCase().includes('SOL') || pair.toUpperCase().includes('JPY');
-      const numDec = isDecimals2 ? 2 : 5;
+      const assetMeta = resolveAssetMeta(pair);
+      const numDec = assetMeta.decimals;
 
       if (direction === 'long') {
         if (stopLoss >= entryPrice) {
@@ -626,6 +680,7 @@ export default function LiveScannerWidget() {
       setTodaySignalCount(n => n + 1);
 
       const collab = info.collaboration || info.certificate?.collaboration;
+      const altStrategy = info.altcoin_strategy || info.certificate?.altcoin_strategy;
 
       // Save as latest setup
       setLatestSetup({
@@ -642,6 +697,7 @@ export default function LiveScannerWidget() {
         isApproved,
         timestamp: new Date().toLocaleTimeString(),
         collaboration: collab,
+        altcoinStrategy: altStrategy,
       });
 
       if (isApproved) {
@@ -657,6 +713,14 @@ export default function LiveScannerWidget() {
           `  -> ENTRY: ${entryPrice.toFixed(numDec)} (SL: ${stopLoss.toFixed(numDec)}, TP: ${takeProfit.toFixed(numDec)})`,
           `  -> Size: ${safeLot} Lots (MT5 Balance-Calibrated) | Confidence: ${confidence.toFixed(1)}%`,
         ];
+
+        if (altStrategy && (altStrategy.setup_found || altStrategy.relative_strength_score)) {
+          const rs = typeof altStrategy.relative_strength_score === 'number' ? altStrategy.relative_strength_score : 0;
+          successLogs.push(`  -> [ALTCOIN ASLM 🪙] ${altStrategy.key_catalyst || 'Smart Money Accumulation'} (RS Score: ${rs > 0 ? '+' : ''}${rs.toFixed(1)}% vs BTC)`);
+          if (altStrategy.btc_regime) {
+            successLogs.push(`  -> [BTC COMPASS 🧭] Regime: ${altStrategy.btc_regime.replace(/_/g, ' ').toUpperCase()}`);
+          }
+        }
 
         if (collab?.active && collab.teacher_lesson) {
           successLogs.push(`  -> [AI BRAIN ADVISOR 🧠] ${collab.teacher_lesson}`);
@@ -797,71 +861,179 @@ export default function LiveScannerWidget() {
           </div>
         </div>
 
-        {/* Single Pair Selector Tabs */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-mono uppercase text-[#94a3b8] font-bold tracking-wider">
-              Select Pair to Analyze (1 Pair at a Time)
-            </span>
+        {/* Asset Category Filters & Custom Pair Adder */}
+        <div className="space-y-2.5">
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] font-mono uppercase text-[#94a3b8] font-bold tracking-wider mr-1">
+                Asset Filter:
+              </span>
+              {[
+                { id: 'all', label: `All (${watchlist.length})` },
+                { id: 'crypto', label: `🪙 Crypto & Alts (${watchlist.filter(p => isCryptoAsset(p)).length})` },
+                { id: 'forex', label: `💱 Forex (${watchlist.filter(p => !isCryptoAsset(p) && !p.includes('XAU') && !p.includes('XAG') && !p.includes('OIL') && !p.includes('US30') && !p.includes('NAS')).length})` },
+                { id: 'commodity', label: `🏆 Commodities & Indices (${watchlist.filter(p => p.includes('XAU') || p.includes('XAG') || p.includes('OIL') || p.includes('US30') || p.includes('NAS')).length})` },
+              ].map(cat => (
+                <button
+                  key={cat.id}
+                  onClick={() => setCategoryFilter(cat.id as any)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-mono transition-all border ${
+                    categoryFilter === cat.id
+                      ? 'border-brand-500 bg-brand-500/20 text-brand-300 font-bold'
+                      : 'border-[#1e293b] bg-bg-secondary text-[#64748b] hover:text-[#94a3b8]'
+                  }`}
+                >
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+
             <span className="text-[10px] font-mono text-[#64748b]">
-              Selected: <strong className="text-white">{selectedSinglePair}</strong>
+              Selected: <strong className="text-white font-bold">{selectedSinglePair}</strong>
             </span>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            {watchlist.map(pair => {
-              const sInfo = checkTradingSession(pair);
-              const isSelected = selectedSinglePair === pair;
-              const isScanningThis = activePair === pair;
+          {/* Quick Add Custom Altcoin or Forex Pair Input Bar */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 p-2 rounded-xl bg-[#090d16] border border-[#1e293b]">
+            <div className="relative flex-1">
+              <Search className="w-3.5 h-3.5 text-[#64748b] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Type ANY altcoin or pair (e.g. PEPE, SUI, AVAX, TAO, GBPJPY, US30)..."
+                value={customPairInput}
+                onChange={e => setCustomPairInput(e.target.value.toUpperCase())}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddPairToWatchlist(customPairInput);
+                  }
+                }}
+                className="w-full bg-[#060810] border border-[#1e293b] rounded-lg pl-8 pr-3 py-1.5 text-xs font-mono text-white placeholder-[#475569] focus:outline-none focus:border-brand-500 transition-all"
+              />
+            </div>
+            <button
+              onClick={() => handleAddPairToWatchlist(customPairInput)}
+              disabled={!customPairInput.trim() || isAddingPair}
+              className="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-mono font-bold flex items-center justify-center gap-1.5 shadow-md shadow-brand-500/20 transition-all shrink-0"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Add Pair</span>
+            </button>
+          </div>
 
+          {/* Hot Altcoins 1-Click Recommendations */}
+          <div className="flex items-center gap-1.5 flex-wrap text-[10px] font-mono">
+            <span className="text-[#64748b] flex items-center gap-1">
+              <Coins className="w-3 h-3 text-cyan-400" /> Hot Altcoins:
+            </span>
+            {['SOLUSD', 'DOGEUSD', 'SUIUSD', 'PEPEUSD', 'XRPUSD', 'AVAXUSD', 'NEARUSD', 'TAOUSD', 'LINKUSD', 'RENDERUSD'].map(alt => {
+              const isPresent = watchlist.includes(alt);
               return (
                 <button
-                  key={pair}
-                  onClick={() => setSelectedSinglePair(pair)}
-                  className={`px-3 py-1.5 rounded-lg border text-xs font-mono font-semibold flex items-center gap-2 transition-all ${
-                    isSelected
-                      ? 'border-brand-500 bg-brand-500/20 text-brand-300 shadow-md shadow-brand-500/10'
-                      : 'border-[#1e293b] bg-bg-secondary text-[#94a3b8] hover:text-white hover:border-[#334155]'
+                  key={alt}
+                  onClick={() => handleAddPairToWatchlist(alt)}
+                  className={`px-1.5 py-0.5 rounded border text-[9px] font-mono transition-all ${
+                    isPresent
+                      ? 'border-[#1e293b] bg-bg-secondary/40 text-[#64748b] cursor-default'
+                      : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20'
                   }`}
+                  title={isPresent ? 'Already in watchlist' : `Add ${alt} to scanner`}
                 >
-                  {isScanningThis ? (
-                    <Loader2 className="w-3 h-3 animate-spin text-brand-400" />
-                  ) : sInfo.isCrypto ? (
-                    <span className="w-2 h-2 rounded-full bg-cyan-400" title="Crypto 24/7" />
-                  ) : sInfo.isEligible ? (
-                    <span className="w-2 h-2 rounded-full bg-emerald-400" title="Session Active" />
-                  ) : (
-                    <span className="w-2 h-2 rounded-full bg-amber-400/80" title="Outside Session Hours" />
-                  )}
-                  <span>{pair}</span>
-                  {sInfo.isCrypto ? (
-                    <span className="text-[8px] px-1 py-0.2 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">24/7</span>
-                  ) : sInfo.isEligible ? (
-                    <span className="text-[8px] px-1 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Active</span>
-                  ) : (
-                    <span className="text-[8px] px-1 py-0.2 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">Closed</span>
-                  )}
+                  {isPresent ? `✓ ${alt.replace('USD', '')}` : `+ ${alt.replace('USD', '')}`}
                 </button>
               );
             })}
+          </div>
+
+          {/* Active Watchlist Grid with 1-Click Select & Delete */}
+          <div className="flex flex-wrap gap-2 max-h-[160px] overflow-y-auto pr-1">
+            {watchlist
+              .filter(pair => {
+                if (categoryFilter === 'all') return true;
+                const isCrypto = isCryptoAsset(pair);
+                if (categoryFilter === 'crypto') return isCrypto;
+                const isComm = pair.includes('XAU') || pair.includes('XAG') || pair.includes('OIL') || pair.includes('US30') || pair.includes('NAS') || pair.includes('SPX');
+                if (categoryFilter === 'commodity') return isComm;
+                if (categoryFilter === 'forex') return !isCrypto && !isComm;
+                return true;
+              })
+              .map(pair => {
+                const sInfo = checkTradingSession(pair);
+                const isSelected = selectedSinglePair === pair;
+                const isScanningThis = activePair === pair;
+
+                return (
+                  <div
+                    key={pair}
+                    onClick={() => setSelectedSinglePair(pair)}
+                    className={`group px-3 py-1.5 rounded-lg border text-xs font-mono font-semibold flex items-center gap-2 transition-all cursor-pointer select-none ${
+                      isSelected
+                        ? 'border-brand-500 bg-brand-500/20 text-brand-300 shadow-md shadow-brand-500/10'
+                        : 'border-[#1e293b] bg-bg-secondary text-[#94a3b8] hover:text-white hover:border-[#334155]'
+                    }`}
+                  >
+                    {isScanningThis ? (
+                      <Loader2 className="w-3 h-3 animate-spin text-brand-400" />
+                    ) : sInfo.isCrypto ? (
+                      <span className="w-2 h-2 rounded-full bg-cyan-400" title="Crypto 24/7" />
+                    ) : sInfo.isEligible ? (
+                      <span className="w-2 h-2 rounded-full bg-emerald-400" title="Session Active" />
+                    ) : (
+                      <span className="w-2 h-2 rounded-full bg-amber-400/80" title="Outside Session Hours" />
+                    )}
+                    <span>{pair}</span>
+                    {sInfo.isCrypto ? (
+                      <span className="text-[8px] px-1 py-0.2 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">24/7</span>
+                    ) : sInfo.isEligible ? (
+                      <span className="text-[8px] px-1 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Active</span>
+                    ) : (
+                      <span className="text-[8px] px-1 py-0.2 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">Closed</span>
+                    )}
+
+                    {watchlist.length > 1 && (
+                      <button
+                        onClick={(e) => handleRemovePairFromWatchlist(pair, e)}
+                        className="opacity-0 group-hover:opacity-100 text-[#475569] hover:text-red-400 transition-all ml-0.5 -mr-1 p-0.5 rounded hover:bg-red-500/10"
+                        title={`Remove ${pair} from watchlist`}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
           </div>
         </div>
 
         {/* Selected Pair Session & Action Bar */}
         {(() => {
           const currSession = checkTradingSession(selectedSinglePair);
+          const selectedMeta = resolveAssetMeta(selectedSinglePair);
           const isScanningThis = activePair === selectedSinglePair;
 
           return (
             <div className="p-3 rounded-xl bg-[#090d16] border border-[#1e293b] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <div className="space-y-1">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-bold text-white font-mono">{selectedSinglePair}</span>
-                  <span className="text-[10px] font-mono text-[#64748b]">•</span>
-                  <span className="text-[10px] font-mono text-[#94a3b8]">{currSession.sessionName}</span>
+                  <span className="text-[10px] font-mono text-[#475569]">•</span>
+                  <span className="text-[10px] font-mono text-brand-300">{selectedMeta.name}</span>
+                  <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-bg-secondary text-[#94a3b8] border border-[#1e293b]">
+                    {selectedMeta.category.toUpperCase()} • {selectedMeta.subCategory.toUpperCase()}
+                  </span>
                 </div>
-                <div className="text-[10px] font-mono text-[#64748b]">
-                  Hours: <span className="text-[#94a3b8]">{currSession.activeHours}</span> (Current: {currSession.currentUtcTime})
+                <div className="text-[10px] font-mono text-[#64748b] flex items-center gap-2 flex-wrap">
+                  <span>Session: <strong className="text-[#94a3b8]">{currSession.sessionName}</strong></span>
+                  <span>•</span>
+                  <span>Hours: <span className="text-[#94a3b8]">{currSession.activeHours}</span> (UTC: {currSession.currentUtcTime})</span>
+                  {selectedMeta.isCrypto && (
+                    <>
+                      <span>•</span>
+                      <span className="text-cyan-400 font-semibold flex items-center gap-1">
+                        <Sparkles className="w-2.5 h-2.5" /> ASLM Strategy Ready
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -995,6 +1167,45 @@ export default function LiveScannerWidget() {
                   <p className="text-emerald-400 text-[10px] pt-1 border-t border-[#1e293b]/50">
                     ↳ <strong className="text-white">Trading AI Adaptation:</strong> {latestSetup.collaboration.student_adaptation}
                   </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Altcoin Smart Money Strategy (ASLM) Banner */}
+          {latestSetup.altcoinStrategy && (
+            <div className="p-3 rounded-xl bg-cyan-500/5 border border-cyan-500/20 flex items-start gap-2.5 text-[11px] font-mono">
+              <div className="w-5 h-5 rounded-md bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+              </div>
+              <div className="space-y-1 flex-1">
+                <div className="flex items-center justify-between flex-wrap gap-1">
+                  <span className="text-cyan-300 font-bold flex items-center gap-1.5 text-[10px]">
+                    Altcoin Smart Money Strategy (ASLM)
+                    <span className="px-1.5 py-0.2 rounded text-[9px] bg-cyan-500/20 text-cyan-300 uppercase">
+                      {latestSetup.altcoinStrategy.setup_type || 'ACCUMULATION'}
+                    </span>
+                  </span>
+                  <span className="text-[9px] text-[#64748b]">
+                    BTC Compass: <strong className="text-white">{latestSetup.altcoinStrategy.btc_regime?.replace(/_/g, ' ').toUpperCase() || 'RANGING'}</strong>
+                  </span>
+                </div>
+                {latestSetup.altcoinStrategy.key_catalyst && (
+                  <p className="text-[#94a3b8] text-[10px] leading-relaxed">
+                    {latestSetup.altcoinStrategy.key_catalyst}
+                  </p>
+                )}
+                {typeof latestSetup.altcoinStrategy.relative_strength_score === 'number' && (
+                  <div className="flex items-center gap-3 pt-1 border-t border-[#1e293b]/50 text-[10px]">
+                    <span className={latestSetup.altcoinStrategy.relative_strength_score >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                      Relative Strength: <strong>{latestSetup.altcoinStrategy.relative_strength_score > 0 ? '+' : ''}{latestSetup.altcoinStrategy.relative_strength_score.toFixed(1)}% vs BTC</strong>
+                    </span>
+                    {latestSetup.altcoinStrategy.liquidity_sweep_price && (
+                      <span className="text-[#94a3b8]">
+                        SFP Sweep Level: <strong className="text-white">{latestSetup.altcoinStrategy.liquidity_sweep_price}</strong>
+                      </span>
+                    )}
+                  </div>
                 )}
               </div>
             </div>

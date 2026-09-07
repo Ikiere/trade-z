@@ -162,37 +162,25 @@ def generate_simulated_candles(pair: str, timeframe: str) -> pd.DataFrame:
     seed = abs(hash(seed_str)) % 1000000
     np.random.seed(seed)
 
-    # Base price scales
-    u = pair.upper()
-    base_price = 1.0800
-    noise_mult = 0.0003
-    pips_scale = 0.0001
-    
-    if "GBP" in u:
-        base_price = 1.2600
-        noise_mult = 0.0004
-    elif "JPY" in u:
-        base_price = 154.00
-        noise_mult = 0.15
-        pips_scale = 0.01
-    elif "XAU" in u or "GOLD" in u:
-        base_price = 2860.00
-        noise_mult = 2.5
-        pips_scale = 0.1
-    elif "BTC" in u:
-        base_price = 88000.00
-        noise_mult = 120.0
-        pips_scale = 1.0
-    elif "ETH" in u:
-        base_price = 2800.00
-        noise_mult = 8.0
-        pips_scale = 0.1
-    elif "AUD" in u or "NZD" in u:
-        base_price = 0.6600
+    # Dynamically resolve asset class, base price, and volatility scale
+    try:
+        from app.services.asset_classifier import classify_asset
+        asset_info = classify_asset(pair)
+        base_price = float(asset_info.get("base_price", 1.0))
+        pips_scale = float(asset_info.get("pip_size", 0.0001))
+        if asset_info.get("is_crypto", False):
+            noise_mult = max(base_price * 0.0025, pips_scale * 2.0)
+        elif "JPY" in pair.upper():
+            noise_mult = 0.15
+        elif "XAU" in pair.upper() or "GOLD" in pair.upper():
+            noise_mult = 2.5
+        else:
+            noise_mult = max(base_price * 0.00035, pips_scale * 1.5)
+    except Exception:
+        u = pair.upper()
+        base_price = 1.0800
         noise_mult = 0.0003
-    elif "CAD" in u or "CHF" in u:
-        base_price = 1.3600
-        noise_mult = 0.0003
+        pips_scale = 0.0001
 
     # Trend direction: 60% chance of a clear trend structure (either up or down)
     trend_val = hash(pair + "_trend") % 3

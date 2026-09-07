@@ -26,22 +26,36 @@ class RiskEngine(BaseEngine):
         account_equity = context.get("account_equity")
         equity = float(account_equity or account_balance or 0.0)
 
-        symbol = snapshot.symbol.upper().replace("/", "")
-        is_gold = "XAU" in symbol or "GOLD" in symbol
-        is_crypto = any(c in symbol for c in ["BTC", "ETH", "SOL"])
+        from app.services.asset_classifier import classify_asset
+        asset_info = classify_asset(snapshot.symbol)
+        symbol = asset_info["symbol"]
+        is_gold = asset_info["category"] == "commodity" and "metal" in asset_info.get("sub_category", "")
+        is_crypto = asset_info["is_crypto"]
         is_jpy = "JPY" in symbol
+        current_close = float(snapshot.df["close"].iloc[-1]) if len(snapshot.df) > 0 else asset_info["base_price"]
 
         # Asset-specific estimated SL distance (points)
         if is_gold:
             sl_points = 6.50
             loss_at_001 = sl_points * 1.0  # 1 pip/point in gold = $1.00 at 0.01 lot
         elif is_crypto:
-            current_close = float(snapshot.df["close"].iloc[-1]) if len(snapshot.df) > 0 else 50000.0
-            sl_points = current_close * 0.015
-            loss_at_001 = sl_points * 0.01
+            # Dynamic ATR scaling for BTC and all Altcoins
+            atr_pct = asset_info.get("typical_atr_pct", 0.035)
+            sl_points = current_close * atr_pct
+            # Dollar loss on standard broker micro-lot (0.01 lot):
+            # For BTC: 0.01 lot * $2000 move = $20. For micro-priced altcoins: proportional
+            if current_close > 1000:
+                loss_at_001 = max(1.0, sl_points * 0.01)
+            elif current_close > 10:
+                loss_at_001 = max(0.80, (sl_points / current_close) * 15.0)
+            else:
+                loss_at_001 = max(0.50, (sl_points / (current_close or 1.0)) * 10.0)
         elif is_jpy:
             sl_points = 0.35  # ~35 pips
             loss_at_001 = (sl_points / 0.01) * 0.07  # ~$2.45 at 0.01 lot
+        elif asset_info["category"] == "index":
+            sl_points = current_close * 0.008
+            loss_at_001 = max(1.50, sl_points * 0.01)
         else:
             sl_points = 0.0020  # 20 pips
             loss_at_001 = 2.00  # ~$2.00 at 0.01 lot

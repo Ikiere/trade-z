@@ -43,16 +43,18 @@ class EligibilityEngine(BaseEngine):
                 validation_status="limit_breached"
             )
 
-        sym = snapshot.symbol.upper().replace("/", "").replace(" ", "")
-        is_crypto = any(c in sym for c in ["BTC", "ETH", "SOL", "CRYPTO"])
+        from app.services.asset_classifier import classify_asset
+        asset_info = classify_asset(snapshot.symbol)
+        sym = asset_info["symbol"]
+        is_crypto = asset_info["is_crypto"]
 
-        # 1. Crypto Pairs: 24/7 Always Open
-        if is_crypto:
+        # 1. Crypto & Altcoin Pairs: 24/7 Always Open
+        if is_crypto or asset_info.get("is_24_7"):
             return EngineResult(
                 result="ELIGIBLE",
                 confidence=100.0,
-                explanation=f"Eligibility Passed: {sym} operates on 24/7 perpetual decentralized session. Market open.",
-                metrics={"today_signals": today_signals, "daily_limit": daily_limit, "session": "crypto_24_7"},
+                explanation=f"Eligibility Passed: {sym} operates on a 24/7 perpetual decentralized session. Market open.",
+                metrics={"today_signals": today_signals, "daily_limit": daily_limit, "session": "crypto_24_7", "category": asset_info["category"]},
                 validation_status="valid"
             )
 

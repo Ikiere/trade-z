@@ -16,6 +16,8 @@ export interface SessionShieldStatus {
   message: string;
 }
 
+import { isCryptoAsset, normalizePairSymbol } from '@/lib/assets-registry';
+
 export function checkTradingSession(pair: string, customDate?: Date): SessionShieldStatus {
   const date = customDate || new Date();
   const utcDay = date.getUTCDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
@@ -24,14 +26,10 @@ export function checkTradingSession(pair: string, customDate?: Date): SessionShi
   const currentMinutes = utcHours * 60 + utcMinutes;
   const timeStr = `${String(utcHours).padStart(2, '0')}:${String(utcMinutes).padStart(2, '0')} UTC`;
 
-  const upper = pair.toUpperCase().replace('/', '').replace(' ', '');
+  const upper = normalizePairSymbol(pair);
 
-  // 1. Crypto Pairs: 24/7 Perpetual Session
-  const isCrypto =
-    upper.includes('BTC') ||
-    upper.includes('ETH') ||
-    upper.includes('SOL') ||
-    upper.includes('CRYPTO');
+  // 1. Crypto & Altcoin Pairs: 24/7 Perpetual Session
+  const isCrypto = isCryptoAsset(upper);
 
   if (isCrypto) {
     return {
@@ -41,7 +39,7 @@ export function checkTradingSession(pair: string, customDate?: Date): SessionShi
       sessionName: 'Crypto 24/7 Institutional Session',
       activeHours: 'Always Open (24/7)',
       nextOpenUtc: 'Active Now',
-      message: `${pair} operates on a 24/7 institutional decentralized session. Liquidity verified.`,
+      message: `${upper} operates on a 24/7 institutional decentralized session. Liquidity verified.`,
     };
   }
 

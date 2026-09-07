@@ -9,12 +9,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getApiBaseUrl } from '@/lib/api';
-
-const SUPPORTED_PAIRS = [
-  'EURUSD','GBPUSD','USDJPY','XAUUSD','AUDUSD',
-  'USDCAD','EURGBP','GBPJPY','USDCHF','NZDUSD',
-  'BTCUSD','ETHUSD','SOLUSD',
-];
+import { CURATED_ASSETS, CATEGORIZED_ASSETS, SUPPORTED_PAIRS, normalizePairSymbol, isCryptoAsset, AssetDefinition } from '@/lib/assets-registry';
 
 // ─── small reusable section card ───────────────────────────────────────────
 function Section({ icon: Icon, title, children }: {
@@ -66,7 +61,8 @@ export default function SettingsPage() {
 
   // ── Watchlist ────────────────────────────────────────────
   const [watchlist, setWatchlist] = useState<string[]>([]);
-  const [newPair, setNewPair] = useState('EURUSD');
+  const [newPair, setNewPair] = useState('BTCUSD');
+  const [customPairText, setCustomPairText] = useState('');
   const [savingWatch, setSavingWatch] = useState(false);
   const [msgWatch, setMsgWatch] = useState('');
 
@@ -279,9 +275,17 @@ export default function SettingsPage() {
     finally { setSavingWatch(false); setTimeout(() => setMsgWatch(''), 3000); }
   };
 
-  const handleAddPair = () => {
-    if (watchlist.includes(newPair)) { setMsgWatch(`${newPair} already in watchlist.`); return; }
-    saveWatchlist([...watchlist, newPair]);
+  const handleAddPair = (pairToAdd?: string) => {
+    const raw = pairToAdd || customPairText || newPair;
+    if (!raw || !raw.trim()) return;
+    const normalized = normalizePairSymbol(raw);
+    if (!normalized) return;
+    if (watchlist.includes(normalized)) {
+      setMsgWatch(`${normalized} already in watchlist.`);
+      return;
+    }
+    saveWatchlist([...watchlist, normalized]);
+    setCustomPairText('');
   };
 
   const handleRemovePair = (pair: string) => {
@@ -453,18 +457,109 @@ export default function SettingsPage() {
             ))}
           </div>
 
-          {/* Add pair row */}
-          <div className="flex gap-2">
-            <select value={newPair} onChange={e => setNewPair(e.target.value)}
-              className="input text-xs font-mono select-dark flex-1">
-              {SUPPORTED_PAIRS.filter(p => !watchlist.includes(p)).map(p => (
-                <option key={p} value={p}>{p}</option>
+          {/* Quick type ANY altcoin or pair */}
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Type ANY altcoin (e.g. PEPE, SUI, AVAX, BERA)..."
+                value={customPairText}
+                onChange={e => setCustomPairText(e.target.value.toUpperCase())}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddPair();
+                  }
+                }}
+                className="input text-xs font-mono flex-1 placeholder-[#475569]"
+              />
+              <button
+                type="button"
+                onClick={() => handleAddPair()}
+                disabled={savingWatch || !customPairText.trim()}
+                className="btn btn-primary px-3 text-xs flex items-center gap-1 shrink-0 disabled:opacity-40"
+              >
+                {savingWatch ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><Plus className="w-4 h-4" /> Add Custom</>}
+              </button>
+            </div>
+
+            {/* Curated Catalog Select */}
+            <div className="flex gap-2">
+              <select
+                value={newPair}
+                onChange={e => setNewPair(e.target.value)}
+                className="input text-xs font-mono select-dark flex-1"
+              >
+                <optgroup label="🪙 Crypto — Layer 1 & 2">
+                  {CATEGORIZED_ASSETS.crypto_l1_l2.filter((p: AssetDefinition) => !watchlist.includes(p.symbol)).map((p: AssetDefinition) => (
+                    <option key={p.symbol} value={p.symbol}>{p.symbol} — {p.name}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="🤖 Crypto — AI & DePIN">
+                  {CATEGORIZED_ASSETS.crypto_ai_depin.filter((p: AssetDefinition) => !watchlist.includes(p.symbol)).map((p: AssetDefinition) => (
+                    <option key={p.symbol} value={p.symbol}>{p.symbol} — {p.name}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="🏦 Crypto — DeFi">
+                  {CATEGORIZED_ASSETS.crypto_defi.filter((p: AssetDefinition) => !watchlist.includes(p.symbol)).map((p: AssetDefinition) => (
+                    <option key={p.symbol} value={p.symbol}>{p.symbol} — {p.name}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="🐕 Crypto — Memecoins">
+                  {CATEGORIZED_ASSETS.crypto_memes.filter((p: AssetDefinition) => !watchlist.includes(p.symbol)).map((p: AssetDefinition) => (
+                    <option key={p.symbol} value={p.symbol}>{p.symbol} — {p.name}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="💱 Major Forex">
+                  {CATEGORIZED_ASSETS.forex_majors.filter((p: AssetDefinition) => !watchlist.includes(p.symbol)).map((p: AssetDefinition) => (
+                    <option key={p.symbol} value={p.symbol}>{p.symbol} — {p.name}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="💱 Minor & Cross Forex">
+                  {CATEGORIZED_ASSETS.forex_crosses.filter((p: AssetDefinition) => !watchlist.includes(p.symbol)).map((p: AssetDefinition) => (
+                    <option key={p.symbol} value={p.symbol}>{p.symbol} — {p.name}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="🏆 Commodities & Metals">
+                  {CATEGORIZED_ASSETS.commodities.filter((p: AssetDefinition) => !watchlist.includes(p.symbol)).map((p: AssetDefinition) => (
+                    <option key={p.symbol} value={p.symbol}>{p.symbol} — {p.name}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="📈 Major Indices">
+                  {CATEGORIZED_ASSETS.indices.filter((p: AssetDefinition) => !watchlist.includes(p.symbol)).map((p: AssetDefinition) => (
+                    <option key={p.symbol} value={p.symbol}>{p.symbol} — {p.name}</option>
+                  ))}
+                </optgroup>
+              </select>
+              <button
+                type="button"
+                onClick={() => handleAddPair(newPair)}
+                disabled={savingWatch}
+                className="btn bg-bg-secondary hover:bg-[#1e293b] border border-[#1e293b] text-white px-3 text-xs flex items-center gap-1 shrink-0"
+              >
+                {savingWatch ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><Plus className="w-4 h-4" /> Add Selected</>}
+              </button>
+            </div>
+
+            {/* Quick-add recommendations */}
+            <div className="flex items-center gap-1 flex-wrap pt-1 text-[9px] font-mono">
+              <span className="text-[#64748b]">Quick:</span>
+              {['SOLUSD', 'DOGEUSD', 'SUIUSD', 'PEPEUSD', 'TAOUSD', 'XRPUSD', 'AVAXUSD'].map(p => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => handleAddPair(p)}
+                  className={`px-1.5 py-0.5 rounded border transition-all ${
+                    watchlist.includes(p)
+                      ? 'border-[#1e293b] text-[#475569] cursor-default'
+                      : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20'
+                  }`}
+                  disabled={watchlist.includes(p)}
+                >
+                  {watchlist.includes(p) ? `✓ ${p.replace('USD', '')}` : `+ ${p.replace('USD', '')}`}
+                </button>
               ))}
-            </select>
-            <button onClick={handleAddPair} disabled={savingWatch}
-              className="btn btn-primary px-3 text-xs flex items-center gap-1">
-              {savingWatch ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><Plus className="w-4 h-4" /> Watch</>}
-            </button>
+            </div>
           </div>
           <SaveMsg msg={msgWatch} />
         </Section>
@@ -501,7 +596,7 @@ export default function SettingsPage() {
               <div>
                 <label className="block text-[#94a3b8] mb-1.5 uppercase text-[10px]">Pair</label>
                 <select value={logPair} onChange={e => setLogPair(e.target.value)} className="input text-xs select-dark">
-                  {(watchlist.length > 0 ? watchlist : SUPPORTED_PAIRS).map(p => (
+                  {(watchlist.length > 0 ? watchlist : SUPPORTED_PAIRS).map((p: string) => (
                     <option key={p} value={p}>{p}</option>
                   ))}
                 </select>

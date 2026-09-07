@@ -274,14 +274,42 @@ export default function LiveScannerWidget() {
         ]);
         
         if (tradingMode === 'fully_automatic') {
-          setLogs(prev => [`[AUTO TRADE] Placing position for ${pair} (${direction})...`, ...prev]);
+          setLogs(prev => [`[AUTO TRADE ⚡] Placing instant order for ${pair} (${direction.toUpperCase()})...`, ...prev]);
           const tradeRes = await fetch(`${apiBase}/api/v1/trades`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
             body: JSON.stringify({ pair, direction, entryPrice, stopLoss, takeProfit, riskPercent: 1.0 }),
           });
-          const msg = tradeRes.ok ? `Position placed for ${pair}!` : `Auto-trade failed: ${tradeRes.statusText}`;
-          setLogs(prev => [`[AUTO TRADE] ${msg}`, ...prev]);
+          const tradeJson = await tradeRes.json().catch(() => ({}));
+
+          if (tradeRes.ok) {
+            const ticket = tradeJson.data?.mt5_ticket || tradeJson.mt5_ticket;
+            const executedLot = tradeJson.data?.lot_size || defaultLot;
+            if (ticket) {
+              setLogs(prev => [
+                `[MT5 EXECUTED 🚀] Placed ${direction.toUpperCase()} ${executedLot} lots on MetaTrader 5 (Ticket #${ticket})!`,
+                ...prev,
+              ]);
+            } else {
+              setLogs(prev => [
+                `[AUTO TRADE ✅] Position recorded (${executedLot} lots). Note: Start start_mt5_bridge.bat to auto-execute directly on your MT5 terminal.`,
+                ...prev,
+              ]);
+            }
+          } else {
+            const errDetail = tradeJson.message || tradeRes.statusText || 'Execution failed';
+            if (errDetail.includes('Capital Protection') || errDetail.includes('Protection Veto')) {
+              setLogs(prev => [
+                `[CAPITAL SAFETY 🛡️] ${errDetail}`,
+                ...prev,
+              ]);
+            } else {
+              setLogs(prev => [
+                `[AUTO TRADE ⚠️] Execution failed: ${errDetail}`,
+                ...prev,
+              ]);
+            }
+          }
         }
       } else {
         const isMemoryVeto = reasoning.includes('AI MEMORY') || reasoning.includes('AI Memory') || reasoning.includes('Pattern memory') || reasoning.includes('stopped-out');

@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase';
 import {
   User, Shield, Key, Loader2, Plus, Trash2,
   FileSpreadsheet, Wallet, BellRing, ListChecks,
-  CheckCircle2, AlertTriangle,
+  CheckCircle2, AlertTriangle, Laptop, Terminal, RefreshCw, Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getApiBaseUrl } from '@/lib/api';
@@ -86,6 +86,60 @@ export default function SettingsPage() {
   const [savingKeys, setSavingKeys] = useState(false);
   const [msgKeys, setMsgKeys] = useState('');
 
+  // ── MetaTrader 5 (MT5) Desktop Bridge ──────────────────
+  const [mt5Status, setMt5Status] = useState<{
+    loading: boolean;
+    connected: boolean;
+    account?: any;
+    error?: string;
+  }>({ loading: false, connected: false });
+
+  const checkMt5Connection = useCallback(async () => {
+    setMt5Status(prev => ({ ...prev, loading: true }));
+    try {
+      // 1. First probe local laptop bridge directly
+      const directRes = await fetch('http://127.0.0.1:5001/account').catch(() => null);
+      if (directRes && directRes.ok) {
+        const directData = await directRes.json();
+        setMt5Status({
+          loading: false,
+          connected: Boolean(directData.connected),
+          account: directData.account,
+          error: directData.error,
+        });
+        if (directData.account?.balance) {
+          setNewBalance(Number(directData.account.balance).toFixed(2));
+        }
+        return;
+      }
+
+      // 2. Fall back to querying via backend API
+      const apiBase = getApiBaseUrl();
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      const apiRes = await fetch(`${apiBase}/api/v1/broker/mt5/account`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const apiData = await apiRes.json();
+      setMt5Status({
+        loading: false,
+        connected: Boolean(apiData?.data?.connected),
+        account: apiData?.data?.account,
+        error: apiData?.data?.error || 'Local MT5 bridge offline',
+      });
+      if (apiData?.data?.account?.balance) {
+        setNewBalance(Number(apiData.data.account.balance).toFixed(2));
+      }
+    } catch (e: any) {
+      setMt5Status({
+        loading: false,
+        connected: false,
+        error: 'Cannot reach local MT5 Bridge on http://127.0.0.1:5001. Start apps/mt5-bridge/start_mt5_bridge.bat.',
+      });
+    }
+  }, []);
+
   const handleSaveKeys = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userId) return;
@@ -163,7 +217,10 @@ export default function SettingsPage() {
     }
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    loadData();
+    checkMt5Connection();
+  }, [loadData, checkMt5Connection]);
 
   // ── Profile save ─────────────────────────────────────────
   const handleSaveProfile = async (e: React.FormEvent) => {
@@ -463,28 +520,90 @@ export default function SettingsPage() {
           </form>
         </Section>
 
-        {/* API Keys / Broker */}
-        <Section icon={Key} title="Broker API Integrations">
-          <p className="text-[10px] text-[#64748b] font-mono -mt-1">
-            Connect external broker or data provider APIs for live execution.
-          </p>
-          <form className="space-y-4 text-xs" onSubmit={e => e.preventDefault()}>
-            <div className="p-3 bg-[#060810] border border-[#1e293b] rounded-lg text-[10px] font-mono text-[#94a3b8] leading-relaxed">
-              ⚡ TwelveData Spot Market feeds are now managed directly via the server environment key (<code className="text-[#3b82f6]">AI_MARKET_DATA_API_KEY</code>). 
-              No client-side synchronization is required.
+        {/* MetaTrader 5 (MT5) Desktop Bridge */}
+        <Section icon={Laptop} title="MetaTrader 5 (MT5) Desktop Bridge">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] text-[#64748b] font-mono">
+              Auto-execute AI scanner signals directly on your local MetaTrader 5 terminal.
+            </p>
+            <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold flex items-center gap-1.5 border ${
+              mt5Status.connected
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                : 'bg-slate-500/10 border-slate-500/30 text-slate-400'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${mt5Status.connected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+              {mt5Status.connected ? 'TERMINAL CONNECTED' : 'TERMINAL OFFLINE'}
+            </span>
+          </div>
+
+          {mt5Status.connected && mt5Status.account ? (
+            <div className="space-y-3">
+              {/* Account Stats Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono text-center">
+                <div className="p-3 bg-[#060810] border border-[#1e293b] rounded-xl">
+                  <span className="text-[9px] text-[#64748b] block mb-0.5">MT5 ACCOUNT</span>
+                  <span className="text-white font-bold text-xs">{mt5Status.account.login}</span>
+                  <span className="text-[9px] text-[#475569] block truncate mt-0.5">{mt5Status.account.server}</span>
+                </div>
+                <div className="p-3 bg-[#060810] border border-emerald-500/20 rounded-xl">
+                  <span className="text-[9px] text-emerald-400 block mb-0.5">BALANCE</span>
+                  <span className="text-white font-bold text-xs">${Number(mt5Status.account.balance).toFixed(2)}</span>
+                  <span className="text-[9px] text-[#475569] block mt-0.5">{mt5Status.account.currency || 'USD'}</span>
+                </div>
+                <div className="p-3 bg-[#060810] border border-brand-500/20 rounded-xl">
+                  <span className="text-[9px] text-brand-400 block mb-0.5">EQUITY</span>
+                  <span className="text-white font-bold text-xs">${Number(mt5Status.account.equity).toFixed(2)}</span>
+                  <span className={`text-[9px] block mt-0.5 ${mt5Status.account.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {mt5Status.account.profit >= 0 ? `+$${mt5Status.account.profit}` : `-$${Math.abs(mt5Status.account.profit)}`}
+                  </span>
+                </div>
+                <div className="p-3 bg-[#060810] border border-[#1e293b] rounded-xl">
+                  <span className="text-[9px] text-[#64748b] block mb-0.5">FREE MARGIN</span>
+                  <span className="text-white font-bold text-xs">${Number(mt5Status.account.free_margin).toFixed(2)}</span>
+                  <span className="text-[9px] text-[#475569] block mt-0.5">Lev 1:{mt5Status.account.leverage}</span>
+                </div>
+              </div>
+
+              <div className="p-2.5 bg-emerald-500/5 border border-emerald-500/20 rounded-lg text-[10px] font-mono text-emerald-300 flex items-center justify-between">
+                <span>⚡ Auto-Execution Active: Scanner signals will be sent directly to your MT5 terminal.</span>
+                <span className="text-[9px] bg-emerald-500/10 px-2 py-0.5 rounded text-emerald-400 font-bold">
+                  {mt5Status.account.open_positions_count || 0} Open Positions
+                </span>
+              </div>
             </div>
-            <div>
-              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">MetaTrader Server</label>
-              <input type="text" placeholder="MetaQuotes-Demo" className="input text-xs" />
+          ) : (
+            <div className="space-y-3">
+              <div className="p-3.5 bg-[#060810] border border-[#1e293b] rounded-xl text-xs space-y-2 font-mono">
+                <div className="flex items-center gap-2 text-white font-bold text-xs">
+                  <Terminal className="w-4 h-4 text-brand-400" />
+                  How to Connect Local MetaTrader 5:
+                </div>
+                <ol className="list-decimal list-inside text-[11px] text-[#94a3b8] space-y-1 pl-1">
+                  <li>Open your <strong>MetaTrader 5</strong> desktop terminal application on this laptop.</li>
+                  <li>Click the <strong>"Algo Trading"</strong> button in MT5's top toolbar to enable automated trades (ensure icon is green).</li>
+                  <li>Double-click <code className="text-brand-400 bg-bg-secondary px-1 py-0.5 rounded">apps/mt5-bridge/start_mt5_bridge.bat</code> to run the local bridge.</li>
+                </ol>
+              </div>
+
+              {mt5Status.error && (
+                <div className="p-2.5 bg-amber-500/5 border border-amber-500/20 rounded-lg text-[10px] font-mono text-amber-300 flex items-center gap-2">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                  <span>{mt5Status.error}</span>
+                </div>
+              )}
             </div>
-            <div>
-              <label className="block text-[#94a3b8] mb-1.5 font-mono uppercase text-[10px]">OpenRouter AI Key</label>
-              <input type="password" placeholder="sk-or-..." className="input text-xs" />
-              <p className="text-[9px] text-[#475569] font-mono mt-1">Used for AI signal generation. Stored server-side only.</p>
-            </div>
-            
-            <button className="btn btn-primary w-full text-xs">Sync Connections</button>
-          </form>
+          )}
+
+          <div className="flex items-center gap-2 pt-2">
+            <button
+              onClick={checkMt5Connection}
+              disabled={mt5Status.loading}
+              className="btn btn-primary flex items-center justify-center gap-1.5 w-full text-xs font-mono"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${mt5Status.loading ? 'animate-spin' : ''}`} />
+              {mt5Status.loading ? 'Testing MT5 Connection...' : 'Test & Sync MT5 Connection'}
+            </button>
+          </div>
         </Section>
       </div>
     </div>

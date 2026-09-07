@@ -75,6 +75,115 @@ export class BrokerService {
   }
 
   /**
+   * Fetch live MetaTrader 5 account data from local laptop bridge
+   */
+  async getMt5Status(userId: string) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+      const res = await fetch('http://127.0.0.1:5001/account', {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        return { connected: false, error: 'MT5 Bridge returned HTTP error' };
+      }
+
+      const json = (await res.json()) as any;
+      if (json.connected && json.account) {
+        // Sync real MT5 balance & equity into Supabase portfolio
+        await this.supabase
+          .from('portfolios')
+          .update({
+            balance: json.account.balance,
+            equity: json.account.equity,
+            free_margin: json.account.free_margin,
+            margin_level: json.account.margin_level,
+            currency: json.account.currency || 'USD',
+          })
+          .eq('user_id', userId)
+          .eq('is_default', true);
+
+        // Also update broker_connections
+        await this.supabase
+          .from('broker_connections')
+          .upsert({
+            user_id: userId,
+            broker_name: json.account.server || 'MetaTrader 5',
+            account_number: String(json.account.login),
+            account_type: 'live',
+            leverage: json.account.leverage || 100,
+            status: 'connected',
+            updated_at: new Date().toISOString(),
+          });
+      }
+
+      return json;
+    } catch (e: any) {
+      return {
+        connected: false,
+        status: 'offline',
+        error: 'Local MT5 Bridge is not running. Launch start_mt5_bridge.bat on your laptop.',
+      };
+    }
+  }
+
+  /**
+   * Execute real trade order directly on MetaTrader 5
+   */
+  async executeMt5Order(userId: string, orderData: any) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+      const res = await fetch('http://127.0.0.1:5001/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(orderData),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      const result = await res.json();
+      return result;
+    } catch (e: any) {
+      throw new BadRequestException(
+        `Failed to reach local MT5 Bridge: ${e.message}. Ensure start_mt5_bridge.bat is running on your laptop.`,
+      );
+    }
+  }
+
+  /**
+   * Get active positions from MetaTrader 5
+   */
+  async getMt5Positions() {
+    try {
+      const res = await fetch('http://127.0.0.1:5001/positions');
+      return await res.json();
+    } catch (e: any) {
+      return { success: false, positions: [] };
+    }
+  }
+
+  /**
+   * Close open position on MetaTrader 5
+   */
+  async closeMt5Position(ticket: number) {
+    try {
+      const res = await fetch('http://127.0.0.1:5001/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket }),
+      });
+      return await res.json();
+    } catch (e: any) {
+      throw new BadRequestException(`Failed to contact local MT5 Bridge: ${e.message}`);
+    }
+  }
+
+  /**
    * Run automated stop-out check (liquidation check) on active positions.
    * If margin level drops below 50%, close positions.
    */

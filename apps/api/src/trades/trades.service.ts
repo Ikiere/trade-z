@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { RiskService } from './risk.service';
@@ -55,32 +55,104 @@ export class TradesService {
       riskPercent: number;
     },
   ) {
-    // 1. Fetch user settings for limits
-    // In a live system, we would query the `user_settings` and `portfolios` tables in Supabase.
-    // For Phase 1C, we fetch placeholders or query Supabase with fallbacks.
-    const balance = 100000; // default test balance
-    const stopLossDistancePips = Math.abs(tradeData.entryPrice - tradeData.stopLoss) * 10000;
+    // 1. Fetch user real portfolio / MT5 balance
+    let balance = 10000;
+    let equity = 10000;
 
-    // 2. Run risk checks
+    // Try fetching live MT5 bridge balance first
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1200);
+      const mt5Res = await fetch('http://127.0.0.1:5001/account', { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (mt5Res.ok) {
+        const mt5Data = (await mt5Res.json()) as any;
+        if (mt5Data.connected && mt5Data.account?.equity > 0) {
+          balance = Number(mt5Data.account.balance);
+          equity = Number(mt5Data.account.equity);
+        }
+      }
+    } catch (_) {
+      // Fall back to Supabase portfolio
+      const { data: port } = await this.supabase
+        .from('portfolios')
+        .select('balance, equity')
+        .eq('user_id', userId)
+        .eq('is_default', true)
+        .maybeSingle();
+
+      if (port?.balance) {
+        balance = Number(port.balance);
+        equity = Number(port.equity || port.balance);
+      }
+    }
+
+    // 2. Asset-specific pip calculation
+    const sym = tradeData.pair.toUpperCase();
+    const pipMult = sym.includes('JPY') ? 100 : sym.includes('XAU') || sym.includes('GOLD') ? 10 : sym.includes('BTC') || sym.includes('ETH') ? 1 : 10000;
+    const stopLossDistancePips = Math.abs(tradeData.entryPrice - tradeData.stopLoss) * pipMult;
+
+    // 3. Smart Account Capital Protection
+    // Protect small accounts from wide stop-loss liquidations
+    const approxDollarLossFor001 = stopLossDistancePips * (sym.includes('JPY') ? 0.065 : sym.includes('XAU') ? 1.0 : sym.includes('BTC') ? 0.01 : 0.10);
+    const maxAllowedDollarRisk = equity * ((tradeData.riskPercent || 1.0) * 2.5 / 100.0);
+
+    if (equity < 600 && approxDollarLossFor001 > maxAllowedDollarRisk) {
+      throw new BadRequestException(
+        `Capital Protection Veto: Setup on ${tradeData.pair} has a wide stop loss risking ~$${approxDollarLossFor001.toFixed(2)} at minimum 0.01 lot. This would exceed the safe risk limit for your $${equity.toFixed(2)} equity. Trade blocked to avoid burning account capital.`,
+      );
+    }
+
+    // 4. Run standard risk validation checks
     await this.riskService.validateTrade(
-      balance,
+      equity,
       balance,
       stopLossDistancePips,
-      tradeData.riskPercent,
+      tradeData.riskPercent || 1.0,
       5.0, // max daily loss %
       0.0, // current daily loss %
       0,   // current open positions
       5,   // max open positions
     );
 
-    // 3. Compute lot size
+    // 5. Compute lot size based on true account equity
     const lotSize = this.riskService.calculateLotSize(
-      balance,
-      tradeData.riskPercent,
+      equity,
+      tradeData.riskPercent || 1.0,
       stopLossDistancePips,
     );
 
-    // 4. Save to database
+    // 6. If local MT5 bridge is active, dispatch order to MetaTrader 5
+    let mt5Ticket: any = null;
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      const mt5OrderRes = await fetch('http://127.0.0.1:5001/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pair: tradeData.pair,
+          direction: tradeData.direction,
+          entryPrice: tradeData.entryPrice,
+          stopLoss: tradeData.stopLoss,
+          takeProfit: tradeData.takeProfit,
+          riskPercent: tradeData.riskPercent || 1.0,
+          lotSize: lotSize,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (mt5OrderRes.ok) {
+        const orderJson = (await mt5OrderRes.json()) as any;
+        if (orderJson.success) {
+          mt5Ticket = orderJson.ticket;
+        }
+      }
+    } catch (_) {
+      // MT5 bridge offline; continue logging in database
+    }
+
+    // 7. Save to database
     const newTrade = {
       user_id: userId,
       pair: tradeData.pair,
@@ -94,6 +166,7 @@ export class TradesService {
       pnl: 0,
       pips: 0,
       opened_at: new Date().toISOString(),
+      broker_id: mt5Ticket ? `MT5-#${mt5Ticket}` : 'trade-z-auto',
     };
 
     const { data, error } = await this.supabase
@@ -103,14 +176,17 @@ export class TradesService {
       .single();
 
     if (error) {
-      // Mock result during local test if Supabase is offline
       return {
-        id: `mock-trade-${Date.now()}`,
+        id: `trade-${Date.now()}`,
         ...newTrade,
+        mt5_ticket: mt5Ticket,
       };
     }
 
-    return data;
+    return {
+      ...data,
+      mt5_ticket: mt5Ticket,
+    };
   }
 
   async shiftToBreakEven(tradeId: string) {

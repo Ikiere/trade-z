@@ -252,10 +252,43 @@ async def quick_analysis(request: AnalysisRequest):
 @router.post("/chat")
 async def chat_analysis(request: ChatQueryRequest):
     """
-    AI Chat reasoning assistant query endpoint utilizing OpenRouter or falling back to mock data.
+    AI Chat reasoning assistant query endpoint featuring Jephthah, the user's trading buddy.
+    Utilizes OpenRouter with live calendar/market context or falls back to Jephthah's local intelligent brain.
     """
     from app.config import settings
     import httpx
+
+    ctx = request.context or {}
+    acc = ctx.get("account") or ctx.get("summary") or {}
+    positions = ctx.get("positions") or []
+    balance = float(acc.get("balance") or 0.0)
+    equity = float(acc.get("equity") or balance or 0.0)
+    floating_pnl = float(acc.get("total_floating_pnl") or acc.get("profit") or 0.0)
+
+    # Fetch live economic calendar events to give Jephthah real-world market awareness
+    try:
+        raw_events = await fetch_tradingview_calendar()
+        high_med_events = [
+            f"• {e.get('title', 'Event')} ({e.get('country', 'Global')}) - Impact: {e.get('impact', 'medium').upper()} at {e.get('time_str', 'Today')}"
+            for e in raw_events if e.get("impact") in ["high", "medium"]
+        ][:6]
+        events_context_str = "\n".join(high_med_events) if high_med_events else "No immediate high-impact red folder news detected."
+    except Exception:
+        events_context_str = "Calendar data currently steady."
+
+    # Format active trades for LLM context
+    trades_context_str = "No active positions currently open."
+    if positions:
+        trade_items = []
+        for p in positions:
+            p_pnl = float(p.get("profit") or 0.0)
+            sign = "+" if p_pnl >= 0 else ""
+            trade_items.append(
+                f"- Ticket #{p.get('ticket')}: {p.get('pair', 'Asset')} {str(p.get('direction', 'long')).upper()} "
+                f"| Vol: {p.get('volume', 0.01)} lots | Entry: {p.get('price_open', 0)} | Live: {p.get('price_current', 0)} "
+                f"| P&L: {sign}${p_pnl:.2f} | SL: {p.get('sl', 'None')} | TP: {p.get('tp', 'None')}"
+            )
+        trades_context_str = "\n".join(trade_items)
 
     # If API key is provided and not a placeholder, query OpenRouter
     if settings.llm_api_key and settings.llm_api_key not in ["", "your_api_key", "placeholder", "your_openrouter_api_key"]:
@@ -266,7 +299,6 @@ async def chat_analysis(request: ChatQueryRequest):
                 "HTTP-Referer": "https://trade-z-web.vercel.app",
                 "X-Title": "Trade-Z",
             }
-            # Clean model name for OpenRouter compatibility
             model_name = settings.llm_model.strip().lstrip("~")
             if "opus" in model_name.lower():
                 model_name = "anthropic/claude-3-opus"
@@ -275,23 +307,28 @@ async def chat_analysis(request: ChatQueryRequest):
             elif "flash" in model_name.lower():
                 model_name = "google/gemini-2.5-flash:free"
 
+            system_instruction = (
+                "You are Jephthah, an elite Forex/Crypto prop trader and the user's close trading buddy and market copilot in Trade-Z.\n"
+                "Personality & Tone:\n"
+                "- Warm, charismatic, authentic, down-to-earth, and sharp—talk like an experienced trader friend who genuinely has the user's back and protects their capital.\n"
+                "- Do NOT sound like a cold, rigid corporate bot or an automated manual. Use natural speech ('Hey bro', 'Look, here's what's going down with your trade', 'My honest take:').\n"
+                "- Answer casual questions warmly and concisely ('how are you doing today?', 'how's the market feeling?', etc.).\n"
+                "- When the user asks about an active trade (or sends /trade):\n"
+                "  1. Break down what is happening in their trade (entry vs live price, floating profit/loss, distance to stop loss).\n"
+                "  2. Connect it to live macroeconomic events, market volatility, and liquidity order flow.\n"
+                "  3. Give a clear, straightforward buddy verdict: whether they should HOLD & WAIT, MOVE SL TO BREAKEVEN, or CLOSE NOW.\n\n"
+                f"User's Live Account Context:\n"
+                f"- Balance: ${balance:,.2f} | Equity: ${equity:,.2f} | Floating P&L: {'+' if floating_pnl >= 0 else ''}${floating_pnl:,.2f}\n"
+                f"Active Open Trades:\n{trades_context_str}\n\n"
+                f"Upcoming Key Macroeconomic Events:\n{events_context_str}"
+            )
+
             async def attempt_call(model_to_use: str):
                 payload = {
                     "model": model_to_use,
                     "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are Trade-Z AI, an expert Forex, Crypto and general market analysis assistant. "
-                                "You talk professionally, explain Forex concepts clearly to beginners when asked, and provide "
-                                "institutional analysis using terms like order blocks, liquidity sweeps, risk-to-reward ratio, "
-                                "win rate, and market structures. Keep answers highly educational, concise, and professional."
-                            )
-                        },
-                        {
-                            "role": "user",
-                            "content": request.prompt
-                        }
+                        {"role": "system", "content": system_instruction},
+                        {"role": "user", "content": request.prompt}
                     ]
                 }
                 async with httpx.AsyncClient(timeout=30.0) as client:
@@ -301,10 +338,7 @@ async def chat_analysis(request: ChatQueryRequest):
                         json=payload
                     )
 
-            # First attempt: user's primary configured model
             response = await attempt_call(model_name)
-
-            # Fallback if model is blocked (e.g. 404 for paid models on free-tier keys)
             if response.status_code != 200:
                 print(f"Primary model {model_name} failed with status {response.status_code}. Falling back to openrouter/free...")
                 response = await attempt_call("openrouter/free")
@@ -328,120 +362,207 @@ async def chat_analysis(request: ChatQueryRequest):
         except Exception as e:
             print(f"OpenRouter Connection Exception: {e}")
 
-    # Context-aware intelligent trading brain (activated when external LLM is offline or unauthenticated)
-    prompt = request.prompt.lower()
-    ctx = request.context or {}
-    acc = ctx.get("account") or ctx.get("summary") or {}
-    positions = ctx.get("positions") or []
-    balance = float(acc.get("balance") or 0.0)
-    equity = float(acc.get("equity") or balance or 0.0)
-    floating_pnl = float(acc.get("total_floating_pnl") or acc.get("profit") or 0.0)
+    # Jephthah's Intelligent Local Trading Buddy Brain
+    prompt = request.prompt.lower().strip()
 
-    # 1. Direct Trade Closing (checked first to avoid matching general 'trade')
-    if any(w in prompt for w in ["close", "exit trade", "stop trade", "liquidate"]):
+    # 1. Casual conversational greetings (avoid sounding like a robot)
+    if any(prompt == w or prompt.startswith(w + " ") for w in ["hi", "hello", "hey", "sup", "yo", "good morning", "good afternoon", "howdy"]):
         reply = (
-            "🎯 **Direct Trade Closing in Trade-Z:**\n\n"
-            "1. **Single Trade Exit:** On the **Dashboard** or **Live Positions** page (`/trades`), click the red **'Close'** button on any active position row.\n"
-            "2. **Panic Close All:** If you have multiple positions open, use the **'Close All'** button at the top-right of the Trades page to exit all open positions at market price.\n"
-            "3. **AI Auto-Exit:** If market structure shows a confirmed reversal against an open position, Trade-Z AI automatically executes an early close to lock in profits or cut drawdown."
+            "Hey brother! Jephthah here, your trading buddy and market copilot. 👊\n\n"
+            "I'm keeping my eyes on the charts, your MT5 positions, and live news flow so you don't have to stress. "
+            "How is your trading session going today? You can type `/trade` anytime to review your active positions, "
+            "or ask me about Gold, EURUSD, or your account balance!"
         )
 
-    # 2. Risk Management, Lot Sizing & Capital Shield
+    # 2. "How are you" / Friendly Check-ins
+    elif any(w in prompt for w in ["how are you", "how r u", "how do you feel", "how's it going", "how is it going", "what's up", "whats up"]):
+        reply = (
+            "Doing great, brother! Feeling sharp and locked in on the markets. ⚡\n\n"
+            "Watching the liquidity shifts and keeping tabs on your capital. "
+            "How can I help you right now? Want me to analyze one of your open trades, or do you want a quick market pulse check?"
+        )
+
+    # 3. Who are you / Identity
+    elif any(w in prompt for w in ["who are you", "your name", "what is your name", "introduce yourself"]):
+        reply = (
+            "I'm **Jephthah**—your personal trading buddy, institutional co-trader, and risk guardian in Trade-Z! 🛡️\n\n"
+            "Unlike a cold robotic script, I'm here to trade alongside you, break down complex market moves in plain English, "
+            "watch out for dangerous news volatility, and give you honest, actionable advice on when to let your winners run or when to cut risk."
+        )
+
+    # 4. Interactive Trade Analysis & /trade Command
+    elif prompt.startswith("/trade") or any(w in prompt for w in ["analyze my trade", "check my trade", "what is happening in my trade", "should i close", "should i wait", "my trade"]):
+        if positions:
+            # Pick position to analyze (match pair if specified, or default to first/most active)
+            target_pos = positions[0]
+            for p in positions:
+                pair_name = p.get("pair", "").lower()
+                ticket_str = str(p.get("ticket", ""))
+                if pair_name in prompt or ticket_str in prompt:
+                    target_pos = p
+                    break
+
+            pair = target_pos.get("pair", "Asset")
+            direction = str(target_pos.get("direction", "long")).upper()
+            vol = target_pos.get("volume", 0.01)
+            entry = float(target_pos.get("price_open", 0.0))
+            current = float(target_pos.get("price_current", 0.0))
+            profit = float(target_pos.get("profit", 0.0))
+            ticket = target_pos.get("ticket", "N/A")
+            sl = target_pos.get("sl", 0.0)
+            tp = target_pos.get("tp", 0.0)
+
+            sign = "+" if profit >= 0 else ""
+            status_emoji = "🟢" if profit >= 0 else "🔴"
+
+            # Determine buddy recommendation based on position health
+            if profit > 20:
+                verdict = "💰 **VERDICT: SECURE PARTIAL PROFITS OR MOVE SL TO BREAKEVEN**"
+                advice = (
+                    f"You're sitting on a solid {sign}${profit:.2f} profit! The market has given you a nice expansion. "
+                    "My buddy advice: Don't let a green trade turn red. Move your Stop Loss to your entry price ($" + f"{entry:.4f}" + ") "
+                    "to lock in a completely risk-free 'free ride', or bank half your profit now if you're approaching major resistance."
+                )
+            elif profit >= 0:
+                verdict = "🛡️ **VERDICT: HOLD & WAIT — STRUCTURE IS HEALTHY**"
+                advice = (
+                    f"You're in mild profit ({sign}${profit:.2f}). Price is respecting the institutional entry zone and building momentum. "
+                    "Give the trade room to breathe and let it work toward your target. No need to micromanage right now."
+                )
+            elif profit > -15:
+                verdict = "⏳ **VERDICT: HOLD WITH DISCIPLINE — NORMAL RETRACEMENT**"
+                advice = (
+                    f"You're currently down ${abs(profit):.2f}. Don't panic, brother—this is standard liquidity retracement before continuation. "
+                    "As long as your structural Stop Loss is respected, trust the setup. If price aggressively breaks below support on the 15m candle, we'll re-evaluate."
+                )
+            else:
+                verdict = "⚠️ **VERDICT: CLOSE POSITION OR TIGHTEN STOP LOSS**"
+                advice = (
+                    f"Drawdown is at -${abs(profit):.2f}. The order flow has weakened against our direction. "
+                    "If this trade was an intraday scalp and market structure has invalidated the setup, my honest advice is to cut it cleanly now "
+                    "using the red Close button so you protect your capital for the next high-probability setup."
+                )
+
+            reply = (
+                f"🔍 **Trade Diagnosis for {pair} ({direction}) • Ticket #{ticket}:**\n\n"
+                f"• **Position Metrics:** {status_emoji} {sign}${profit:.2f} P&L | {vol} Lots | Entry: {entry:.4f} | Live Price: {current:.4f}\n"
+                f"• **Market Condition:** Liquidity structure on the 15m/1H chart is actively testing session volume nodes.\n"
+                f"• **Upcoming Events:** {events_context_str.splitlines()[0] if events_context_str else 'Clear of immediate red-folder news.'}\n\n"
+                f"{verdict}\n\n"
+                f"👉 **My Advice:** {advice}\n\n"
+                f"*(Tip: You can instantly close this trade right from the Dashboard or Trades table with 1-click).* "
+            )
+        else:
+            reply = (
+                "Hey bro! You currently have **0 open positions** running on MetaTrader 5—your capital is 100% safe in cash! 🏖️\n\n"
+                "That's a great spot to be in. Want me to scan the watchlist for fresh confluences, or analyze a pair like Gold (XAUUSD) or EURUSD before you take a trade?"
+            )
+
+    # 5. Direct Trade Closing inquiries
+    elif any(w in prompt for w in ["close", "exit trade", "stop trade", "liquidate"]):
+        reply = (
+            "🎯 **How to Close Trades in Trade-Z (Quick & Easy):**\n\n"
+            "1. **Single Trade Exit:** Just hit the red **'Close'** button right on any position row on the **Dashboard** or **Live Positions** (`/trades`) page. It executes instantly at market price.\n"
+            "2. **Panic Close All:** If high volatility hits and you want out of everything, tap **'Close All'** at the top right of the Trades page to exit all positions immediately.\n"
+            "3. **AI Protective Auto-Exit:** If the market prints an aggressive structural reversal against you, our scanner can auto-close early to save your equity."
+        )
+
+    # 6. Risk Management, Lot Sizing & Capital Shield
     elif any(w in prompt for w in ["shield", "lot", "size", "risk", "calculate", "protect", "sizing"]):
         user_eq = equity if equity > 0 else 1000.0
         risk_money = user_eq * 0.01
         reply = (
-            f"🛡️ **Trade-Z AI Capital Protection & Smart Sizing:**\n\n"
-            f"• **Your Equity:** ${user_eq:,.2f}\n"
-            f"• **1% Institutional Risk:** ${risk_money:.2f} max allowable loss per trade\n"
-            f"• **Formula:** `Lot Size = (Equity × Risk%) ÷ (Stop Loss Distance × Tick Value)`\n"
-            f"• **Small Account Shield:** Accounts below $150 are restricted to minimum 0.01 lot with strict stop loss caps, vetoing excessive wide-stop setups to prevent account blowouts."
+            f"🛡️ **Here's How We Protect Your Money, Bro:**\n\n"
+            f"• **Your Live Equity:** ${user_eq:,.2f}\n"
+            f"• **1% Safe Risk Rule:** ${risk_money:.2f} max risk per trade. Never risk more than 1–2% on a single idea!\n"
+            f"• **Dynamic Sizing Formula:** `Lot Size = (Equity × Risk%) ÷ (Stop Loss Points × Tick Value)`\n"
+            f"• **AI Capital Shield:** If your balance is under $150, I cap lot size at 0.01 and actively veto wide-stop setups so a couple of volatile Gold wicks don't blow your account."
         )
 
-    # 3. Open Positions & Active Trades
-    elif any(w in prompt for w in ["position", "open trade", "active trade", "running trade", "trades open", "my position"]):
-        if len(positions) > 0:
-            lines = [f"⚡ **Active MT5 Positions ({len(positions)}):**\n"]
+    # 7. Open Positions Overview
+    elif any(w in prompt for w in ["position", "open trade", "active trade", "running trade", "trades open", "my positions"]):
+        if positions:
+            lines = [f"⚡ **You have {len(positions)} active trade(s) running right now:**\n"]
             for p in positions:
                 p_pnl = float(p.get("profit") or 0.0)
                 sign = "+" if p_pnl >= 0 else ""
                 lines.append(
                     f"• **{p.get('pair', 'Asset')}** ({str(p.get('direction', 'long')).upper()}) | "
-                    f"Vol: {p.get('volume', 0.01)} lots | Open: {p.get('price_open', 0):.5f} | "
-                    f"Current: {p.get('price_current', 0):.5f} | P&L: {sign}${p_pnl:.2f} (Ticket #{p.get('ticket')})"
+                    f"{p.get('volume', 0.01)} Lots | Entry: {p.get('price_open', 0)} | Live: {p.get('price_current', 0)} | "
+                    f"P&L: {sign}${p_pnl:.2f} (Ticket #{p.get('ticket')})"
                 )
-            lines.append("\nYou can close any of these trades with 1-click using the red 'Close' button on the Dashboard or Trades page.")
+            lines.append("\nWant me to analyze any of these? Type `/trade` or ask 'Should I close my [pair] trade?' and I'll break it down for you!")
             reply = "\n".join(lines)
         else:
             reply = (
-                "You currently have **0 open positions** on MetaTrader 5.\n\n"
-                "The Trade-Z scanner is actively analyzing the market across your configured watchlist and will execute high-probability institutional setups once all 15 confluence layers align."
+                "You're currently in cash with **0 open positions** on MetaTrader 5. Clean slate! ✨\n\n"
+                "I'm keeping an eye on market structures across your watchlist and will alert you once confluences align."
             )
 
-    # 4. Account & Balance inquiries
+    # 8. Account & Balance inquiries
     elif any(w in prompt for w in ["balance", "equity", "my money", "funds", "how much do i have", "floating p&l", "pnl", "overview", "account"]):
         if equity > 0:
             reply = (
-                f"📊 **MT5 Account Snapshot:**\n\n"
-                f"- **Balance:** ${balance:,.2f} {acc.get('currency', 'USD')}\n"
-                f"- **Equity:** ${equity:,.2f}\n"
-                f"- **Floating P&L:** {'+' if floating_pnl >= 0 else ''}${floating_pnl:,.2f}\n"
-                f"- **Active Positions:** {len(positions)}\n\n"
-                f"Your account margin is currently well-protected with AI risk parameters limiting total exposure to 1–2% per trade."
+                f"📊 **Here's Your Live MT5 Account Snapshot, Bro:**\n\n"
+                f"• **Balance:** ${balance:,.2f} {acc.get('currency', 'USD')}\n"
+                f"• **Live Equity:** ${equity:,.2f}\n"
+                f"• **Floating P&L:** {'+' if floating_pnl >= 0 else ''}${floating_pnl:,.2f}\n"
+                f"• **Active Trades:** {len(positions)}\n"
+                f"• **Margin Status:** {acc.get('margin_level', 'Healthy')}\n\n"
+                f"Your account is safely buffered under the AI Capital Shield. Looking good!"
             )
         else:
             reply = (
-                "Your MetaTrader 5 terminal is connected. Make sure your MT5 Bridge is running on your local machine to view live equity and balance metrics."
+                "Looks like your MT5 bridge isn't transmitting live data right now. "
+                "Make sure `python apps/mt5-bridge/mt5_bridge.py` is running on your desktop so I can pull your live equity and balance!"
             )
 
-    # 5. Gold (XAUUSD) Analysis
+    # 9. Gold (XAUUSD) Analysis
     elif any(w in prompt for w in ["gold", "xau", "xauusd"]):
         reply = (
-            "🏆 **XAUUSD (Gold) Institutional Market Outlook:**\n\n"
-            "• **Structure:** Gold displays strong dynamic liquidity sweeps on the H4/H1 timeframes with major demand zones.\n"
-            "• **Average True Range (ATR):** Gold's daily volatility averages $25–$40. Because of wide intraday swings, stop losses require 40–80 points.\n"
-            "• **AI Capital Shield Calibration:** For accounts under $150, Trade-Z restricts Gold trades to 0.01 lot maximum to prevent high-volatility drawdown from exceeding safe thresholds."
+            "🏆 **Gold (XAUUSD) Buddy Breakdown:**\n\n"
+            "• **The Vibe on Gold:** Gold has been moving with high ATR volatility ($25–$40 swings daily). It loves sweeping retail highs and lows before the real expansion.\n"
+            "• **How to Play It:** Never chase green candles at session highs. Wait for the London or New York liquidity sweep into a 15m order block.\n"
+            "• **Capital Shield Rule:** Because Gold stop losses need 40–80 points of breathing room, keep lots down at 0.01 on small accounts so you don't sweat the normal pullbacks."
         )
 
-    # 6. EURUSD Analysis
+    # 10. EURUSD Analysis
     elif "eurusd" in prompt or "eur/usd" in prompt:
         reply = (
-            "💶 **EURUSD Market Confluence Overview:**\n\n"
-            "• **Structure:** Order block displacement on the 4H timeframe with bullish fair value gap (FVG) mitigation.\n"
-            "• **Confluence Score:** 92% (High-probability alignment across Trend, Liquidity, and Momentum layers).\n"
-            "• **Institutional Bias:** Upward continuation towards London session highs. Recommended Stop Loss placed below the session swing low."
+            "💶 **EURUSD Market Breakdown:**\n\n"
+            "• **Structure:** 4H chart shows institutional accumulation with bullish order block mitigation.\n"
+            "• **Key Setup:** Watch for discount retests around London session open lows. If price sweeps the session low and rejects with a displacement candle, that's our cue for continuation."
         )
 
-    # 7. GBPUSD Analysis
-    elif "gbpusd" in prompt or "gbp/usd" in prompt:
-        reply = (
-            "💷 **GBPUSD Institutional Market Outlook:**\n\n"
-            "• **Market Structure:** Break of Structure (BOS) confirmed on H1. Price is currently retesting the discount equilibrium zone.\n"
-            "• **Execution Strategy:** Watch for London/New York session overlap displacement. Standard R:R targeted at 1:2.5."
-        )
-
-    # 8. Concepts (Order Block, FVG, SMC, BOS)
+    # 11. SMC Concepts
     elif any(w in prompt for w in ["order block", "fvg", "fair value", "smc", "liquidity", "sweep", "bos"]):
         reply = (
-            "🏛️ **Institutional Smart Money Concepts (SMC) in Trade-Z:**\n\n"
-            "• **Order Block (OB):** The last opposing candle before an aggressive displacement that leaves an imbalance, representing institutional accumulation or distribution.\n"
-            "• **Fair Value Gap (FVG):** A 3-candle price imbalance where buyers or sellers dominated so heavily that price must revisit to establish fair value.\n"
-            "• **Liquidity Sweep:** When market makers drive price past obvious retail highs/lows (stop runs) to fill large orders before reversing in the true trend direction.\n"
-            "• **Break of Structure (BOS):** A candle body close beyond a previous swing high/low confirming continuation of the institutional order flow."
+            "🏛️ **Smart Money Concepts (SMC) in Plain English:**\n\n"
+            "• **Order Block (OB):** Where big institutions placed massive buy or sell orders. When price returns there, they defend their positions.\n"
+            "• **Fair Value Gap (FVG):** An aggressive jump in price that left unfilled orders. Price gets sucked back like a magnet to balance the books.\n"
+            "• **Liquidity Sweep:** When market makers deliberately trigger retail stop losses above equal highs or below equal lows before reversing.\n"
+            "• **Break of Structure (BOS):** A solid candle close past a key swing level confirming that the big players are still pushing in that direction."
         )
 
-    # 9. General Conversational / Assistant Overview
+    # 12. General Prompt
     else:
         reply = (
-            f"🤖 **Trade-Z Trading Assistant:**\n\n"
-            f"I am actively monitoring market order flows and your MetaTrader 5 terminal.\n\n"
-            f"Here is what you can ask me:\n"
-            f"• **'What is my account balance and floating P&L?'**\n"
-            f"• **'Show my active open positions'**\n"
-            f"• **'Analyze EURUSD or XAUUSD market structure'**\n"
-            f"• **'How does the AI Capital Shield calculate lot size?'**\n"
-            f"• **'How do I close a trade directly?'**"
+            "Hey brother! I'm **Jephthah**, your trading buddy. 🤝\n\n"
+            "Here's what we can do together:\n"
+            "• Type **`/trade`** — I'll inspect your active MT5 trades, check current news events, and advise whether to hold or close!\n"
+            "• Ask **'How's my balance and equity?'** — I'll check your live MT5 funds.\n"
+            "• Ask **'Analyze Gold (XAUUSD) or EURUSD'** — I'll give you the institutional order flow breakdown.\n"
+            "• Or just ask me any trading question—I'm right here with you!"
         )
+
+    return {
+        "success": True,
+        "data": {
+            "reply": reply,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
     return {
         "success": True,

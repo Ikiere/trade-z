@@ -1032,14 +1032,20 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
 
 
 def run_bridge():
-    host = os.environ.get('MT5_BRIDGE_HOST', '127.0.0.1')
+    # 0.0.0.0 = bind to all interfaces (required when the bridge runs on a VPS/EC2 so
+    # Render can reach it). Set MT5_BRIDGE_HOST=127.0.0.1 to restrict to localhost only.
+    host = os.environ.get('MT5_BRIDGE_HOST', '0.0.0.0')
     server_address = (host, PORT)
     httpd = ThreadingHTTPServer(server_address, MT5BridgeHandler)
+    is_local = host in ('127.0.0.1', 'localhost')
+    security_label = 'Loopback Localhost Protection Active' if is_local else 'Listening on all interfaces (VPS/EC2 mode)'
+    public_url = f'http://127.0.0.1:{PORT}' if is_local else f'http://<YOUR-EC2-IP>:{PORT}'
     print(f"=========================================================")
     print(f"  Trade-Z MetaTrader 5 (MT5) Desktop Bridge")
     print(f"  Listening on: http://{host}:{PORT}")
+    print(f"  Public URL:   {public_url}")
     print(f"  MetaTrader5 Python Library: {'LOADED [OK]' if MT5_AVAILABLE else 'MISSING [ERROR]'}")
-    print(f"  Security: Loopback Localhost Protection Active")
+    print(f"  Security: {security_label}")
     print(f"  Keep this window open while auto-trading is active.")
     print(f"=========================================================")
     try:

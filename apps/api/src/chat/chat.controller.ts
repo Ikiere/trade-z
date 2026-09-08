@@ -70,6 +70,17 @@ export class ChatController {
     return await this.chatService.evaluatePositionSentinel(body);
   }
 
+  @Post('opportunity/scan')
+  @HttpCode(HttpStatus.OK)
+  async scanWatchlist(
+    @Headers('authorization') auth: string,
+    @Body() body: any,
+  ) {
+    const userId = this.extractUserId(auth);
+    if (!userId) throw new UnauthorizedException('Valid session token required');
+    return await this.chatService.scanWatchlistOpportunities(body);
+  }
+
   /**
    * Decode the Supabase JWT and return the real user UUID.
    */

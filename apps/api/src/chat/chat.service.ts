@@ -609,4 +609,64 @@ export class ChatService {
 
     return { success: false, error: 'AI Sentinel service unreachable' };
   }
+
+  /**
+   * Scans entire user watchlist concurrently across 10 SMC setup families,
+   * evaluating small-account eligibility, empirical EV, and comparative AI justification.
+   */
+  async scanWatchlistOpportunities(payload: {
+    watchlist?: string[];
+    timeframe?: string;
+    account_balance?: number;
+    account_equity?: number;
+    account_leverage?: number;
+    risk_percent?: number;
+  }) {
+    const postBody = JSON.stringify(payload);
+    const targetUrl = `${this.aiServiceUrl}/api/v1/analysis/opportunity/scan`;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const response = await fetch(targetUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: postBody,
+          signal: AbortSignal.timeout(35000),
+        });
+
+        if (response.ok) {
+          return await response.json();
+        }
+
+        if ([502, 503, 504].includes(response.status) && attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 4000));
+          continue;
+        }
+      } catch (_) {
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+      }
+    }
+
+    // Local fallback
+    try {
+      const localUrl = 'http://127.0.0.1:8000/api/v1/analysis/opportunity/scan';
+      const localRes = await fetch(localUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: postBody,
+        signal: AbortSignal.timeout(10000),
+      });
+      if (localRes.ok) {
+        return await localRes.json();
+      }
+    } catch (_) {}
+
+    return {
+      success: false,
+      error: 'AI Opportunity scanner currently unavailable on cloud infrastructure.',
+    };
+  }
 }
+

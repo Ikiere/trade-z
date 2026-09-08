@@ -31,6 +31,10 @@ from app.engines.decision import DecisionEngine
 
 from app.engines.sentinel_engine import SentinelEngine
 from app.services.reviewers import OpenRouterReviewer
+from app.services.opportunity_engine import OpportunityEngine
+from app.services.model_ab_tester import ModelABTester
+from app.services.trade_management_research import TradeManagementResearcher, TradePathSample
+from app.services.adaptive_regime_matrix import adaptive_regime_matrix
 
 router = APIRouter()
 
@@ -54,6 +58,27 @@ risk_engine = RiskEngine()
 confidence_engine = ConfidenceEngine()
 decision_engine = DecisionEngine()
 sentinel_engine = SentinelEngine()
+opportunity_engine = OpportunityEngine(market_data_service)
+
+
+class WatchlistScanRequest(BaseModel):
+    watchlist: Optional[list[str]] = [
+        "EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "BTCUSD", "ETHUSD", "AUDUSD"
+    ]
+    timeframe: str = "15m"
+    account_balance: Optional[float] = 1000.0
+    account_equity: Optional[float] = None
+    account_leverage: Optional[float] = 100.0
+    risk_percent: Optional[float] = 1.0
+    api_key: Optional[str] = None
+
+
+class ABTestRequest(BaseModel):
+    candidates: list[dict]
+
+
+class TradeManagementResearchRequest(BaseModel):
+    trade_paths: list[dict]
 
 
 class AnalysisRequest(BaseModel):
@@ -156,6 +181,106 @@ async def evaluate_positions_batch(request: BatchPositionEvaluateRequest):
         "success": True,
         "count": len(results),
         "data": results,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@router.post("/opportunity/scan")
+async def scan_watchlist_opportunities(request: WatchlistScanRequest):
+    """
+    Continuous Multi-Asset Opportunity Scanner:
+    1. Scans entire watchlist concurrently across 10 SMC setup families.
+    2. Filters out setups violating hard mathematical and structural rules.
+    3. Evaluates Small-Account Instrument Eligibility (e.g. Gold vs FX vs Crypto).
+    4. Ranks candidates by Empirical Expected Value (EV in R) & Regime Edge.
+    5. Runs AI Comparative Evaluator answering the 6 mandatory institutional questions.
+    """
+    api_key = settings.market_data_api_key
+    if not api_key or api_key in ["", "placeholder", "your_api_key"]:
+        api_key = request.api_key
+
+    watchlist = request.watchlist or ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "BTCUSD", "ETHUSD", "AUDUSD"]
+
+    report = await opportunity_engine.scan_watchlist(
+        watchlist=watchlist,
+        timeframe=request.timeframe or "15m",
+        api_key=api_key,
+        account_balance=request.account_balance,
+        account_equity=request.account_equity,
+        account_leverage=request.account_leverage,
+        risk_percent=request.risk_percent or 1.0,
+    )
+
+    return {
+        "success": True,
+        "data": report.model_dump(),
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@router.post("/research/ab-test")
+async def run_model_ab_test(request: ABTestRequest):
+    """
+    A/B Testing Replay Framework:
+    Replays historical candidate setups across 4 architectures:
+    - Architecture A: Pure SMC Deterministic (No AI)
+    - Architecture B: Primary AI Model (Claude 3.5 Sonnet)
+    - Architecture C: Alternative AI Model (Gemini 2.0 Flash / DeepSeek)
+    - Architecture D: AI as Critic Only (Safety Veto)
+    """
+    result = ModelABTester.run_replay(request.candidates)
+    return {
+        "success": True,
+        "data": result,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@router.post("/research/management")
+async def run_trade_management_research(request: TradeManagementResearchRequest):
+    """
+    Trade Management Research Engine:
+    Simulates all combinations of Break-Even (BE) rules and Partial Take-Profit policies
+    across trade paths to quantify premature BE stopouts vs net R expectancy.
+    """
+    samples = []
+    for tp_dict in request.trade_paths:
+        samples.append(TradePathSample(
+            trade_id=str(tp_dict.get("trade_id", len(samples) + 1)),
+            symbol=tp_dict.get("symbol", "UNKNOWN"),
+            target_r=float(tp_dict.get("target_r", 2.5)),
+            mfe_r=float(tp_dict.get("mfe_r", 1.5)),
+            mae_r=float(tp_dict.get("mae_r", -0.4)),
+            first_reached_1r=bool(tp_dict.get("first_reached_1r", False)),
+            first_reached_0_5r=bool(tp_dict.get("first_reached_0_5r", False)),
+            structural_bos_formed=bool(tp_dict.get("structural_bos_formed", False)),
+            hit_tp_eventually=bool(tp_dict.get("hit_tp_eventually", False)),
+            pulled_back_to_entry_after_1r=bool(tp_dict.get("pulled_back_to_entry_after_1r", False)),
+            pulled_back_to_entry_after_0_5r=bool(tp_dict.get("pulled_back_to_entry_after_0_5r", False)),
+        ))
+
+    result = TradeManagementResearcher.evaluate_all_combinations(samples)
+    return {
+        "success": True,
+        "data": result,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@router.get("/research/regimes")
+async def get_regime_matrix():
+    """
+    Returns empirical performance buckets from the Adaptive Regime Matrix.
+    """
+    buckets = adaptive_regime_matrix.list_all_buckets()
+    discouraged = adaptive_regime_matrix.list_discouraged_regimes()
+    return {
+        "success": True,
+        "data": {
+            "total_regimes_tracked": len(buckets),
+            "buckets": buckets,
+            "discouraged_regimes": discouraged
+        },
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 

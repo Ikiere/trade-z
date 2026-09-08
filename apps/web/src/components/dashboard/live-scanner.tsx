@@ -5,7 +5,8 @@ import { createClient } from '@/lib/supabase';
 import { 
   Scan, TrendingUp, TrendingDown, Loader2, AlertTriangle, Zap, 
   CheckCircle2, ShieldAlert, Sparkles, Brain, Clock, ShieldCheck, 
-  Snowflake, Plus, X, Search, Coins, Compass, Lock, Radio, RefreshCw, XCircle, Shield
+  Snowflake, Plus, X, Search, Coins, Compass, Lock, Radio, RefreshCw, XCircle, Shield,
+  Globe, Award, Layers, FileText, ChevronDown, ChevronUp
 } from 'lucide-react';
 import { getApiBaseUrl } from '@/lib/api';
 import { checkTradingSession, SessionShieldStatus } from '@/lib/trading-session';
@@ -46,12 +47,14 @@ interface LatestTradeSetup {
   entryPrice: number;
   stopLoss: number;
   takeProfit: number;
-  currentPrice: number;
+  currentPrice?: number;
   confidence: number;
   reasoning: string;
-  isApproved: boolean;
+  isApproved?: boolean;
   timestamp: string;
   mt5Ticket?: number | null;
+  riskReward?: number;
+  decimals?: number;
   collaboration?: {
     active?: boolean;
     brain_verdict?: string;
@@ -153,8 +156,13 @@ export default function LiveScannerWidget() {
   // From user_settings
   const [tradingMode, setTradingMode] = useState('fully_automatic');
   const [defaultLot, setDefaultLot] = useState(0.01);
-  const [dailySignalLimit, setDailySignalLimit] = useState(2);
+  const [dailySignalLimit, setDailySignalLimit] = useState(10);
   const [userId, setUserId] = useState<string | null>(null);
+
+  // Multi-Asset Opportunity Engine state
+  const [isScanningWatchlist, setIsScanningWatchlist] = useState(false);
+  const [watchlistOpportunityReport, setWatchlistOpportunityReport] = useState<any | null>(null);
+  const [showAuditModal, setShowAuditModal] = useState(false);
 
   // Probe MT5 bridge status (runs on user's laptop or VPS)
   const probeMt5Bridge = useCallback(async () => {
@@ -459,7 +467,7 @@ export default function LiveScannerWidget() {
       if (s) {
         setTradingMode(s.trading_mode || 'fully_automatic');
         setDefaultLot(Number(s.default_lot_size) || 0.01);
-        setDailySignalLimit(Number(s.daily_signal_limit) || 2);
+        setDailySignalLimit(Number(s.daily_signal_limit) || 10);
 
         const currentWl = Array.isArray(s.watchlist) && s.watchlist.length > 0
           ? s.watchlist
@@ -473,7 +481,7 @@ export default function LiveScannerWidget() {
           await supabase.from('user_settings').update({ watchlist: merged }).eq('user_id', user.id);
         }
       } else {
-        setDailySignalLimit(2);
+        setDailySignalLimit(10);
         setWatchlist(baseList);
       }
 
@@ -536,16 +544,16 @@ export default function LiveScannerWidget() {
       return null;
     }
 
-    // ── GUARD 2: Greed Shield — Max 2 Open Positions in MT5 ────
+    // ── GUARD 2: Portfolio Risk Capacity — Max Concurrent Positions ────
     try {
       const posRes = await fetch('http://127.0.0.1:5001/positions', { signal: AbortSignal.timeout(1500) });
       if (posRes.ok) {
         const posData = await posRes.json();
         const activePositions = Array.isArray(posData.positions) ? posData.positions : [];
-        if (activePositions.length >= 2) {
+        if (activePositions.length >= 5) {
           setLogs(prev => [
-            `[GREED SHIELD 🛑] Trade vetoed: Maximum 2 open positions active in MT5 (${activePositions.length}/2).`,
-            `  -> Institutional discipline rule: No new trades will be executed until an existing position is closed.`,
+            `[PORTFOLIO RISK CAPACITY 🛡️] Trade deferred: Maximum 5 concurrent open positions active in MT5 (${activePositions.length}/5).`,
+            `  -> Margin preservation: Waiting for an active position to reach TP or close before taking new exposure.`,
             ...prev,
           ]);
           return null;
@@ -553,11 +561,11 @@ export default function LiveScannerWidget() {
       }
     } catch (_) {}
 
-    // ── GUARD 3: Greed Shield — Max 2 Trades Per Day ───────────
-    if (todaySignalCount >= 2) {
+    // ── GUARD 3: Daily Target / Risk Budget Capacity ───────────
+    if (dailySignalLimit > 0 && todaySignalCount >= dailySignalLimit) {
       setLogs(prev => [
-        `[GREED SHIELD 🛑] MT5 auto-trade vetoed: Daily limit of 2 trades reached for today (${todaySignalCount}/2).`,
-        `  -> Institutional rule: 2 trades/day maximum to eliminate overtrading and emotional greed. Resumes tomorrow.`,
+        `[CAPACITY LIMIT 🛡️] MT5 auto-trade paused: Configured daily target of ${dailySignalLimit} trades reached for today (${todaySignalCount}/${dailySignalLimit}).`,
+        `  -> Portfolio risk capacity preserved. Automatically resets at 00:00 UTC.`,
         ...prev,
       ]);
       return null;
@@ -994,6 +1002,135 @@ export default function LiveScannerWidget() {
     }
   }, [selectedSinglePair, userId, tradingMode, defaultLot, probeMt5Bridge, sendOrderToMt5]);
 
+  // Multi-Asset Opportunity Engine Scanner across entire Watchlist
+  const handleScanWatchlist = useCallback(async () => {
+    if (!userId || isScanningWatchlist) return;
+
+    setIsScanningWatchlist(true);
+    setLogs(prev => [
+      `[OPPORTUNITY SCAN 🌐] Concurrently scanning ${watchlist.length} assets across 10 SMC setup families...`,
+      `  -> Instruments: ${watchlist.slice(0, 5).join(', ')}${watchlist.length > 5 ? ` +${watchlist.length - 5} more` : ''}`,
+      `  -> Evaluating small-account margin eligibility, empirical EV, and liquidity distribution...`,
+      ...prev,
+    ]);
+
+    try {
+      const apiBase = getApiBaseUrl();
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      const res = await fetch(`${apiBase}/api/v1/chat/opportunity/scan`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          watchlist,
+          timeframe: '15m',
+          account_balance: mt5Status?.balance || 1000,
+          account_equity: mt5Status?.equity || mt5Status?.balance || 1000,
+          account_leverage: mt5Status?.leverage || 100,
+          risk_percent: 1.0,
+        }),
+      });
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        const errMsg = errBody?.message || errBody?.detail || `HTTP ${res.status}`;
+        setLogs(prev => [`[OPPORTUNITY SCAN ERROR] ${errMsg}`, ...prev]);
+        setIsScanningWatchlist(false);
+        return;
+      }
+
+      const body = await res.json();
+      const report = body?.data;
+      if (!report) {
+        setLogs(prev => [`[WATCHLIST SCAN] Empty report returned.`, ...prev]);
+        setIsScanningWatchlist(false);
+        return;
+      }
+
+      setWatchlistOpportunityReport(report);
+
+      const topOpp = report.top_selected_opportunity;
+      if (topOpp && topOpp.candidate) {
+        const cand = topOpp.candidate;
+        const elig = topOpp.eligibility;
+
+        setLogs(prev => [
+          `[TOP OPPORTUNITY 🏆] Selected ${cand.symbol} (${cand.setup_family}) | Rank #1`,
+          `  -> Direction: ${cand.direction.toUpperCase()} | EV: +${cand.expected_value.toFixed(2)}R | R:R: ${cand.risk_reward.toFixed(1)} | Quality: ${cand.setup_quality_score}/100`,
+          `  -> Account Eligibility: ${elig.is_eligible ? 'ELIGIBLE' : 'DEFERRED'} (Risk: $${elig.dollar_risk_at_min_lot.toFixed(2)} vs Budget $${elig.risk_budget.toFixed(2)})`,
+          `  -> Selection Audit: ${topOpp.selection_notes}`,
+          ...prev,
+        ]);
+
+        const resolvedMeta = resolveAssetMeta(cand.symbol);
+        const setupObj: LatestTradeSetup = {
+          pair: cand.symbol,
+          direction: cand.direction.toLowerCase() as 'long' | 'short',
+          orderType: 'market',
+          entryPrice: cand.entry_price,
+          stopLoss: cand.stop_loss,
+          takeProfit: cand.take_profit,
+          currentPrice: cand.entry_price,
+          confidence: cand.setup_quality_score,
+          reasoning: `${cand.setup_family}: ${topOpp.selection_notes}`,
+          isApproved: true,
+          timestamp: new Date().toLocaleTimeString(),
+          riskReward: cand.risk_reward,
+          decimals: resolvedMeta.decimals,
+        };
+
+        setLatestSetup(setupObj);
+
+        // Auto-execute if in fully_automatic mode and trade is actionable
+        if (tradingMode === 'fully_automatic' && topOpp.is_actionable) {
+          const sessionCheck = checkTradingSession(cand.symbol);
+          if (sessionCheck.isEligible) {
+            setLogs(prev => [
+              `[AUTONOMOUS AI ⚡] Placing top opportunity ${cand.symbol} on MT5 (EV: +${cand.expected_value.toFixed(2)}R)...`,
+              ...prev,
+            ]);
+            const ticket = await sendOrderToMt5({
+              pair: cand.symbol,
+              direction: cand.direction.toLowerCase() as 'long' | 'short',
+              orderType: 'market',
+              entryPrice: cand.entry_price,
+              stopLoss: cand.stop_loss,
+              takeProfit: cand.take_profit,
+              lotSize: elig.recommended_lot_size || defaultLot,
+            });
+            if (ticket) {
+              setLatestSetup(prev => prev ? { ...prev, mt5Ticket: ticket } : null);
+              setLogs(prev => [
+                `[AUTO-EXECUTED ✅] Order #${ticket} successfully placed on MT5 for ${cand.symbol}!`,
+                ...prev,
+              ]);
+            }
+          } else {
+            setLogs(prev => [
+              `[SESSION NOTICE 🛡️] ${cand.symbol} setup is outside active trading session. Live MT5 order paused until session open.`,
+              ...prev,
+            ]);
+          }
+        }
+      } else {
+        setLogs(prev => [
+          `[WATCHLIST SCAN 🛡️] Scanned ${report.total_candidates_found || 0} setups across ${report.watchlist_scanned?.length || 0} pairs. None met the strict institutional criteria (Quality >= 70, R:R >= 1.8, EV > 0).`,
+          `  -> 'NO TRADE' is the default. Standing by for valid institutional setups.`,
+          ...prev,
+        ]);
+      }
+    } catch (err: any) {
+      setLogs(prev => [`[OPPORTUNITY SCAN EXCEPTION] ${err.message}`, ...prev]);
+    } finally {
+      setIsScanningWatchlist(false);
+    }
+  }, [userId, isScanningWatchlist, watchlist, mt5Status, tradingMode, defaultLot, sendOrderToMt5]);
+
   if (loading) return (
     <div className="card p-6 flex items-center justify-center gap-2 text-xs font-mono text-[#64748b]">
       <Loader2 className="w-4 h-4 animate-spin text-brand-400" /> Loading scanner configuration...
@@ -1405,23 +1542,44 @@ export default function LiveScannerWidget() {
                 </div>
               </div>
 
-              <button
-                onClick={() => handleAnalyzePair(selectedSinglePair)}
-                disabled={activePair !== null}
-                className="btn w-full sm:w-auto bg-brand-500 hover:bg-brand-600 text-white text-xs font-mono font-bold py-2 px-5 rounded-lg flex items-center justify-center gap-2 shadow-lg shadow-brand-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isScanningThis ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin text-white" />
-                    <span>Analyzing {selectedSinglePair}...</span>
-                  </>
-                ) : (
-                  <>
-                    <Scan className="w-4 h-4 text-white" />
-                    <span>Analyze {selectedSinglePair} Chart</span>
-                  </>
-                )}
-              </button>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+                <button
+                  onClick={handleScanWatchlist}
+                  disabled={isScanningWatchlist || activePair !== null}
+                  className="btn bg-gradient-to-r from-brand-500 via-indigo-600 to-cyan-500 hover:from-brand-600 hover:to-cyan-600 text-white text-xs font-mono font-bold py-2 px-4 rounded-lg flex items-center justify-center gap-2 shadow-lg shadow-brand-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Concurrently scan all pairs across 10 SMC setup families and pick the #1 asymmetric opportunity"
+                >
+                  {isScanningWatchlist ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      <span>Scanning Watchlist ({watchlist.length} pairs)...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Globe className="w-4 h-4 text-white" />
+                      <span>Scan Watchlist (Best EV)</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => handleAnalyzePair(selectedSinglePair)}
+                  disabled={isScanningWatchlist || activePair !== null}
+                  className="btn bg-bg-secondary hover:bg-[#1e293b] border border-[#1e293b] hover:border-brand-500/40 text-white text-xs font-mono font-semibold py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isScanningThis ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      <span>Analyzing {selectedSinglePair}...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Scan className="w-3.5 h-3.5 text-[#94a3b8]" />
+                      <span>Analyze {selectedSinglePair} Only</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           );
         })()}
@@ -1447,6 +1605,185 @@ export default function LiveScannerWidget() {
           )}
         </div>
       </div>
+
+      {/* Watchlist Trade Opportunity Matrix & Comparative AI Audit */}
+      {watchlistOpportunityReport && (
+        <div className="card p-5 border border-[#1e293b] bg-gradient-to-b from-[#0e1322] to-[#070a12] space-y-4 shadow-xl">
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-[#1e293b]/70 pb-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="w-2.5 h-2.5 rounded-full bg-brand-400 animate-pulse" />
+              <h4 className="text-sm font-bold text-white font-mono flex items-center gap-2">
+                <Layers className="w-4 h-4 text-brand-400" />
+                Institutional Watchlist Opportunity Matrix
+              </h4>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-brand-500/10 text-brand-300 border border-brand-500/30">
+                {watchlistOpportunityReport.total_candidates_found} setups detected across {watchlistOpportunityReport.watchlist_scanned?.length} pairs
+              </span>
+            </div>
+
+            {watchlistOpportunityReport.account_summary && (
+              <span className="text-[10px] font-mono text-[#64748b]">
+                Equity: <strong className="text-white">${watchlistOpportunityReport.account_summary.equity?.toLocaleString()}</strong> · Risk Budget: <strong className="text-emerald-400">${watchlistOpportunityReport.account_summary.risk_budget}</strong> ({watchlistOpportunityReport.account_summary.risk_percent}%)
+              </span>
+            )}
+          </div>
+
+          {/* Top Selected Setup Banner */}
+          {watchlistOpportunityReport.top_selected_opportunity ? (() => {
+            const top = watchlistOpportunityReport.top_selected_opportunity;
+            const cand = top.candidate;
+            const elig = top.eligibility;
+            return (
+              <div className="p-4 rounded-xl bg-[#090d16] border border-brand-500/30 space-y-3">
+                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1">
+                      <Award className="w-3 h-3 text-amber-400" /> RANK #1 ASYMMETRIC SETUP
+                    </span>
+                    <strong className="text-white font-mono text-base">{cand.symbol}</strong>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                      cand.direction === 'BUY' || cand.direction === 'long'
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                    }`}>
+                      {cand.direction.toUpperCase()}
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-bg-secondary text-[#94a3b8] border border-[#1e293b]">
+                      {cand.setup_family}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {elig.is_eligible ? (
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                        Eligible for ${watchlistOpportunityReport.account_summary?.equity} Balance
+                      </span>
+                    ) : (
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3 text-amber-400" />
+                        Margin Deferred (Needs ${elig.min_equity_needed_for_001_lot})
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Key Metrics Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px] font-mono">
+                  <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
+                    <span className="text-[#64748b] block text-[9px]">EXPECTED VALUE</span>
+                    <span className="text-emerald-400 font-bold">+{cand.expected_value?.toFixed(2)} R</span>
+                  </div>
+                  <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
+                    <span className="text-[#64748b] block text-[9px]">RISK : REWARD</span>
+                    <span className="text-white font-bold">{cand.risk_reward?.toFixed(1)} : 1</span>
+                  </div>
+                  <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
+                    <span className="text-[#64748b] block text-[9px]">QUALITY SCORE</span>
+                    <span className="text-brand-400 font-bold">{cand.setup_quality_score?.toFixed(0)} / 100</span>
+                  </div>
+                  <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
+                    <span className="text-[#64748b] block text-[9px]">DOLLAR RISK @ 0.01</span>
+                    <span className={elig.is_eligible ? 'text-[#94a3b8]' : 'text-rose-400 font-bold'}>
+                      ${elig.dollar_risk_at_min_lot?.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
+                    <span className="text-[#64748b] block text-[9px]">TIMEFRAME</span>
+                    <span className="text-cyan-400 font-bold">{cand.timeframe?.toUpperCase()}</span>
+                  </div>
+                </div>
+
+                <p className="text-[11px] font-mono text-[#94a3b8] leading-relaxed">
+                  <strong className="text-white">Selection Rationale:</strong> {top.selection_notes}
+                </p>
+              </div>
+            );
+          })() : (
+            <div className="p-3 rounded-lg bg-bg-secondary border border-[#1e293b] text-xs font-mono text-[#94a3b8]">
+              No setup met the strict institutional threshold (Quality ≥ 70, R:R ≥ 1.8, EV &gt; 0) during this scan. Defaulting to <strong>NO TRADE</strong> to protect capital.
+            </div>
+          )}
+
+          {/* Comparative Candidates Evaluation (Candidate A vs B vs C) */}
+          {watchlistOpportunityReport.comparative_analysis?.competing_candidates_eval?.length > 0 && (
+            <div className="space-y-2 pt-2 border-t border-[#1e293b]/70">
+              <h5 className="text-xs font-bold text-white font-mono flex items-center gap-1.5">
+                <Radio className="w-3.5 h-3.5 text-cyan-400" />
+                Comparative Setup Hierarchy (Candidate A vs Candidate B)
+              </h5>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {watchlistOpportunityReport.comparative_analysis.competing_candidates_eval.map((evalItem: any, idx: number) => (
+                  <div
+                    key={idx}
+                    className={`p-2.5 rounded-lg border font-mono text-[11px] space-y-1 ${
+                      evalItem.verdict === 'CHOSEN'
+                        ? 'bg-emerald-500/5 border-emerald-500/30'
+                        : 'bg-bg-secondary border-[#1e293b]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-white">{evalItem.symbol}</span>
+                      <span className={`text-[9px] px-1.5 py-0.2 rounded uppercase font-bold ${
+                        evalItem.verdict === 'CHOSEN'
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : 'bg-bg-card text-[#64748b]'
+                      }`}>
+                        {evalItem.verdict}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-brand-300">{evalItem.setup_family}</div>
+                    <p className="text-[10px] text-[#94a3b8] leading-tight">{evalItem.evaluation_notes}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Expandable 6 Institutional Audit Questions */}
+          {watchlistOpportunityReport.comparative_analysis?.institutional_audit && (
+            <div className="pt-2 border-t border-[#1e293b]/70">
+              <button
+                onClick={() => setShowAuditModal(prev => !prev)}
+                className="w-full flex items-center justify-between p-2 rounded-lg bg-[#090d16] hover:bg-[#0f1422] border border-[#1e293b] text-xs font-mono font-bold text-white transition-all"
+              >
+                <span className="flex items-center gap-2">
+                  <FileText className="w-3.5 h-3.5 text-brand-400" />
+                  Institutional 6-Factor Trade Audit
+                </span>
+                <span className="text-[10px] text-brand-300 flex items-center gap-1">
+                  {showAuditModal ? 'Collapse Audit' : 'Expand 6 Mandatory Questions'}
+                  {showAuditModal ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                </span>
+              </button>
+
+              {showAuditModal && (() => {
+                const audit = watchlistOpportunityReport.comparative_analysis.institutional_audit;
+                const questions = [
+                  { title: '1. WHY THIS TRADE', body: audit.why_this_trade, color: 'text-brand-300' },
+                  { title: '2. WHY NOW', body: audit.why_now, color: 'text-cyan-300' },
+                  { title: '3. WHERE THE LIQUIDITY IS', body: audit.where_the_liquidity_is, color: 'text-amber-300' },
+                  { title: '4. WHERE THE INVALIDATION IS', body: audit.where_the_invalidation_is, color: 'text-rose-300' },
+                  { title: '5. WHERE THE TARGET LIQUIDITY IS', body: audit.where_the_target_liquidity_is, color: 'text-emerald-300' },
+                  { title: '6. WHAT WOULD MAKE THIS TRADE WRONG', body: audit.what_would_make_this_trade_wrong, color: 'text-red-300' },
+                ];
+
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2 font-mono text-[11px]">
+                    {questions.map((q, qIdx) => (
+                      <div key={qIdx} className="p-2.5 rounded-lg bg-[#060810] border border-[#1e293b] space-y-1">
+                        <span className={`text-[10px] font-bold block ${q.color}`}>{q.title}</span>
+                        <p className="text-[#94a3b8] text-[10px] leading-relaxed">{q.body}</p>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Latest Generated Setup Card with Autonomous MT5 Status */}
       {latestSetup && (

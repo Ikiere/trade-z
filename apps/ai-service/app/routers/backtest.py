@@ -24,6 +24,7 @@ class LegacyBacktestRequest(BaseModel):
     bars: int = 150
     risk_reward: float = 2.5
     min_confidence: float = 65.0
+    initial_balance: float = 1000.0
 
 
 class SimulationPayload(BaseModel):
@@ -34,7 +35,7 @@ class SimulationPayload(BaseModel):
     bars: Optional[int] = None
     risk_percent: float = 1.0
     broker_name: str = "exness"
-    custom_leverage: Optional[float] = 2000.0
+    custom_leverage: Optional[float] = None
 
 
 class TournamentPayload(BaseModel):
@@ -134,7 +135,7 @@ async def run_legacy_backtest_endpoint(request: LegacyBacktestRequest):
     sym = request.pair.upper()
     return event_driven_simulator.run_simulation(
         symbols=[sym],
-        initial_balance=10000.0,
+        initial_balance=request.initial_balance,
         timeframe=request.timeframe,
         period_days=max(7, int(request.bars / 96)),
         bars=request.bars,

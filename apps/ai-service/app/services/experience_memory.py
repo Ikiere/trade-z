@@ -93,6 +93,37 @@ class ExperienceMemory:
         """
         self.records.append(rec)
 
+    def query_experiences(
+        self,
+        symbol: Optional[str] = None,
+        setup_family: Optional[str] = None,
+        session: Optional[str] = None,
+        regime: Optional[str] = None,
+        as_of_timestamp: Optional[str] = None
+    ) -> List[ExperienceRecord]:
+        """
+        Retrieves matching experiences chronologically.
+        Guarantees that trades occurring after as_of_timestamp cannot contaminate historical decisions.
+        """
+        records = self.records
+        if as_of_timestamp:
+            records = [r for r in records if r.timestamp <= as_of_timestamp]
+
+        if symbol and symbol != "ALL":
+            clean_sym = symbol.upper().replace("/", "").replace(" ", "")
+            records = [r for r in records if r.symbol == clean_sym]
+
+        if setup_family and setup_family != "ALL":
+            records = [r for r in records if r.setup_family == setup_family]
+
+        if session and session != "ALL":
+            records = [r for r in records if r.session.upper() == session.upper()]
+
+        if regime and regime != "ALL":
+            records = [r for r in records if r.market_regime.upper() == regime.upper()]
+
+        return records
+
     def query_similar(
         self,
         symbol: str,
@@ -100,18 +131,23 @@ class ExperienceMemory:
         session: Optional[str] = None,
         regime: Optional[str] = None,
         direction: Optional[str] = None,
-        volatility_regime: Optional[str] = None
+        volatility_regime: Optional[str] = None,
+        as_of_timestamp: Optional[str] = None
     ) -> SimilarityQueryResponse:
         """
-        Hierarchical multi-dimensional empirical lookup with graceful fallback:
+        Hierarchical multi-dimensional empirical lookup with chronological filtering:
         1. Exact (symbol, setup_family, session, regime, direction)
         2. Broad (symbol, setup_family, session)
         3. Instrument family (symbol, setup_family)
         4. Global setup family
         """
+        records = self.records
+        if as_of_timestamp:
+            records = [r for r in records if r.timestamp <= as_of_timestamp]
+
         sym = symbol.upper().replace("/", "").replace(" ", "")
         all_sym_fam = [
-            r for r in self.records
+            r for r in records
             if r.symbol == sym and r.setup_family == setup_family
         ]
 

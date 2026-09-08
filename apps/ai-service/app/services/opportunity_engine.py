@@ -21,6 +21,7 @@ from app.services.asset_eligibility import evaluate_instrument_eligibility, Elig
 from app.services.calendar import check_news_filter
 from app.services.adaptive_regime_matrix import adaptive_regime_matrix
 from app.services.reviewers.comparative_evaluator import AIComparativeEvaluator
+from app.services.market_context_resolver import MarketContextResolver, MarketContext
 
 
 class RankedOpportunity(BaseModel):
@@ -99,11 +100,14 @@ class OpportunityEngine:
             spread_pts = spec.typical_spread_pips / max(1.0, spec.pip_multiplier)
             spread_cost_r = spread_pts / max(0.00001, sl_dist)
 
+            sym_df = candles_by_symbol.get(c.symbol)
+            ctx = MarketContextResolver.resolve(sym_df) if sym_df is not None else MarketContext()
+
             emp = empirical_expectancy_engine.calculate_expectancy(
                 symbol=c.symbol,
                 setup_family=c.setup_family,
-                session="LONDON",
-                regime="trending",
+                session=ctx.session,
+                regime=ctx.regime,
                 spread_cost_r=spread_cost_r
             )
             c.expected_value = emp.empirical_ev_r
@@ -115,11 +119,13 @@ class OpportunityEngine:
         # 2nd tier: Ineligible for current balance (e.g. Gold on $20 account), ranked by EV
         def ranking_key(item: tuple[CandidateSetup, EligibilityResult]):
             c, elig = item
+            sym_df = candles_by_symbol.get(c.symbol)
+            ctx = MarketContextResolver.resolve(sym_df) if sym_df is not None else MarketContext()
             regime_info = adaptive_regime_matrix.get_setup_expectancy(
                 symbol=c.symbol,
-                session="LONDON",
+                session=ctx.session,
                 setup_family=c.setup_family,
-                volatility_regime="BALANCED"
+                volatility_regime=ctx.volatility_regime
             )
             regime_multiplier = regime_info.get("score_multiplier", 1.0)
             eligibility_score = 1000.0 if elig.is_eligible else 0.0

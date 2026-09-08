@@ -55,6 +55,7 @@ class EmpiricalExpectancyResult(BaseModel):
     average_mae_r: float = 0.0
     average_duration_bars: float = 0.0
     evidence_tier: str = SampleEvidenceTier.INSUFFICIENT
+    evidence_source: str = "EXACT_SYMBOL_SETUP_SESSION_REGIME"
     statistical_status: str = "INSUFFICIENT_STATISTICAL_EVIDENCE"
     has_statistical_edge: bool = False
     recommended_action: str = "WAIT"    # TRADE | WAIT | NO_TRADE
@@ -116,15 +117,61 @@ class EmpiricalExpectancyEngine:
         If no trades or insufficient evidence exists, returns UNKNOWN probability and marks
         INSUFFICIENT_STATISTICAL_EVIDENCE without fabricating prior win rates or fake EV.
         """
+        evidence_source = "EXACT_SYMBOL_SETUP_SESSION_REGIME"
         if trades is None and (symbol or setup_family):
             try:
                 from app.services.experience_memory import experience_memory
+                # 1. Exact: Symbol + Setup + Session + Regime
                 exps = experience_memory.query_experiences(
                     symbol=symbol,
                     setup_family=setup_family,
                     session=session,
                     regime=regime
                 )
+                evidence_source = "EXACT_SYMBOL_SETUP_SESSION_REGIME"
+
+                # 2. Broad: Symbol + Setup + Regime
+                if len(exps) < 20:
+                    broad_exps = experience_memory.query_experiences(
+                        symbol=symbol,
+                        setup_family=setup_family,
+                        session="ALL",
+                        regime=regime
+                    )
+                    if len(broad_exps) >= 20:
+                        exps = broad_exps
+                        evidence_source = "SYMBOL_SETUP_REGIME"
+
+                # 3. Asset Class: Asset class + Setup + Regime
+                if len(exps) < 20:
+                    from app.services.broker_profiles import get_broker_profile
+                    spec = get_broker_profile("exness").get_symbol_spec(symbol or "")
+                    asset_class = spec.asset_class
+                    asset_symbols = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD"] if asset_class == "forex" else [symbol]
+                    asset_exps = []
+                    for asym in asset_symbols:
+                        asset_exps.extend(experience_memory.query_experiences(
+                            symbol=asym,
+                            setup_family=setup_family,
+                            session="ALL",
+                            regime=regime
+                        ))
+                    if len(asset_exps) >= 20:
+                        exps = asset_exps
+                        evidence_source = "ASSET_CLASS_SETUP_REGIME"
+
+                # 4. Global: Setup family across all instruments
+                if len(exps) < 20:
+                    global_exps = experience_memory.query_experiences(
+                        symbol="ALL",
+                        setup_family=setup_family,
+                        session="ALL",
+                        regime="ALL"
+                    )
+                    if len(global_exps) >= 20:
+                        exps = global_exps
+                        evidence_source = "GLOBAL_SETUP_FAMILY"
+
                 if exps:
                     trades = [e.model_dump() for e in exps]
             except Exception:
@@ -135,6 +182,7 @@ class EmpiricalExpectancyEngine:
             "setup_family": setup_family or "ALL",
             "session": session or "ALL",
             "regime": regime or "ALL",
+            "evidence_source": evidence_source,
             **(extra_metadata or {})
         }
 
@@ -157,6 +205,7 @@ class EmpiricalExpectancyEngine:
                 expectancy_r=0.0,
                 cost_adjusted_expectancy_r=0.0,
                 evidence_tier=SampleEvidenceTier.INSUFFICIENT,
+                evidence_source=evidence_source,
                 statistical_status="INSUFFICIENT_STATISTICAL_EVIDENCE",
                 has_statistical_edge=False,
                 recommended_action="WAIT",
@@ -282,6 +331,7 @@ class EmpiricalExpectancyEngine:
             average_mae_r=round(avg_mae, 2),
             average_duration_bars=round(avg_duration, 1),
             evidence_tier=tier,
+            evidence_source=evidence_source,
             statistical_status=stat_status,
             has_statistical_edge=has_edge,
             recommended_action=rec_action,

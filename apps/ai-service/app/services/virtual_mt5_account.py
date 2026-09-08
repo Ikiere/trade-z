@@ -65,7 +65,9 @@ class VirtualMT5Account:
         custom_leverage: Optional[float] = None
     ):
         self.broker = broker_profile or EXNESS_PROFILE
+        self.leverage_source = "CUSTOM_OVERRIDE" if custom_leverage is not None else "BROKER_PROFILE"
         self.leverage = custom_leverage or self.broker.default_leverage
+        self.broker_profile_version = "2.1.0"
         self.initial_balance = round(float(initial_balance), 2)
         self.balance = self.initial_balance
         self.equity = self.initial_balance
@@ -458,10 +460,12 @@ class VirtualMT5Account:
             "tp": pos.take_profit,
             "take_profit": pos.take_profit,
             "initial_risk_money": risk_money,
+            "risk_dollars": risk_money,
             "initial_risk_r": 1.0,
             "gross_pnl": gross_pnl,
             "commission": pos.commission,
             "swap": pos.swap,
+            "fees": round(pos.commission + abs(pos.swap), 2),
             "spread": pos.entry_spread,
             "spread_cost": pos.entry_spread_cost,
             "entry_bid": pos.entry_bid,
@@ -519,6 +523,8 @@ class VirtualMT5Account:
             "total_commission": round(self.total_commission, 2),
             "total_swap": round(self.total_swap, 2),
             "leverage": self.leverage,
+            "leverage_source": self.leverage_source,
+            "broker_profile_version": self.broker_profile_version,
             "peak_equity": round(self.peak_equity, 2),
             "max_drawdown_dollars": round(self.max_drawdown_dollars, 2),
             "max_drawdown_pct": round(self.max_drawdown_pct, 2),

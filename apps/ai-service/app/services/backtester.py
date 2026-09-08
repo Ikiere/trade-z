@@ -54,21 +54,28 @@ class AIBacktester:
         bars: int = 150,
         risk_reward: float = 2.5,
         min_confidence: float = 65.0,
-        custom_candles: Optional[pd.DataFrame] = None
+        initial_balance: float = 1000.0,
+        custom_candles: Optional[pd.DataFrame] = None,
+        allow_synthetic: bool = False
     ) -> Dict[str, Any]:
         """
         Executes a historical event-driven backtest using the authoritative EventDrivenSimulator.
+        Propagates initial_balance directly to VirtualMT5Account.
         """
         from app.services.event_driven_simulator import event_driven_simulator
         sym = symbol.upper().replace("/", "")
         custom_map = {sym: custom_candles} if custom_candles is not None else None
         res = event_driven_simulator.run_simulation(
             symbols=[sym],
-            initial_balance=10000.0,
+            initial_balance=initial_balance,
             timeframe=timeframe,
             bars=bars,
-            custom_candles_map=custom_map
+            custom_candles_map=custom_map,
+            allow_synthetic=allow_synthetic
         )
+        if not res.get("success", False):
+            return res
+
         summary = res["summary"]
         return {
             "success": True,
@@ -93,13 +100,15 @@ class AIBacktester:
             "equity_curve": res["equity_curve"],
             "trades": res["trades"],
             "sentinel_audit": res.get("sentinel_audit", {}),
-            "promotion_gate": res.get("promotion_gate", "NEEDS_REFINEMENT")
+            "promotion_gate": res.get("promotion_gate", "NEEDS_REFINEMENT"),
+            "data_source": res.get("data_source"),
+            "data_quality_status": res.get("data_quality_status")
         }
 
     def teach_ai(self, backtest_results: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyzes winning vs losing setups in backtest to optimize AI engine weights
-        and establish strict rule filters that boost signal accuracy.
+        and compute observed empirical statistics without artificial projections.
         """
         trades = backtest_results.get("trades", [])
         if not trades or len(trades) < 3:
@@ -110,33 +119,44 @@ class AIBacktester:
 
         factor_stats = {
             "higher_tf_aligned": {"wins": 0, "total": 0},
-            "structure_bos": {"wins": 0, "total": 0},
             "order_block_present": {"wins": 0, "total": 0},
             "liquidity_sweep": {"wins": 0, "total": 0},
-            "momentum_aligned": {"wins": 0, "total": 0},
-            "trend_aligned": {"wins": 0, "total": 0},
+            "displacement_strong": {"wins": 0, "total": 0},
+            "session_overlap": {"wins": 0, "total": 0},
+            "fvg_confluence": {"wins": 0, "total": 0}
         }
 
+        # Tabulate factor confluences from trades
         for t in trades:
-            is_win = t["outcome"] == "WIN"
-            for f_key, val in t.get("factors", {}).items():
-                if f_key in factor_stats and val:
-                    factor_stats[f_key]["total"] += 1
-                    if is_win:
-                        factor_stats[f_key]["wins"] += 1
+            is_win = (t.get("outcome") == "WIN") or (t.get("net_pnl", 0) > 0)
+            reasons = t.get("reason_codes", []) + [t.get("exit_reason", "")]
+            desc = " ".join(reasons).lower()
 
-        insights = []
+            factor_stats["higher_tf_aligned"]["total"] += 1
+            if is_win:
+                factor_stats["higher_tf_aligned"]["wins"] += 1
+
+            if "order_block" in desc or "ob" in desc:
+                factor_stats["order_block_present"]["total"] += 1
+                if is_win:
+                    factor_stats["order_block_present"]["wins"] += 1
+
+            if "sweep" in desc or "liquidity" in desc:
+                factor_stats["liquidity_sweep"]["total"] += 1
+                if is_win:
+                    factor_stats["liquidity_sweep"]["wins"] += 1
+
         optimized_weights = {
             "structure": 0.20,
-            "higher_timeframe": 0.15,
             "liquidity": 0.15,
             "zones": 0.15,
-            "fundamentals": 0.10,
+            "higher_timeframe": 0.15,
+            "momentum": 0.10,
             "volume": 0.10,
-            "trend_quality": 0.05,
-            "momentum": 0.05,
-            "volatility": 0.05
+            "risk": 0.15
         }
+
+        insights = []
 
         # Analyze factor win rates
         for f_key, data in factor_stats.items():
@@ -159,8 +179,25 @@ class AIBacktester:
         tot = sum(optimized_weights.values())
         normalized_weights = {k: round(v / tot, 3) for k, v in optimized_weights.items()}
 
-        current_win_rate = backtest_results.get("summary", {}).get("win_rate", 55.0)
-        projected_win_rate = min(92.0, current_win_rate + 12.5)
+        total_trades = len(trades)
+        wins = sum(1 for t in trades if t.get("outcome") == "WIN" or t.get("net_pnl", 0) > 0)
+        current_win_rate = round(wins / max(1, total_trades) * 100.0, 1)
+
+        # Statistical Status & Wilson Confidence Interval (Zero Fabricated Projections)
+        if total_trades < 20:
+            statistical_status = "INSUFFICIENT_EVIDENCE"
+            ci_lower = None
+            ci_upper = None
+        else:
+            statistical_status = "STATISTICALLY_EVALUATED"
+            p = wins / total_trades
+            z = 1.96
+            denom = 1 + (z**2 / total_trades)
+            center = (p + (z**2 / (2 * total_trades))) / denom
+            spread = (z * math.sqrt((p * (1 - p) / total_trades) + (z**2 / (4 * total_trades**2)))) / denom
+            ci_lower = round(max(0.0, center - spread) * 100.0, 1)
+            ci_upper = round(min(1.0, center + spread) * 100.0, 1)
+
         target_pair = backtest_results.get("pair") or "EURUSD"
         final_insights = insights if insights else [
             "Enforced strict 1:2.5 minimum risk-to-reward ratio for high expectancy.",
@@ -179,8 +216,11 @@ class AIBacktester:
         return {
             "success": True,
             "pair": target_pair,
+            "sample_size": total_trades,
+            "observed_win_rate": current_win_rate,
             "current_win_rate": current_win_rate,
-            "projected_win_rate": round(projected_win_rate, 1),
+            "confidence_interval_95": {"lower": ci_lower, "upper": ci_upper} if ci_lower is not None else None,
+            "statistical_status": statistical_status,
             "optimized_weights": normalized_weights,
             "min_confidence_recommended": 72.0,
             "insights": final_insights,

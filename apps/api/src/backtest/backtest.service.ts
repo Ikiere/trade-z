@@ -158,12 +158,14 @@ export class BacktestService {
     bars?: number;
     riskReward?: number;
     minConfidence?: number;
+    initialBalance?: number;
   }) {
     const pair = (params.pair || 'EURUSD').toUpperCase();
     const timeframe = params.timeframe || '15m';
     const bars = Number(params.bars) || 150;
     const riskReward = Number(params.riskReward) || 2.5;
     const minConfidence = Number(params.minConfidence) || 65.0;
+    const initialBalance = Number(params.initialBalance) || 1000.0;
 
     // 1. Query the canonical Python Event-Driven Simulator microservice
     try {
@@ -176,6 +178,7 @@ export class BacktestService {
           bars,
           risk_reward: riskReward,
           min_confidence: minConfidence,
+          initial_balance: initialBalance,
         }),
       });
 

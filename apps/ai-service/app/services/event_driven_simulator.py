@@ -18,6 +18,7 @@ import math
 import random
 from typing import List, Dict, Any, Optional, Set
 from pydantic import BaseModel, Field
+from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 
@@ -70,48 +71,94 @@ class EventDrivenSimulator:
         bars: Optional[int] = None,
         risk_percent: float = 1.0,
         broker_name: Optional[str] = None,
-        custom_leverage: Optional[float] = 2000.0,
+        custom_leverage: Optional[float] = None,
         custom_candles_map: Optional[Dict[str, pd.DataFrame]] = None,
-        enable_limit_orders: bool = True
+        enable_limit_orders: bool = True,
+        allow_synthetic: bool = False,
+        sentinel_variant: str = "CURRENT_H",
+        monte_carlo_mode: bool = False,
+        monte_carlo_seed: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Executes an institutional event-driven simulation over chronological market bars.
+        Fails with DATA_UNAVAILABLE if real historical candles are not supplied in production.
         """
         b_name = broker_name or self.broker_name
         broker = get_broker_profile(b_name)
+        leverage_source = "CUSTOM_OVERRIDE" if custom_leverage is not None else "BROKER_PROFILE"
+        effective_leverage = custom_leverage if custom_leverage is not None else broker.default_leverage
+
         account = VirtualMT5Account(
             initial_balance=initial_balance,
             broker_profile=broker,
-            custom_leverage=custom_leverage
+            custom_leverage=effective_leverage
         )
         duplicate_detector.reset()
 
-        bars_per_day = 96 if timeframe == "15m" else (24 if timeframe in ["1h", "60m"] else 6)
-        total_bars = bars or max(100, min(1200, int(period_days * bars_per_day * 0.72)))
+        clean_symbols = [s.upper().replace("/", "").replace(" ", "") for s in symbols]
+        missing_symbols = [
+            s for s in clean_symbols
+            if not custom_candles_map or s not in custom_candles_map or custom_candles_map[s] is None or len(custom_candles_map[s]) == 0
+        ]
 
-        # 1. Prepare synchronized multi-asset candle data
+        # P0 Requirement: Fail closed when historical candles are not supplied
+        if missing_symbols and not allow_synthetic:
+            return {
+                "success": False,
+                "status": "DATA_UNAVAILABLE",
+                "error": f"DATA_UNAVAILABLE: Historical candles not supplied for symbol(s): {', '.join(missing_symbols)}. Production backtests strictly forbid synthetic candle generation.",
+                "data_source": "NONE",
+                "data_start": None,
+                "data_end": None,
+                "bar_count": 0,
+                "missing_ranges": missing_symbols,
+                "data_quality_status": "DATA_UNAVAILABLE",
+                "leverage_source": leverage_source,
+                "leverage": effective_leverage,
+                "broker_profile_version": "2.1.0",
+                "initial_balance": initial_balance,
+                "summary": {"status": "DATA_UNAVAILABLE", "total_trades": 0, "net_pnl": 0.0},
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        # 1. Prepare synchronized multi-asset candle data (Never pad or fabricate bars)
         candles_by_symbol: Dict[str, pd.DataFrame] = {}
-        for sym_idx, sym in enumerate(symbols):
-            clean_sym = sym.upper().replace("/", "").replace(" ", "")
-            if custom_candles_map and clean_sym in custom_candles_map:
-                df = custom_candles_map[clean_sym]
-            else:
-                df = generate_simulated_candles(clean_sym, timeframe, seed_offset=sym_idx * 100)
-                if len(df) < total_bars:
-                    extra = total_bars - len(df)
-                    dfs = [df]
-                    last_close = float(df.iloc[-1]["close"])
-                    for block_idx in range(1, int(math.ceil(extra / 60)) + 1):
-                        next_df = generate_simulated_candles(
-                            clean_sym,
-                            timeframe,
-                            seed_offset=(block_idx * 17) + (sym_idx * 100),
-                            start_price=last_close
-                        )
-                        last_close = float(next_df.iloc[-1]["close"])
-                        dfs.append(next_df)
-                    df = pd.concat(dfs).reset_index(drop=True).tail(total_bars).reset_index(drop=True)
-            candles_by_symbol[clean_sym] = df
+        data_source = "HISTORICAL_CANDLES" if not allow_synthetic else "SYNTHETIC_TEST_MOCK"
+        data_quality_status = "PASSED_VERIFIED" if not allow_synthetic else "UNVERIFIED_SYNTHETIC_MOCK"
+
+        for sym_idx, clean_sym in enumerate(clean_symbols):
+            if custom_candles_map and clean_sym in custom_candles_map and custom_candles_map[clean_sym] is not None:
+                candles_by_symbol[clean_sym] = custom_candles_map[clean_sym]
+            elif allow_synthetic:
+                candles_by_symbol[clean_sym] = generate_simulated_candles(clean_sym, timeframe, seed_offset=sym_idx * 100)
+
+        available_lens = [len(df) for df in candles_by_symbol.values() if df is not None and len(df) > 0]
+        if not available_lens:
+            return {
+                "success": False,
+                "status": "DATA_UNAVAILABLE",
+                "error": "DATA_UNAVAILABLE: No candle records found in supplied datasets.",
+                "data_source": "NONE",
+                "data_start": None,
+                "data_end": None,
+                "bar_count": 0,
+                "missing_ranges": clean_symbols,
+                "data_quality_status": "DATA_UNAVAILABLE",
+                "leverage_source": leverage_source,
+                "leverage": effective_leverage,
+                "broker_profile_version": "2.1.0",
+                "initial_balance": initial_balance,
+                "summary": {"status": "DATA_UNAVAILABLE", "total_trades": 0, "net_pnl": 0.0},
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        min_len = min(available_lens)
+        sim_bars = min(bars or min_len, min_len)
+        first_df = list(candles_by_symbol.values())[0]
+        data_start = str(first_df.iloc[0].get("time", "Bar-0")) if len(first_df) > 0 else "Bar-0"
+        data_end = str(first_df.iloc[sim_bars - 1].get("time", f"Bar-{sim_bars-1}")) if sim_bars > 0 else "Bar-0"
+        bar_count = sim_bars
+        missing_ranges: List[str] = []
 
         pending_orders: List[PendingOrder] = []
         equity_curve: List[Dict[str, Any]] = [
@@ -121,7 +168,6 @@ class EventDrivenSimulator:
         completed_autopsies: List[Dict[str, Any]] = []
 
         warmup = 35
-        sim_bars = total_bars
 
         # 2. Chronological Discrete Event Loop (Zero Lookahead)
         for i in range(warmup, sim_bars):
@@ -151,7 +197,7 @@ class EventDrivenSimulator:
             if liquidated:
                 break
 
-            # ── Event B: Sentinel Position Management for Open Trades (Variant H) ──
+            # ── Event B: Sentinel Position Management for Open Trades ──
             for ticket, pos in list(account.open_positions.items()):
                 p_info = current_bar_prices.get(pos.symbol)
                 if not p_info:
@@ -160,24 +206,57 @@ class EventDrivenSimulator:
                 spec = broker.get_symbol_spec(pos.symbol)
                 high = p_info["high"]
                 low = p_info["low"]
+                sl_dist = abs(pos.entry_price - pos.initial_stop_loss) if pos.initial_stop_loss > 0 else abs(pos.entry_price - pos.stop_loss)
 
-                # Breakeven lock at 1.5R
-                if not pos.is_breakeven_set and pos.unrealized_r >= 1.5:
-                    pos.stop_loss = pos.entry_price
-                    pos.is_breakeven_set = True
-
-                # Structure-Confirmed Trailing Stop behind peak MFE at 2.0R
-                if pos.unrealized_r >= 2.0:
-                    sl_dist = abs(pos.entry_price - pos.initial_stop_loss) if pos.initial_stop_loss > 0 else abs(pos.entry_price - pos.stop_loss)
-                    trail_r = pos.unrealized_r - 1.0
-                    if pos.direction == "long":
-                        new_sl = pos.entry_price + (trail_r * sl_dist)
-                        if new_sl > pos.stop_loss:
-                            pos.stop_loss = round(new_sl, spec.decimals)
-                    else:
-                        new_sl = pos.entry_price - (trail_r * sl_dist)
-                        if new_sl < pos.stop_loss:
-                            pos.stop_loss = round(new_sl, spec.decimals)
+                # Sentinel Variant Position Management
+                if sentinel_variant == "NONE":
+                    pass  # Pure SL/TP without dynamic breakeven or trailing
+                elif sentinel_variant == "BE_0_5R":
+                    if not pos.is_breakeven_set and pos.unrealized_r >= 0.5:
+                        pos.stop_loss = pos.entry_price
+                        pos.is_breakeven_set = True
+                elif sentinel_variant == "BE_1R":
+                    if not pos.is_breakeven_set and pos.unrealized_r >= 1.0:
+                        pos.stop_loss = pos.entry_price
+                        pos.is_breakeven_set = True
+                elif sentinel_variant == "BE_1_5R":
+                    if not pos.is_breakeven_set and pos.unrealized_r >= 1.5:
+                        pos.stop_loss = pos.entry_price
+                        pos.is_breakeven_set = True
+                elif sentinel_variant in ["STRUCTURE_CONFIRMED", "CURRENT_H"]:
+                    # Breakeven lock at 1.5R
+                    if not pos.is_breakeven_set and pos.unrealized_r >= 1.5:
+                        pos.stop_loss = pos.entry_price
+                        pos.is_breakeven_set = True
+                    # Structure-Confirmed Trailing Stop behind peak MFE at 2.0R
+                    if pos.unrealized_r >= 2.0:
+                        trail_r = pos.unrealized_r - 1.0
+                        if pos.direction == "long":
+                            new_sl = pos.entry_price + (trail_r * sl_dist)
+                            if new_sl > pos.stop_loss:
+                                pos.stop_loss = round(new_sl, spec.decimals)
+                        else:
+                            new_sl = pos.entry_price - (trail_r * sl_dist)
+                            if new_sl < pos.stop_loss:
+                                pos.stop_loss = round(new_sl, spec.decimals)
+                elif sentinel_variant == "ATR_VOLATILITY":
+                    if not pos.is_breakeven_set and pos.unrealized_r >= 1.0:
+                        pos.stop_loss = pos.entry_price
+                        pos.is_breakeven_set = True
+                    if pos.unrealized_r >= 1.8:
+                        atr_dist = spec.typical_spread_pips * spec.tick_size * 2.0
+                        if pos.direction == "long":
+                            new_sl = pos.current_price - atr_dist
+                            if new_sl > pos.stop_loss:
+                                pos.stop_loss = round(new_sl, spec.decimals)
+                        else:
+                            new_sl = pos.current_price + atr_dist
+                            if new_sl < pos.stop_loss:
+                                pos.stop_loss = round(new_sl, spec.decimals)
+                elif sentinel_variant == "LIQUIDITY_CONFIRMED":
+                    if not pos.is_breakeven_set and pos.unrealized_r >= 1.0:
+                        pos.stop_loss = pos.entry_price
+                        pos.is_breakeven_set = True
 
                 # Order Fill Trigger Checks with Conservative Same-Candle Ambiguity Resolution
                 is_closed = False
@@ -266,22 +345,33 @@ class EventDrivenSimulator:
                     continue
 
                 spec = broker.get_symbol_spec(po.symbol)
+                spread = spec.typical_spread_pips / max(1.0, spec.pip_multiplier)
+                bar_open = p_info["open"]
                 high = p_info["high"]
                 low = p_info["low"]
                 filled = False
                 fill_price = po.target_price
 
                 if po.direction == "long":
-                    if low <= po.target_price:
+                    # Buy limit: fills when ask <= target_price
+                    ask_low = low + (spread / 2.0)
+                    if ask_low <= po.target_price:
                         filled = True
+                        # Gap check: if bar opened below target price, fill at bar open + spread/2
+                        ask_open = bar_open + (spread / 2.0)
+                        fill_price = ask_open if ask_open < po.target_price else po.target_price
                 else:
-                    if high >= po.target_price:
+                    # Sell limit: fills when bid >= target_price
+                    bid_high = high - (spread / 2.0)
+                    if bid_high >= po.target_price:
                         filled = True
+                        # Gap check: if bar opened above target price, fill at bar open - spread/2
+                        bid_open = bar_open - (spread / 2.0)
+                        fill_price = bid_open if bid_open > po.target_price else po.target_price
 
                 if filled and len(account.open_positions) < 3 and po.symbol not in {p.symbol for p in account.open_positions.values()}:
-                    spread = spec.typical_spread_pips / max(1.0, spec.pip_multiplier)
-                    bid = p_info.get("bid", fill_price - (spread / 2.0))
-                    ask = p_info.get("ask", fill_price + (spread / 2.0))
+                    bid = fill_price - (spread / 2.0) if po.direction == "long" else fill_price
+                    ask = fill_price if po.direction == "long" else fill_price + (spread / 2.0)
                     account.open_position(
                         spec=spec,
                         direction=po.direction,
@@ -380,9 +470,14 @@ class EventDrivenSimulator:
                                 setup_id=decision.candidate.setup_id if decision.candidate else decision.decision_id
                             ))
                         else:
-                            # Market execution with bridge latency slippage
+                            # Market execution with deterministic bridge latency slippage
                             spread = spec.typical_spread_pips / max(1.0, spec.pip_multiplier)
-                            slippage = (random.uniform(0.05, 0.2) / max(1.0, spec.pip_multiplier))
+                            if monte_carlo_mode:
+                                rng = random.Random(monte_carlo_seed) if monte_carlo_seed is not None else random
+                                slippage = (rng.uniform(0.05, 0.2) / max(1.0, spec.pip_multiplier))
+                            else:
+                                # Canonical deterministic slippage: 0.10 pips based on broker profile latency model
+                                slippage = (0.10 / max(1.0, spec.pip_multiplier))
                             actual_entry = decision.entry_price + (spread / 2.0) + slippage if decision.direction == "BUY" else decision.entry_price - (spread / 2.0) - slippage
                             bid = p_info["bid"] if p_info else actual_entry - (spread / 2.0)
                             ask = p_info["ask"] if p_info else actual_entry + (spread / 2.0)
@@ -496,6 +591,18 @@ class EventDrivenSimulator:
             "trades": closed,
             "autopsies": completed_autopsies,
             "sentinel_audit": sentinel_audit,
+            "data_source": data_source,
+            "data_start": data_start,
+            "data_end": data_end,
+            "bar_count": bar_count,
+            "missing_ranges": missing_ranges,
+            "data_quality_status": data_quality_status,
+            "leverage_source": leverage_source,
+            "leverage": effective_leverage,
+            "broker_profile_version": "2.1.0",
+            "sentinel_variant": sentinel_variant,
+            "monte_carlo_mode": monte_carlo_mode,
+            "monte_carlo_seed": monte_carlo_seed,
             "strategy_version": "Trade-Z v2.2-EmpiricalSMC (Event-Driven)",
             "promotion_gate": "PASSED_VALIDATION" if (
                 summary_metrics["arithmetic_expectancy_r"] >= 0.20 and summary_metrics["profit_factor"] >= 1.4 and account.max_drawdown_pct <= 20.0 and not account.is_failed

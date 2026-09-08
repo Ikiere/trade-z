@@ -25,6 +25,7 @@ from app.services.asset_eligibility import evaluate_instrument_eligibility, Elig
 from app.services.portfolio_risk import portfolio_risk_engine, PortfolioPosition
 from app.services.broker_profiles import get_broker_profile, BrokerProfile, SymbolSpec
 from app.services.reviewers.comparative_evaluator import comparative_evaluator, ComparativeAnalysisResult
+from app.services.market_context_resolver import MarketContextResolver, MarketContext
 
 
 class ExecutionMode(str, Enum):
@@ -65,6 +66,11 @@ class TradingDecision(BaseModel):
     candidate: Optional[CandidateSetup] = None
     eligibility: Optional[EligibilityResult] = None
     timestamp: str = ""
+    market_context_version: str = "2.1.0"
+    session: str = "LONDON"
+    regime: str = "trending"
+    volatility_regime: str = "NORMAL"
+    htf_context: str = "NEUTRAL"
 
 
 class UnifiedStrategyEngine:
@@ -130,16 +136,25 @@ class UnifiedStrategyEngine:
                 reason_codes=["DATA_INTEGRITY_INSUFFICIENT_BARS"]
             )
 
+        # Enforce zero lookahead: slice dataframe strictly to current_bar_index if specified
+        if current_bar_index is not None and 0 < current_bar_index < len(df) - 1:
+            effective_df = df.iloc[:current_bar_index + 1].copy().reset_index(drop=True)
+        else:
+            effective_df = df
+
+        # 1b. Deterministic Market Context Resolution (Zero Lookahead)
+        market_ctx = MarketContextResolver.resolve(effective_df, htf_df=higher_df)
+
         # 2. Deterministic SMC Setup Detection (Causal)
         candidates = detect_all_setup_families(
             symbol=clean_sym,
             timeframe=timeframe,
-            df=df,
+            df=effective_df,
             higher_df=higher_df
         )
 
         if not candidates:
-            current_close = float(df.iloc[-1]["close"])
+            current_close = float(effective_df.iloc[-1]["close"])
             return TradingDecision(
                 decision_id=f"DEC-{clean_sym}-NO_SETUP",
                 action=DecisionAction.NO_TRADE,
@@ -159,7 +174,12 @@ class UnifiedStrategyEngine:
                 evidence_tier="INSUFFICIENT",
                 sample_size=0,
                 is_eligible=True,
-                reason_codes=["NO_SMC_STRUCTURAL_SETUP_DETECTED"]
+                reason_codes=["NO_SMC_STRUCTURAL_SETUP_DETECTED"],
+                market_context_version=market_ctx.market_context_version,
+                session=market_ctx.session,
+                regime=market_ctx.regime,
+                volatility_regime=market_ctx.volatility_regime,
+                htf_context=market_ctx.htf_context
             )
 
         # Filter viable candidates
@@ -177,8 +197,8 @@ class UnifiedStrategyEngine:
             emp = empirical_expectancy_engine.calculate_expectancy(
                 symbol=clean_sym,
                 setup_family=c.setup_family,
-                session="LONDON",
-                regime="trending",
+                session=market_ctx.session,
+                regime=market_ctx.regime,
                 spread_cost_r=spread_cost_r
             )
             c.expected_value = emp.empirical_ev_r
@@ -400,7 +420,12 @@ class UnifiedStrategyEngine:
             risk_flags=risk_flags,
             institutional_audit=audit_dict,
             candidate=chosen_cand,
-            eligibility=chosen_elig
+            eligibility=chosen_elig,
+            market_context_version=market_ctx.market_context_version,
+            session=market_ctx.session,
+            regime=market_ctx.regime,
+            volatility_regime=market_ctx.volatility_regime,
+            htf_context=market_ctx.htf_context
         )
 
     def evaluate_multi_asset(

@@ -14,14 +14,20 @@ class TradeAutopsy(BaseModel):
     outcome: str  # WIN | LOSS | BREAKEVEN
     root_cause: str  # One of the 15 taxonomy codes
     cause_description: str
-    mfe_r: float
-    mae_r: float
-    r_multiple: float
-    net_pnl: float
-    exit_reason: str
+    clinical_summary: str = ""
+    mfe_r: float = 0.0
+    mae_r: float = 0.0
+    mfe_pips: float = 0.0
+    mae_pips: float = 0.0
+    r_multiple: float = 0.0
+    net_pnl: float = 0.0
+    pnl_dollars: float = 0.0
+    pnl_r: float = 0.0
+    exit_reason: str = ""
     contributing_layers: List[str] = []
-    recommended_adjustment: str
-    is_statistical_acceptable: bool
+    recommended_adjustment: str = ""
+    is_statistical_acceptable: bool = True
+    sentinel_action: Optional[str] = None
 
 
 class AutopsyEngine:
@@ -38,11 +44,14 @@ class AutopsyEngine:
     ) -> TradeAutopsy:
         ticket = trade_record.get("ticket", 0)
         outcome = trade_record.get("outcome", "LOSS")
-        r_mult = trade_record.get("r_multiple", 0.0)
-        net_pnl = trade_record.get("net_pnl", 0.0)
+        r_mult = float(trade_record.get("r_multiple", trade_record.get("pnl_r", 0.0)))
+        net_pnl = float(trade_record.get("net_pnl", trade_record.get("pnl_dollars", 0.0)))
         exit_reason = trade_record.get("exit_reason", "")
-        mfe_r = trade_record.get("mfe_r", 0.0)
-        mae_r = trade_record.get("mae_r", 0.0)
+        mfe_r = float(trade_record.get("mfe_r", 0.0))
+        mae_r = float(trade_record.get("mae_r", 0.0))
+        mfe_pips = float(trade_record.get("mfe_pips", 0.0))
+        mae_pips = float(trade_record.get("mae_pips", 0.0))
+        sentinel_action = trade_record.get("sentinel_action", exit_reason)
         factors = trade_record.get("factors", {})
 
         contributing = []
@@ -73,30 +82,43 @@ class AutopsyEngine:
                 outcome="WIN",
                 root_cause=root_cause,
                 cause_description=desc,
+                clinical_summary=desc,
                 mfe_r=mfe_r,
                 mae_r=mae_r,
+                mfe_pips=mfe_pips,
+                mae_pips=mae_pips,
                 r_multiple=r_mult,
                 net_pnl=net_pnl,
+                pnl_dollars=net_pnl,
+                pnl_r=r_mult,
                 exit_reason=exit_reason,
                 contributing_layers=contributing,
                 recommended_adjustment=adjustment,
-                is_statistical_acceptable=True
+                is_statistical_acceptable=True,
+                sentinel_action=sentinel_action
             )
 
         elif outcome == "BREAKEVEN":
+            desc = f"Sentinel locked SL to breakeven; position stopped out at scratch. (Peak MFE was {mfe_r:.1f}R)."
             return TradeAutopsy(
                 ticket=ticket,
                 outcome="BREAKEVEN",
                 root_cause="PREMATURE_OR_PROTECTIVE_BE",
-                cause_description=f"Sentinel locked SL to breakeven; position stopped out at scratch. (MFE was {mfe_r:.1f}R).",
+                cause_description=desc,
+                clinical_summary=desc,
                 mfe_r=mfe_r,
                 mae_r=mae_r,
+                mfe_pips=mfe_pips,
+                mae_pips=mae_pips,
                 r_multiple=r_mult,
                 net_pnl=net_pnl,
+                pnl_dollars=net_pnl,
+                pnl_r=r_mult,
                 exit_reason=exit_reason,
                 contributing_layers=contributing,
-                recommended_adjustment="Consider widening BE trigger from 1.0R to 1.5R to prevent stopout during liquidity retests.",
-                is_statistical_acceptable=True
+                recommended_adjustment="Consider widening BE trigger to prevent stopout during liquidity retests.",
+                is_statistical_acceptable=True,
+                sentinel_action=sentinel_action
             )
 
         else:
@@ -175,14 +197,20 @@ class AutopsyEngine:
                 outcome="LOSS",
                 root_cause=root_cause,
                 cause_description=desc,
+                clinical_summary=desc,
                 mfe_r=mfe_r,
                 mae_r=mae_r,
+                mfe_pips=mfe_pips,
+                mae_pips=mae_pips,
                 r_multiple=r_mult,
                 net_pnl=net_pnl,
+                pnl_dollars=net_pnl,
+                pnl_r=r_mult,
                 exit_reason=exit_reason,
                 contributing_layers=contributing,
                 recommended_adjustment=adjustment,
-                is_statistical_acceptable=stat_ok
+                is_statistical_acceptable=stat_ok,
+                sentinel_action=sentinel_action
             )
 
 

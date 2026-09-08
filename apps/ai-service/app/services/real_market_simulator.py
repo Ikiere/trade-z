@@ -197,7 +197,9 @@ class RealMarketSimulator:
                                 "has_news_event": False
                             }
                         )
-                        completed_autopsies.append(autopsy.model_dump())
+                        autopsy_dict = autopsy.model_dump()
+                        closed_rec["autopsy"] = autopsy_dict
+                        completed_autopsies.append(autopsy_dict)
 
                         # Store experience in Experience Memory
                         exp_rec = ExperienceRecord(
@@ -330,7 +332,9 @@ class RealMarketSimulator:
                     trade_record=closed_rec,
                     market_context={"session": "LONDON", "regime": "trending", "spread_pips": 1.0}
                 )
-                completed_autopsies.append(autopsy.model_dump())
+                autopsy_dict = autopsy.model_dump()
+                closed_rec["autopsy"] = autopsy_dict
+                completed_autopsies.append(autopsy_dict)
 
         # Compile Comprehensive Performance Report
         closed = account.closed_trades

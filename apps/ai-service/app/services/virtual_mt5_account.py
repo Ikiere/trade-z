@@ -18,6 +18,7 @@ class SimulatedPosition(BaseModel):
     volume: float
     entry_price: float
     current_price: float
+    initial_stop_loss: float = 0.0
     stop_loss: float
     take_profit: float
     required_margin: float
@@ -25,6 +26,8 @@ class SimulatedPosition(BaseModel):
     swap: float = 0.0
     floating_pnl: float = 0.0
     unrealized_r: float = 0.0
+    initial_sl_dist: float = 0.0
+    risk_unit: float = 1.0
     mfe_price: float = 0.0
     mae_price: float = 0.0
     mfe_r: float = 0.0
@@ -131,6 +134,9 @@ class VirtualMT5Account:
         self.free_margin = max(0.0, self.equity - self.used_margin)
         self.margin_level = (self.equity / self.used_margin * 100.0) if self.used_margin > 0 else 0.0
 
+        initial_sl_dist = abs(entry_price - stop_loss)
+        risk_unit = (initial_sl_dist / spec.tick_size) * spec.tick_value * volume if (initial_sl_dist > 0 and spec.tick_size > 0) else 1.0
+
         pos = SimulatedPosition(
             ticket=ticket,
             symbol=spec.symbol,
@@ -139,12 +145,15 @@ class VirtualMT5Account:
             volume=volume,
             entry_price=entry_price,
             current_price=entry_price,
+            initial_stop_loss=stop_loss,
             stop_loss=stop_loss,
             take_profit=take_profit,
             required_margin=req_margin,
             commission=commission,
             floating_pnl=0.0,
             unrealized_r=0.0,
+            initial_sl_dist=initial_sl_dist,
+            risk_unit=risk_unit,
             mfe_price=entry_price,
             mae_price=entry_price,
             mfe_r=0.0,
@@ -180,8 +189,8 @@ class VirtualMT5Account:
             pos.current_price = bid if pos.direction == "long" else ask
 
             spec = self.broker.get_symbol_spec(pos.symbol)
-            sl_dist = abs(pos.entry_price - pos.stop_loss)
-            risk_unit = (sl_dist / spec.tick_size) * spec.tick_value * pos.volume if (sl_dist > 0 and spec.tick_size > 0) else 1.0
+            sl_dist = pos.initial_sl_dist if pos.initial_sl_dist > 0 else max(0.0001, abs(pos.entry_price - pos.stop_loss))
+            risk_unit = pos.risk_unit if pos.risk_unit > 0 else 1.0
 
             # Calculate floating PnL
             if pos.direction == "long":
@@ -277,27 +286,43 @@ class VirtualMT5Account:
         if self.equity > self.peak_equity:
             self.peak_equity = self.equity
 
-        sl_dist = abs(pos.entry_price - pos.stop_loss)
-        risk_unit = (sl_dist / spec.tick_size) * spec.tick_value * pos.volume if (sl_dist > 0 and spec.tick_size > 0) else 1.0
+        initial_sl = pos.initial_stop_loss if pos.initial_stop_loss > 0 else pos.stop_loss
+        sl_dist = pos.initial_sl_dist if pos.initial_sl_dist > 0 else max(0.0001, abs(pos.entry_price - initial_sl))
+        risk_unit = pos.risk_unit if pos.risk_unit > 0 else ((sl_dist / spec.tick_size) * spec.tick_value * pos.volume if (sl_dist > 0 and spec.tick_size > 0) else 1.0)
         r_multiple = round(net_pnl / risk_unit, 2) if risk_unit > 0 else 0.0
+
+        pip_mult = spec.pip_multiplier if spec.pip_multiplier > 0 else (100.0 if "JPY" in pos.symbol else 10000.0)
+        pnl_pips = round(points / spec.pip_multiplier, 1) if spec.pip_multiplier > 0 else round(points, 1)
+        mfe_pips = round(abs(pos.mfe_price - pos.entry_price) * pip_mult, 1)
+        mae_pips = round(abs(pos.mae_price - pos.entry_price) * pip_mult, 1)
 
         outcome = "WIN" if net_pnl > 0 else ("BREAKEVEN" if net_pnl == 0 else "LOSS")
 
         record = {
+            "id": pos.ticket,
             "ticket": pos.ticket,
             "symbol": pos.symbol,
-            "direction": pos.direction,
+            "pair": pos.symbol,
+            "direction": "BUY" if pos.direction == "long" else "SELL",
             "volume": pos.volume,
+            "lot": pos.volume,
             "entry_price": pos.entry_price,
             "exit_price": exit_price,
-            "stop_loss": pos.stop_loss,
+            "stop_loss": initial_sl,
+            "initial_stop_loss": initial_sl,
+            "current_stop_loss": pos.stop_loss,
             "take_profit": pos.take_profit,
             "net_pnl": net_pnl,
+            "pnl_dollars": net_pnl,
             "r_multiple": r_multiple,
+            "pnl_r": r_multiple,
+            "pnl_pips": pnl_pips,
             "outcome": outcome,
             "exit_reason": exit_reason,
             "mfe_r": pos.mfe_r,
             "mae_r": pos.mae_r,
+            "mfe_pips": mfe_pips,
+            "mae_pips": mae_pips,
             "open_bar_index": pos.open_bar_index,
             "close_bar_index": close_bar_index,
             "duration_bars": close_bar_index - pos.open_bar_index,

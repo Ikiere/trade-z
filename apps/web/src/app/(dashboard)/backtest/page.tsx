@@ -42,12 +42,13 @@ import { getApiBaseUrl } from '@/lib/api';
 // ── Types ──
 interface TradeAutopsy {
   root_cause: string;
-  attribution_type: string;
-  clinical_summary: string;
-  mfe_pips: number;
-  mae_pips: number;
-  mfe_r: number;
-  mae_r: number;
+  attribution_type?: string;
+  cause_description?: string;
+  clinical_summary?: string;
+  mfe_pips?: number;
+  mae_pips?: number;
+  mfe_r?: number;
+  mae_r?: number;
   sentinel_action?: string;
   confluences_confirmed?: string[];
   execution_drift_detected?: boolean;
@@ -56,23 +57,34 @@ interface TradeAutopsy {
 interface SimulatedTrade {
   id: number;
   ticket?: number;
-  symbol: string;
-  direction: 'BUY' | 'SELL';
-  setup_family: string;
-  lot: number;
+  symbol?: string;
+  pair?: string;
+  direction: 'BUY' | 'SELL' | 'long' | 'short';
+  setup_family?: string;
+  lot?: number;
+  volume?: number;
   entry_price: number;
   stop_loss: number;
+  initial_stop_loss?: number;
+  current_stop_loss?: number;
   take_profit: number;
   exit_price: number;
   outcome: 'WIN' | 'LOSS' | 'BREAKEVEN';
-  pnl_pips: number;
-  pnl_dollars: number;
-  pnl_r: number;
-  bars_held: number;
-  equity_after: number;
+  pnl_pips?: number;
+  pnl_dollars?: number;
+  net_pnl?: number;
+  pnl_r?: number;
+  r_multiple?: number;
+  mfe_pips?: number;
+  mae_pips?: number;
+  mfe_r?: number;
+  mae_r?: number;
+  bars_held?: number;
+  equity_after?: number;
   balance_after?: number;
   margin_used?: number;
   margin_level_at_entry?: number;
+  exit_reason?: string;
   autopsy?: TradeAutopsy;
   factors?: Record<string, boolean>;
 }
@@ -1222,13 +1234,13 @@ export default function BacktestSimulatorPage() {
                             <td className="py-3 px-3 text-[#64748b]">#{trade.id}</td>
                             <td className="py-3 px-3">
                               <div className="flex items-center gap-1.5">
-                                <span className="font-bold text-white">{trade.symbol}</span>
+                                <span className="font-bold text-white">{trade.symbol || trade.pair}</span>
                                 <span
                                   className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
                                     isLong ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'
                                   }`}
                                 >
-                                  {trade.direction}
+                                  {String(trade.direction).toUpperCase()}
                                 </span>
                               </div>
                             </td>
@@ -1237,9 +1249,9 @@ export default function BacktestSimulatorPage() {
                                 {trade.setup_family || 'SMC Setup'}
                               </span>
                             </td>
-                            <td className="py-3 px-3 text-[#cbd5e1] font-semibold">{trade.lot || 0.01}</td>
+                            <td className="py-3 px-3 text-[#cbd5e1] font-semibold">{trade.lot ?? trade.volume ?? 0.01}</td>
                             <td className="py-3 px-3 font-semibold text-white">{trade.entry_price}</td>
-                            <td className="py-3 px-3 text-red-400 font-semibold">{trade.stop_loss}</td>
+                            <td className="py-3 px-3 text-red-400 font-semibold">{trade.initial_stop_loss || trade.stop_loss}</td>
                             <td className="py-3 px-3 text-[#94a3b8]">{trade.exit_price}</td>
                             <td className="py-3 px-3">
                               <span
@@ -1256,19 +1268,27 @@ export default function BacktestSimulatorPage() {
                             </td>
                             <td
                               className={`py-3 px-3 font-bold ${
-                                trade.pnl_dollars >= 0 ? 'text-emerald-400' : 'text-red-400'
+                                ((trade.pnl_dollars ?? trade.net_pnl) || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
                               }`}
                             >
-                              {trade.pnl_dollars >= 0
-                                ? `+$${trade.pnl_dollars.toFixed(2)}`
-                                : `-$${Math.abs(trade.pnl_dollars).toFixed(2)}`}
-                              <span className="text-[10px] text-[#64748b] ml-1">
-                                ({trade.pnl_r >= 0 ? `+${trade.pnl_r}R` : `${trade.pnl_r}R`})
-                              </span>
+                              {(() => {
+                                const pnl = trade.pnl_dollars ?? trade.net_pnl ?? 0;
+                                const r = trade.pnl_r ?? trade.r_multiple ?? 0;
+                                const safePnl = typeof pnl === 'number' && !isNaN(pnl) ? pnl : 0;
+                                const safeR = typeof r === 'number' && !isNaN(r) ? r : 0;
+                                return (
+                                  <>
+                                    {safePnl >= 0 ? `+$${safePnl.toFixed(2)}` : `-$${Math.abs(safePnl).toFixed(2)}`}
+                                    <span className="text-[10px] text-[#64748b] ml-1">
+                                      ({safeR >= 0 ? `+${safeR.toFixed(1)}R` : `${safeR.toFixed(1)}R`})
+                                    </span>
+                                  </>
+                                );
+                              })()}
                             </td>
                             <td className="py-3 px-3">
                               <span className="text-[10px] text-[#94a3b8] truncate max-w-[140px] block">
-                                {trade.autopsy?.root_cause || (isWin ? 'CLEAN_EXPANSION_TP' : 'NORMAL_STATISTICAL_LOSS')}
+                                {trade.autopsy?.root_cause || (isWin ? 'CLEAN_EXPANSION_TP' : isBE ? 'PROTECTIVE_BREAKEVEN' : 'NORMAL_STATISTICAL_LOSS')}
                               </span>
                             </td>
                             <td className="py-3 px-3 text-right">
@@ -1455,12 +1475,20 @@ export default function BacktestSimulatorPage() {
                     Net PnL ($ / R)
                   </span>
                   <span className="text-lg font-black">
-                    {inspectTrade.pnl_dollars >= 0
-                      ? `+$${inspectTrade.pnl_dollars.toFixed(2)}`
-                      : `-$${Math.abs(inspectTrade.pnl_dollars).toFixed(2)}`}{' '}
-                    <span className="text-xs font-normal">
-                      ({inspectTrade.pnl_r >= 0 ? `+${inspectTrade.pnl_r}R` : `${inspectTrade.pnl_r}R`})
-                    </span>
+                    {(() => {
+                      const pnl = inspectTrade.pnl_dollars ?? inspectTrade.net_pnl ?? 0;
+                      const r = inspectTrade.pnl_r ?? inspectTrade.r_multiple ?? 0;
+                      const safePnl = typeof pnl === 'number' && !isNaN(pnl) ? pnl : 0;
+                      const safeR = typeof r === 'number' && !isNaN(r) ? r : 0;
+                      return (
+                        <>
+                          {safePnl >= 0 ? `+$${safePnl.toFixed(2)}` : `-$${Math.abs(safePnl).toFixed(2)}`}{' '}
+                          <span className="text-xs font-normal">
+                            ({safeR >= 0 ? `+${safeR.toFixed(1)}R` : `${safeR.toFixed(1)}R`})
+                          </span>
+                        </>
+                      );
+                    })()}
                   </span>
                 </div>
               </div>
@@ -1473,7 +1501,14 @@ export default function BacktestSimulatorPage() {
                 </div>
                 <div className="p-2.5 bg-[#12121a] rounded-lg border border-[#1e293b]">
                   <span className="text-[9px] text-[#64748b] uppercase block">Stop Loss</span>
-                  <span className="text-red-400 font-bold">{inspectTrade.stop_loss}</span>
+                  <span className="text-red-400 font-bold">
+                    {inspectTrade.initial_stop_loss || inspectTrade.stop_loss}
+                    {inspectTrade.current_stop_loss && inspectTrade.current_stop_loss !== (inspectTrade.initial_stop_loss || inspectTrade.stop_loss) && (
+                      <span className="text-[9px] text-sky-400 block font-normal">
+                        (BE: {inspectTrade.current_stop_loss})
+                      </span>
+                    )}
+                  </span>
                 </div>
                 <div className="p-2.5 bg-[#12121a] rounded-lg border border-[#1e293b]">
                   <span className="text-[9px] text-[#64748b] uppercase block">Take Profit</span>
@@ -1494,13 +1529,13 @@ export default function BacktestSimulatorPage() {
                   <div className="flex justify-between items-center p-2 rounded bg-[#16161f] border border-[#1e293b]">
                     <span className="text-[#94a3b8]">Max Favorable (MFE):</span>
                     <span className="text-emerald-400 font-bold">
-                      +{inspectTrade.autopsy?.mfe_pips || 0} pips (+{inspectTrade.autopsy?.mfe_r || 0}R)
+                      +{inspectTrade.autopsy?.mfe_pips ?? inspectTrade.mfe_pips ?? (Number(inspectTrade.autopsy?.mfe_r ?? inspectTrade.mfe_r ?? 0) * 15).toFixed(1)} pips (+{inspectTrade.autopsy?.mfe_r ?? inspectTrade.mfe_r ?? 0}R)
                     </span>
                   </div>
                   <div className="flex justify-between items-center p-2 rounded bg-[#16161f] border border-[#1e293b]">
                     <span className="text-[#94a3b8]">Max Adverse (MAE):</span>
                     <span className="text-red-400 font-bold">
-                      -{inspectTrade.autopsy?.mae_pips || 0} pips (-{inspectTrade.autopsy?.mae_r || 0}R)
+                      -{inspectTrade.autopsy?.mae_pips ?? inspectTrade.mae_pips ?? (Number(inspectTrade.autopsy?.mae_r ?? inspectTrade.mae_r ?? 0) * 15).toFixed(1)} pips (-{inspectTrade.autopsy?.mae_r ?? inspectTrade.mae_r ?? 0}R)
                     </span>
                   </div>
                 </div>
@@ -1514,19 +1549,22 @@ export default function BacktestSimulatorPage() {
                   </span>
                   <span className="text-[10px] font-bold text-amber-400 bg-amber-500/15 px-2 py-0.5 rounded border border-amber-500/30">
                     {inspectTrade.autopsy?.root_cause ||
-                      (inspectTrade.outcome === 'WIN' ? 'CLEAN_EXPANSION_TP' : 'NORMAL_STATISTICAL_LOSS')}
+                      (inspectTrade.outcome === 'WIN' ? 'CLEAN_EXPANSION_TP' : inspectTrade.outcome === 'BREAKEVEN' ? 'PROTECTIVE_BREAKEVEN' : 'NORMAL_STATISTICAL_LOSS')}
                   </span>
                 </div>
                 <p className="text-xs text-[#cbd5e1] leading-relaxed">
                   {inspectTrade.autopsy?.clinical_summary ||
+                    inspectTrade.autopsy?.cause_description ||
                     (inspectTrade.outcome === 'WIN'
-                      ? 'The trade expanded directly to the liquidity target with no adverse drawdown.'
+                      ? 'The trade expanded directly to the liquidity target with minimal adverse drawdown.'
+                      : inspectTrade.outcome === 'BREAKEVEN'
+                      ? 'Sentinel moved stop loss to breakeven after initial expansion; market pulled back and closed position at scratch.'
                       : 'Standard expected loss. Setup had verified confluence; market underwent normal statistical variance.')}
                 </p>
-                {inspectTrade.autopsy?.sentinel_action && (
+                {(inspectTrade.autopsy?.sentinel_action || inspectTrade.exit_reason) && (
                   <div className="pt-2 flex items-center gap-2 text-[11px] text-sky-400">
                     <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>Sentinel Trade Manager: {inspectTrade.autopsy.sentinel_action}</span>
+                    <span>Sentinel Trade Manager: {inspectTrade.autopsy?.sentinel_action || inspectTrade.exit_reason}</span>
                   </div>
                 )}
               </div>

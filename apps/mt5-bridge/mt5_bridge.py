@@ -4,6 +4,7 @@ Runs locally on the trader's Windows laptop alongside the MT5 terminal.
 Provides a local REST API on port 5001 for real-time account sync and auto-execution.
 """
 
+import os
 import sys
 import json
 import traceback
@@ -130,34 +131,14 @@ def calculate_safe_lot_size(symbol_info, equity: float, sl_dist_points: float, r
     loss_at_min_volume = loss_per_1_lot * min_volume
 
     if loss_at_min_volume > max_risk_dollars:
-        # Micro-account rule: on small accounts ($20-$25), if min lot risks excessive equity (>20%), veto trade
-        if equity <= 25.0 and loss_at_min_volume > (equity * 0.20):
-            return {
-                "valid": False,
-                "lot": 0.0,
-                "error": f"Capital Shield Veto: Risk at min volume (${loss_at_min_volume:.2f}) exceeds small-account safety threshold",
-                "max_risk_dollars": max_risk_dollars,
-                "est_loss": loss_at_min_volume
-            }
-
-        max_affordable_loss = max(15.0, equity * 0.40)
-        if loss_at_min_volume <= max_affordable_loss and loss_at_min_volume <= equity:
-            return {
-                "valid": True,
-                "lot": min_volume,
-                "error": None,
-                "max_risk_dollars": max_risk_dollars,
-                "est_loss": loss_at_min_volume
-            }
-
-        # Only veto if the risk would severely impair or wipe the account
         return {
             "valid": False,
             "lot": 0.0,
             "error": (
-                f"Capital Shield Veto: Broker minimum volume ({min_volume}) with stop distance ({sl_dist_points:.5f}) "
-                f"would risk ${loss_at_min_volume:.2f} ({ (loss_at_min_volume / equity * 100.0):.1f}% of equity), "
-                f"exceeding maximum affordable risk on equity ${equity:.2f}."
+                f"UNEXECUTABLE_AT_BROKER_MIN_VOLUME: Capital Shield Veto: Broker minimum volume ({min_volume}) "
+                f"with stop distance ({sl_dist_points:.5f}) would risk ${loss_at_min_volume:.2f} "
+                f"({ (loss_at_min_volume / equity * 100.0):.1f}% of equity), "
+                f"exceeding approved risk budget (${max_risk_dollars:.2f})."
             ),
             "max_risk_dollars": max_risk_dollars,
             "est_loss": loss_at_min_volume
@@ -188,13 +169,27 @@ def calculate_safe_lot_size(symbol_info, equity: float, sl_dist_points: float, r
 
 class MT5BridgeHandler(BaseHTTPRequestHandler):
 
+    def _is_authorized(self) -> bool:
+        secret = os.environ.get('MT5_BRIDGE_SECRET')
+        if not secret:
+            # If no secret configured, strictly restrict execution calls to loopback / localhost
+            client_host = self.client_address[0]
+            return client_host in ['127.0.0.1', 'localhost', '::1']
+        
+        token = self.headers.get('X-Bridge-Token') or self.headers.get('Authorization', '').replace('Bearer ', '')
+        return token == secret
+
     def _send_json(self, status_code: int, data: dict):
         self.send_response(status_code)
         self.send_header('Content-Type', 'application/json')
-        # Allow cross-origin requests from the Trade-Z Web Dashboard
-        self.send_header('Access-Control-Allow-Origin', '*')
+        allowed_origin = os.environ.get('MT5_BRIDGE_ALLOWED_ORIGIN', 'http://localhost:3000')
+        req_origin = self.headers.get('Origin', '')
+        if req_origin in ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001', allowed_origin]:
+            self.send_header('Access-Control-Allow-Origin', req_origin)
+        else:
+            self.send_header('Access-Control-Allow-Origin', allowed_origin)
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Bridge-Token')
         self.end_headers()
         try:
             self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
@@ -203,9 +198,14 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
+        allowed_origin = os.environ.get('MT5_BRIDGE_ALLOWED_ORIGIN', 'http://localhost:3000')
+        req_origin = self.headers.get('Origin', '')
+        if req_origin in ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001', allowed_origin]:
+            self.send_header('Access-Control-Allow-Origin', req_origin)
+        else:
+            self.send_header('Access-Control-Allow-Origin', allowed_origin)
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Bridge-Token')
         self.end_headers()
 
     def do_GET(self):
@@ -230,6 +230,16 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
+
+        # Protect sensitive trading endpoints
+        protected_routes = [
+            '/order', '/trade', '/modify', '/modify_position', '/modify-position',
+            '/modify-sl-tp', '/close', '/close_position', '/close-position',
+            '/close-all', '/close_all', '/closeall', '/cancel', '/cancel_order', '/cancel-order'
+        ]
+        if path in protected_routes and not self._is_authorized():
+            self._send_json(401, {'success': False, 'error': 'Unauthorized: MT5 bridge authentication required'})
+            return
 
         content_length = int(self.headers.get('Content-Length', 0))
         body_data = {}
@@ -421,39 +431,80 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
                 continue
             pid = d.position_id
             if pid not in pos_map:
-                pos_map[pid] = {'entry': None, 'exit': None}
+                pos_map[pid] = {'entries': [], 'exits': []}
             if d.entry == 0:  # DEAL_ENTRY_IN
-                pos_map[pid]['entry'] = d
+                pos_map[pid]['entries'].append(d)
             elif d.entry in [1, 2]:  # DEAL_ENTRY_OUT or DEAL_ENTRY_INOUT
-                pos_map[pid]['exit'] = d
+                pos_map[pid]['exits'].append(d)
 
         closed_trades = []
         for pid, data in pos_map.items():
-            if data['exit']:
-                d_exit = data['exit']
-                d_entry = data['entry']
-                profit = round(d_exit.profit, 2)
-                exit_price = d_exit.price
-                entry_price = d_entry.price if d_entry else exit_price
-                direction = 'long' if (d_entry.type == 0 if d_entry else d_exit.type == 1) else 'short'
-                comment = str(d_exit.comment or '')
-                status = 'take_profit' if '[tp' in comment else 'stopped_out' if '[sl' in comment else ('won' if profit > 0 else 'closed')
+            if data['exits']:
+                exits = data['exits']
+                entries = data['entries']
+                total_entry_vol = sum(d.volume for d in entries)
+                total_exit_vol = sum(d.volume for d in exits)
+
+                entry_price = sum(d.price * d.volume for d in entries) / total_entry_vol if total_entry_vol > 0 else exits[0].price
+                exit_price = sum(d.price * d.volume for d in exits) / total_exit_vol if total_exit_vol > 0 else exits[-1].price
+
+                gross_profit = round(sum(d.profit for d in exits), 2)
+                total_commission = round(sum(d.commission for d in entries + exits), 2)
+                total_swap = round(sum(d.swap for d in entries + exits), 2)
+                total_fee = round(sum(getattr(d, 'fee', 0.0) for d in entries + exits), 2)
+                net_profit = round(gross_profit + total_commission + total_swap + total_fee, 2)
+
+                first_entry = entries[0] if entries else None
+                last_exit = exits[-1]
+                direction = 'long' if (first_entry.type == 0 if first_entry else last_exit.type == 1) else 'short'
+
+                deal_reason_code = getattr(last_exit, 'reason', -1)
+                comment = str(last_exit.comment or '')
+
+                # Authoritative deal reason mapping
+                # MT5: 4=SL, 5=TP, 6=SO (Stop Out), 0=CLIENT, 3=EXPERT
+                if deal_reason_code == 4 or '[sl' in comment.lower():
+                    status = 'stopped_out'
+                    exit_reason = 'STOP_LOSS'
+                elif deal_reason_code == 5 or '[tp' in comment.lower():
+                    status = 'take_profit'
+                    exit_reason = 'TAKE_PROFIT'
+                elif deal_reason_code == 6 or '[so' in comment.lower():
+                    status = 'stopped_out'
+                    exit_reason = 'STOP_OUT'
+                elif net_profit > 0:
+                    status = 'won'
+                    exit_reason = 'MANUAL_OR_EXPERT'
+                elif abs(net_profit) <= 0.01:
+                    status = 'breakeven'
+                    exit_reason = 'BREAKEVEN'
+                else:
+                    status = 'lost'
+                    exit_reason = 'MANUAL_OR_EXPERT'
 
                 closed_trades.append({
                     'ticket': pid,
-                    'symbol': d_exit.symbol,
-                    'pair': clean_symbol(d_exit.symbol),
+                    'position_id': pid,
+                    'symbol': last_exit.symbol,
+                    'pair': clean_symbol(last_exit.symbol),
                     'direction': direction,
-                    'volume': d_exit.volume,
-                    'entry_price': entry_price,
-                    'exit_price': exit_price,
-                    'profit': profit,
+                    'volume': round(total_exit_vol, 4),
+                    'entry_price': round(entry_price, 5),
+                    'exit_price': round(exit_price, 5),
+                    'gross_profit': gross_profit,
+                    'net_profit': net_profit,
+                    'profit': net_profit,
                     'status': status,
-                    'commission': round(d_exit.commission, 2),
-                    'swap': round(d_exit.swap, 2),
+                    'exit_reason': exit_reason,
+                    'deal_reason_code': deal_reason_code,
+                    'deals_count': len(entries) + len(exits),
+                    'partial_exits_count': max(0, len(exits) - 1),
+                    'commission': total_commission,
+                    'swap': total_swap,
+                    'fee': total_fee,
                     'comment': comment,
-                    'opened_at': datetime.fromtimestamp(d_entry.time, timezone.utc).isoformat() if d_entry else None,
-                    'closed_at': datetime.fromtimestamp(d_exit.time, timezone.utc).isoformat()
+                    'opened_at': datetime.fromtimestamp(first_entry.time, timezone.utc).isoformat() if first_entry else None,
+                    'closed_at': datetime.fromtimestamp(last_exit.time, timezone.utc).isoformat()
                 })
 
         closed_trades.sort(key=lambda x: x.get('closed_at') or '', reverse=True)
@@ -660,24 +711,20 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
 
         lot = sizing["lot"]
 
-        # If explicit lot was provided, verify it strictly stays under safe risk
+        # If explicit lot was provided, verify it strictly stays under approved risk
         if user_lot:
             requested_lot = round(float(user_lot), 2)
-            tick_val = float(sym_info.trade_tick_value or 1.0)
-            tick_sz = float(sym_info.trade_tick_size or 0.00001)
-            est_loss_requested = (sl_dist / tick_sz) * tick_val * requested_lot
-            max_affordable = max(max_allowed_loss, max(15.0, acc.equity * 0.40))
-            if requested_lot > float(sym_info.volume_min or 0.01) and est_loss_requested > max_affordable:
+            if requested_lot > sizing["lot"]:
                 self._send_json(400, {
                     'success': False,
                     'error': (
-                        f"Capital Shield Veto: Requested lot {requested_lot} risks ${est_loss_requested:.2f}, "
-                        f"which exceeds maximum affordable risk on equity ${acc.equity:.2f}."
+                        f"Risk Engine Veto: Requested lot {requested_lot} exceeds approved risk volume {sizing['lot']}. "
+                        f"User-provided lot size cannot override risk engine."
                     ),
                     'risk_veto': True
                 })
                 return
-            lot = requested_lot
+            lot = min(sizing["lot"], requested_lot)
 
         # 4. Determine MT5 Order Action Type
         req_type = str(data.get('orderType') or data.get('order_type') or '').lower().strip()
@@ -985,12 +1032,14 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
 
 
 def run_bridge():
-    server_address = ('0.0.0.0', PORT)
+    host = os.environ.get('MT5_BRIDGE_HOST', '127.0.0.1')
+    server_address = (host, PORT)
     httpd = ThreadingHTTPServer(server_address, MT5BridgeHandler)
     print(f"=========================================================")
     print(f"  Trade-Z MetaTrader 5 (MT5) Desktop Bridge")
-    print(f"  Listening on: http://0.0.0.0:{PORT} (all interfaces)")
+    print(f"  Listening on: http://{host}:{PORT}")
     print(f"  MetaTrader5 Python Library: {'LOADED [OK]' if MT5_AVAILABLE else 'MISSING [ERROR]'}")
+    print(f"  Security: Loopback Localhost Protection Active")
     print(f"  Keep this window open while auto-trading is active.")
     print(f"=========================================================")
     try:

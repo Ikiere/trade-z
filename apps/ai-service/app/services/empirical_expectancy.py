@@ -18,11 +18,29 @@ class SampleEvidenceTier(str):
     STRONG = "STRONG_EVIDENCE"              # 500+ trades
 
 
+def calculate_wilson_confidence_interval(successes: int, trials: int, confidence: float = 0.95) -> Dict[str, float]:
+    """Calculates Wilson score interval for binomial proportion."""
+    if trials == 0:
+        return {"lower": 0.0, "upper": 0.0}
+    z = 1.95996  # 95% confidence
+    p = successes / trials
+    denom = 1.0 + (z**2) / trials
+    center = (p + (z**2) / (2 * trials)) / denom
+    margin = (z * math.sqrt((p * (1 - p) / trials) + (z**2) / (4 * (trials**2)))) / denom
+    return {
+        "lower": round(max(0.0, center - margin) * 100.0, 2),
+        "upper": round(min(1.0, center + margin) * 100.0, 2)
+    }
+
+
 class EmpiricalExpectancyResult(BaseModel):
     sample_count: int = 0
     win_count: int = 0
     loss_count: int = 0
     breakeven_count: int = 0
+    empirical_win_probability: Optional[float] = None     # None / UNKNOWN if insufficient evidence
+    empirical_loss_probability: Optional[float] = None
+    empirical_BE_probability: Optional[float] = None
     win_rate: float = 0.0               # percentage 0 - 100
     loss_rate: float = 0.0              # percentage 0 - 100
     breakeven_rate: float = 0.0         # percentage 0 - 100
@@ -37,9 +55,12 @@ class EmpiricalExpectancyResult(BaseModel):
     average_mae_r: float = 0.0
     average_duration_bars: float = 0.0
     evidence_tier: str = SampleEvidenceTier.INSUFFICIENT
+    statistical_status: str = "INSUFFICIENT_STATISTICAL_EVIDENCE"
     has_statistical_edge: bool = False
     recommended_action: str = "WAIT"    # TRADE | WAIT | NO_TRADE
     shrinkage_factor: float = 1.0       # Conservative discount applied for small samples
+    confidence_interval: Dict[str, float] = Field(default_factory=lambda: {"lower": 0.0, "upper": 0.0})
+    breakdown_metadata: Dict[str, Any] = Field(default_factory=dict)
 
     @computed_field
     @property
@@ -55,6 +76,7 @@ class EmpiricalExpectancyResult(BaseModel):
 class EmpiricalExpectancyEngine:
     """
     Computes rigorous empirical expectancy from historical trade records.
+    Never converts setup score to win probability.
     """
 
     # Configurable sample thresholds
@@ -86,11 +108,13 @@ class EmpiricalExpectancyEngine:
         regime: Optional[str] = None,
         spread_cost_r: float = 0.05,
         slippage_r: float = 0.02,
-        commission_r: float = 0.0
+        commission_r: float = 0.0,
+        extra_metadata: Optional[Dict[str, Any]] = None
     ) -> EmpiricalExpectancyResult:
         """
         Calculates empirical expectancy directly from completed trade records or experience memory.
-        If no trades have accumulated yet, returns an un-hallucinated empirical baseline prior.
+        If no trades or insufficient evidence exists, returns UNKNOWN probability and marks
+        INSUFFICIENT_STATISTICAL_EVIDENCE without fabricating prior win rates or fake EV.
         """
         if trades is None and (symbol or setup_family):
             try:
@@ -106,31 +130,39 @@ class EmpiricalExpectancyEngine:
             except Exception:
                 trades = None
 
+        meta = {
+            "symbol": symbol or "UNKNOWN",
+            "setup_family": setup_family or "ALL",
+            "session": session or "ALL",
+            "regime": regime or "ALL",
+            **(extra_metadata or {})
+        }
+
         if not trades:
-            # Baseline empirical prior from validated historical SMC distribution
-            tier = SampleEvidenceTier.INSUFFICIENT
-            prior_win_rate = 45.0
-            prior_loss_rate = 45.0
-            prior_be_rate = 10.0
-            prior_avg_win = 2.2
-            prior_avg_loss = 1.0
-            raw_ev = round((0.45 * prior_avg_win) - (0.45 * prior_avg_loss), 2)  # +0.54R
-            total_friction = spread_cost_r + slippage_r + commission_r
-            cost_adj = round(raw_ev - total_friction, 2)
+            # Strictly return INSUFFICIENT_STATISTICAL_EVIDENCE with UNKNOWN probability
             return EmpiricalExpectancyResult(
                 sample_count=0,
-                win_rate=prior_win_rate,
-                loss_rate=prior_loss_rate,
-                breakeven_rate=prior_be_rate,
-                average_win_r=prior_avg_win,
-                average_loss_r=prior_avg_loss,
-                profit_factor=1.8,
-                expectancy_r=raw_ev,
-                cost_adjusted_expectancy_r=cost_adj,
-                evidence_tier=tier,
-                has_statistical_edge=cost_adj >= cls.MIN_EXPECTANCY_R,
-                recommended_action="TRADE" if cost_adj >= cls.MIN_EXPECTANCY_R else "WAIT",
-                shrinkage_factor=1.0
+                win_count=0,
+                loss_count=0,
+                breakeven_count=0,
+                empirical_win_probability=None,
+                empirical_loss_probability=None,
+                empirical_BE_probability=None,
+                win_rate=0.0,
+                loss_rate=0.0,
+                breakeven_rate=0.0,
+                average_win_r=0.0,
+                average_loss_r=0.0,
+                profit_factor=1.0,
+                expectancy_r=0.0,
+                cost_adjusted_expectancy_r=0.0,
+                evidence_tier=SampleEvidenceTier.INSUFFICIENT,
+                statistical_status="INSUFFICIENT_STATISTICAL_EVIDENCE",
+                has_statistical_edge=False,
+                recommended_action="WAIT",
+                shrinkage_factor=0.0,
+                confidence_interval={"lower": 0.0, "upper": 0.0},
+                breakdown_metadata=meta
             )
 
         sample_count = len(trades)
@@ -209,16 +241,33 @@ class EmpiricalExpectancyEngine:
 
         if tier == SampleEvidenceTier.INSUFFICIENT:
             rec_action = "WAIT"
+            stat_status = "INSUFFICIENT_STATISTICAL_EVIDENCE"
+            emp_win_prob = None
+            emp_loss_prob = None
+            emp_be_prob = None
         elif has_edge:
             rec_action = "TRADE"
+            stat_status = "VALID_EMPIRICAL_EVIDENCE"
+            emp_win_prob = round(p_win, 4)
+            emp_loss_prob = round(p_loss, 4)
+            emp_be_prob = round(p_be, 4)
         else:
             rec_action = "NO_TRADE"
+            stat_status = "VALID_EMPIRICAL_EVIDENCE"
+            emp_win_prob = round(p_win, 4)
+            emp_loss_prob = round(p_loss, 4)
+            emp_be_prob = round(p_be, 4)
+
+        conf_interval = calculate_wilson_confidence_interval(win_count, sample_count)
 
         return EmpiricalExpectancyResult(
             sample_count=sample_count,
             win_count=win_count,
             loss_count=loss_count,
             breakeven_count=be_count,
+            empirical_win_probability=emp_win_prob,
+            empirical_loss_probability=emp_loss_prob,
+            empirical_BE_probability=emp_be_prob,
             win_rate=round(p_win * 100.0, 1),
             loss_rate=round(p_loss * 100.0, 1),
             breakeven_rate=round(p_be * 100.0, 1),
@@ -233,9 +282,12 @@ class EmpiricalExpectancyEngine:
             average_mae_r=round(avg_mae, 2),
             average_duration_bars=round(avg_duration, 1),
             evidence_tier=tier,
+            statistical_status=stat_status,
             has_statistical_edge=has_edge,
             recommended_action=rec_action,
-            shrinkage_factor=shrinkage
+            shrinkage_factor=shrinkage,
+            confidence_interval=conf_interval,
+            breakdown_metadata=meta
         )
 
 

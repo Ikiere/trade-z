@@ -179,19 +179,28 @@ class EventDrivenSimulator:
                         if new_sl < pos.stop_loss:
                             pos.stop_loss = round(new_sl, spec.decimals)
 
-                # Order Fill Trigger Checks (Take Profit evaluated before Stop Loss on qualifying bars)
+                # Order Fill Trigger Checks with Conservative Same-Candle Ambiguity Resolution
                 is_closed = False
                 exit_price = pos.current_price
                 exit_reason = ""
+                res_method = "OHLC_UNAMBIGUOUS"
 
                 if pos.direction == "long":
-                    if high >= pos.take_profit:
+                    # Ambiguity check: high reached TP and low reached SL on the exact same bar
+                    if low <= pos.stop_loss and high >= pos.take_profit:
+                        is_closed = True
+                        exit_price = pos.stop_loss
+                        exit_reason = "STOP_LOSS"
+                        res_method = "CONSERVATIVE_SL_ASSUMPTION"
+                    elif high >= pos.take_profit:
                         is_closed = True
                         exit_price = pos.take_profit
                         exit_reason = "TAKE_PROFIT"
+                        res_method = "OHLC_UNAMBIGUOUS"
                     elif low <= pos.stop_loss:
                         is_closed = True
                         exit_price = pos.stop_loss
+                        res_method = "OHLC_UNAMBIGUOUS"
                         if pos.stop_loss > pos.entry_price:
                             exit_reason = "TRAILING_STOP"
                         elif pos.is_breakeven_set and abs(pos.stop_loss - pos.entry_price) < 0.0001:
@@ -199,13 +208,21 @@ class EventDrivenSimulator:
                         else:
                             exit_reason = "STOP_LOSS"
                 else:  # short
-                    if low <= pos.take_profit:
+                    # Ambiguity check: high reached SL and low reached TP on the exact same bar
+                    if high >= pos.stop_loss and low <= pos.take_profit:
+                        is_closed = True
+                        exit_price = pos.stop_loss
+                        exit_reason = "STOP_LOSS"
+                        res_method = "CONSERVATIVE_SL_ASSUMPTION"
+                    elif low <= pos.take_profit:
                         is_closed = True
                         exit_price = pos.take_profit
                         exit_reason = "TAKE_PROFIT"
+                        res_method = "OHLC_UNAMBIGUOUS"
                     elif high >= pos.stop_loss:
                         is_closed = True
                         exit_price = pos.stop_loss
+                        res_method = "OHLC_UNAMBIGUOUS"
                         if pos.stop_loss < pos.entry_price:
                             exit_reason = "TRAILING_STOP"
                         elif pos.is_breakeven_set and abs(pos.stop_loss - pos.entry_price) < 0.0001:
@@ -221,7 +238,8 @@ class EventDrivenSimulator:
                         close_bar_index=i,
                         close_timestamp=p_info.get("time", f"Bar-{i}"),
                         exit_bid=p_info.get("bid", exit_price),
-                        exit_ask=p_info.get("ask", exit_price)
+                        exit_ask=p_info.get("ask", exit_price),
+                        intrabar_resolution_method=res_method
                     )
                     if closed_rec:
                         autopsy = autopsy_engine.analyze_trade(

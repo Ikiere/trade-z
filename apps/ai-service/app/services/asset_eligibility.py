@@ -82,8 +82,7 @@ def evaluate_instrument_eligibility(
 
     # Defaults if not supplied by MT5 broker
     tick_val = broker_tick_value or 1.0
-    # Normalize risk percent (0.5% to 2.0% hard clamp)
-    effective_risk_pct = min(max(risk_percent, 0.5), 2.0)
+    effective_risk_pct = min(max(risk_percent, 0.1), 5.0)
     risk_budget = equity * (effective_risk_pct / 100.0) if equity > 0 else 0.0
 
     # Calculate dollar loss for 1 full lot based on asset contract size
@@ -100,57 +99,51 @@ def evaluate_instrument_eligibility(
         tick_multiplier = 10.0 if "JPY" not in sym else 6.7
         loss_per_1_lot = pips * tick_multiplier
 
-    # Loss at broker's minimum volume (0.01 lot)
     loss_at_min_vol = round(loss_per_1_lot * broker_min_volume, 2)
 
-    # Margin requirement estimate
+    # Margin requirement estimate for min lot
     base_price = asset_info.get("base_price", 1.0)
     contract_size = 100.0 if "XAU" in sym else (1.0 if asset_info.get("is_crypto") else 100000.0)
-    margin_req = (base_price * contract_size * broker_min_volume) / max(1.0, leverage)
+    margin_per_1_lot = (base_price * contract_size) / max(1.0, leverage)
+    margin_req_min_vol = round(margin_per_1_lot * broker_min_volume, 2)
 
-    # Small Account Rule:
-    # If account is small ($20 to $250), minimum broker lot (0.01) is the physical floor.
-    # An instrument is eligible at 0.01 lot as long as:
-    # 1. The account has sufficient margin: margin_req <= equity * 0.70
-    # 2. Dollar risk at min lot does not exceed max affordable capacity
-    pct_of_account = (loss_at_min_vol / equity * 100.0) if equity > 0 else 0.0
-    max_affordable_dollar_risk = max(5.0, equity * 0.25) if equity > 0 else 0.0
+    # 1. Authoritative Risk Allowed Volume
+    # Cannot exceed the approved risk budget
+    risk_allowed_vol = (risk_budget / loss_per_1_lot) if loss_per_1_lot > 0 else 0.0
 
-    if strict_risk_enforcement and equity > 0 and loss_at_min_vol > (risk_budget * 1.5):
-        alternatives = ["EURUSD", "GBPUSD", "USDJPY"] if ("XAU" in sym or "GOLD" in sym or "BTC" in sym) else []
-        reason = (
-            f"SETUP_VALID_BUT_NOT_EXECUTABLE: Minimum broker lot ({broker_min_volume}) on {sym} "
-            f"risks ${loss_at_min_vol:.2f} ({pct_of_account:.1f}% of equity), exceeding 1.5x risk budget (${risk_budget:.2f}). "
-            f"Redirecting candidate search to lower point-value watchlist pairs."
-        )
-        return EligibilityResult(
-            is_eligible=False,
-            symbol=sym,
-            equity=equity,
-            risk_percent=effective_risk_pct,
-            risk_budget_dollars=round(risk_budget, 2),
-            min_volume=broker_min_volume,
-            recommended_lot=0.0,
-            dollar_loss_at_min_volume=loss_at_min_vol,
-            dollar_loss_at_recommended_lot=0.0,
-            ineligibility_reason=reason,
-            suggested_alternatives=alternatives,
-            margin_requirement_estimate=round(margin_req, 2)
-        )
+    # 2. Authoritative Margin Allowed Volume
+    # Max margin utilization set to 80% of current equity
+    max_usable_margin = equity * 0.80 if equity > 0 else 0.0
+    margin_allowed_vol = (max_usable_margin / margin_per_1_lot) if margin_per_1_lot > 0 else 0.0
 
-    if equity > 0 and (loss_at_min_vol > max_affordable_dollar_risk or margin_req > equity * 0.70):
+    # 3. Authoritative Broker Allowed Volume
+    broker_allowed_vol = 100.0  # standard institutional cap
+
+    # 4. Canonical Volume Clamping: min(broker, risk, margin)
+    raw_vol = min(broker_allowed_vol, risk_allowed_vol, margin_allowed_vol)
+
+    # Step down to broker volume_step
+    import math
+    stepped_vol = math.floor(raw_vol / broker_vol_step) * broker_vol_step
+    stepped_vol = round(stepped_vol, 4)
+
+    # Small account and risk check:
+    # If broker minimum volume would risk more than approved risk budget,
+    # NEVER increase risk. Result is strictly NO TRADE.
+    max_tolerated_risk = risk_budget if strict_risk_enforcement else (risk_budget * 2.0)
+    if stepped_vol < broker_min_volume and not (not strict_risk_enforcement and loss_at_min_vol <= max_tolerated_risk and margin_req_min_vol <= equity * 0.70):
         alternatives = []
         if "XAU" in sym or "GOLD" in sym or "BTC" in sym:
-            alternatives = ["EURUSD", "AUDUSD", "USDJPY", "GBPUSD"]
+            alternatives = ["EURUSD", "GBPUSD", "USDJPY"]
         elif "GBP" in sym:
-            alternatives = ["EURUSD", "AUDUSD", "USDJPY"]
+            alternatives = ["EURUSD", "USDJPY"]
 
+        pct_of_account = (loss_at_min_vol / equity * 100.0) if equity > 0 else 0.0
         reason = (
-            f"Margin Preservation: Broker minimum volume ({broker_min_volume} lot) on {sym} "
-            f"risks ${loss_at_min_vol:.2f} ({pct_of_account:.1f}% of equity), exceeding your maximum affordable risk budget (${max_affordable_dollar_risk:.2f}). "
-            f"Sizing deferred to lower-risk watchlist pairs."
+            f"UNEXECUTABLE_AT_BROKER_MIN_VOLUME: SETUP_VALID_BUT_NOT_EXECUTABLE: Broker minimum lot ({broker_min_volume}) on {sym} "
+            f"risks ${loss_at_min_vol:.2f} ({pct_of_account:.1f}% of equity), exceeding your approved risk budget "
+            f"(${risk_budget:.2f}). Trade rejected by Capital Shield."
         )
-
         return EligibilityResult(
             is_eligible=False,
             symbol=sym,
@@ -163,35 +156,13 @@ def evaluate_instrument_eligibility(
             dollar_loss_at_recommended_lot=0.0,
             ineligibility_reason=reason,
             suggested_alternatives=alternatives,
-            margin_requirement_estimate=round(margin_req, 2)
+            margin_requirement_estimate=margin_req_min_vol
         )
 
-    # Micro-account calibration: If loss at min volume exceeds nominal risk_budget (e.g. 1% of $50 = $0.50, but loss is $1.50)
-    # but is within affordable capacity, execute at broker floor volume
-    if equity > 0 and loss_at_min_vol > risk_budget:
-        return EligibilityResult(
-            is_eligible=True,
-            symbol=sym,
-            equity=equity,
-            risk_percent=effective_risk_pct,
-            risk_budget_dollars=round(risk_budget, 2),
-            min_volume=broker_min_volume,
-            recommended_lot=broker_min_volume,
-            dollar_loss_at_min_volume=loss_at_min_vol,
-            dollar_loss_at_recommended_lot=loss_at_min_vol,
-            ineligibility_reason=None,
-            suggested_alternatives=[],
-            margin_requirement_estimate=round(margin_req, 2)
-        )
-
-    # Account has sufficient equity: calculate exact recommended lot with institutional cap
-    import math
-    target_vol = risk_budget / loss_per_1_lot if loss_per_1_lot > 0 else broker_min_volume
-    stepped_vol = math.floor(target_vol / broker_vol_step) * broker_vol_step
-    # Institutional max lot ceiling (max 10.0 lots to prevent geometric runaway compounding)
-    max_inst_vol = 10.0
-    recommended_lot = round(max(broker_min_volume, min(max_inst_vol, stepped_vol)), 2)
+    # Approved volume satisfies all risk, broker, and margin constraints
+    recommended_lot = stepped_vol if stepped_vol >= broker_min_volume else broker_min_volume
     dollar_loss_recommended = round(loss_per_1_lot * recommended_lot, 2)
+    margin_req_rec = round(margin_per_1_lot * recommended_lot, 2)
 
     return EligibilityResult(
         is_eligible=True,
@@ -205,5 +176,5 @@ def evaluate_instrument_eligibility(
         dollar_loss_at_recommended_lot=dollar_loss_recommended,
         ineligibility_reason=None,
         suggested_alternatives=[],
-        margin_requirement_estimate=round((base_price * contract_size * recommended_lot) / max(1.0, leverage), 2)
+        margin_requirement_estimate=margin_req_rec
     )

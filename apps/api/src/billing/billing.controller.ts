@@ -31,10 +31,22 @@ export class BillingController {
   }
 
   private extractUserId(authHeader: string): string {
-    const token = authHeader?.replace('Bearer ', '');
-    if (!token && process.env.NODE_ENV === 'production') {
-      throw new UnauthorizedException('Missing token');
+    const token = authHeader?.replace('Bearer ', '').trim();
+    if (!token || token === 'undefined' || token === 'null') {
+      throw new UnauthorizedException('Valid authentication session token required');
     }
-    return 'user-1';
+    try {
+      const payloadBase64 = token.split('.')[1];
+      if (payloadBase64) {
+        const base64 = payloadBase64.replace(/-/g, '+').replace(/_/g, '/');
+        const payload = JSON.parse(Buffer.from(base64, 'base64').toString('utf-8'));
+        const sub = payload?.sub;
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (sub && uuidRegex.test(sub)) {
+          return sub;
+        }
+      }
+    } catch (_) {}
+    throw new UnauthorizedException('Valid authentication session token required');
   }
 }

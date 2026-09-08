@@ -166,12 +166,12 @@ def test_execution_costs_and_margin_accounting():
 # BUG 7: POSITION SIZING TEST SUITE ($20, $50, $100, $500, $1,000, $10,000)
 # ─────────────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("balance,expected_min_lot,should_be_eligible", [
-    (20.0, 0.01, True),
-    (50.0, 0.01, True),
-    (100.0, 0.01, True),
-    (500.0, 0.01, True),
-    (1000.0, 0.01, True),
-    (10000.0, 0.01, True),
+    (20.0, 0.0, False),    # $0.20 budget < $5.00 min lot risk => UNEXECUTABLE
+    (50.0, 0.0, False),    # $0.50 budget < $5.00 min lot risk => UNEXECUTABLE
+    (100.0, 0.0, False),  # $1.00 budget < $5.00 min lot risk => UNEXECUTABLE
+    (500.0, 0.01, True),   # $5.00 budget == $5.00 min lot risk => 0.01 lot
+    (1000.0, 0.02, True),  # $10.00 budget >= $5.00 => 0.02 lot
+    (10000.0, 0.20, True), # $100.00 budget >= $5.00 => 0.20 lot
 ])
 def test_position_sizing_tiers(balance, expected_min_lot, should_be_eligible):
     spec = EXNESS_PROFILE.get_symbol_spec("XAUUSD")
@@ -196,6 +196,10 @@ def test_position_sizing_tiers(balance, expected_min_lot, should_be_eligible):
         assert elig.recommended_lot <= 10.0
         # Required margin cannot exceed equity
         assert elig.margin_requirement_estimate <= balance
+    else:
+        assert elig.is_eligible is False
+        assert "UNEXECUTABLE_AT_BROKER_MIN_VOLUME" in (elig.ineligibility_reason or "")
+        assert elig.recommended_lot == 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

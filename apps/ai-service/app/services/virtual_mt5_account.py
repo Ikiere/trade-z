@@ -117,6 +117,9 @@ class VirtualMT5Account:
         """
         Verifies whether account has sufficient free margin and valid order geometry.
         """
+        if isinstance(spec, str):
+            spec = self.broker.get_symbol_spec(spec)
+
         if self.is_failed:
             return False, "ACCOUNT_FAILED: Account has been liquidated.", 0.0
 
@@ -150,25 +153,35 @@ class VirtualMT5Account:
 
     def open_position(
         self,
-        spec: SymbolSpec,
-        direction: str,
-        volume: float,
-        entry_price: float,
-        stop_loss: float,
-        take_profit: float,
-        bar_index: int,
-        timestamp: str,
+        spec: Any = None,
+        direction: str = "long",
+        volume: float = 0.01,
+        entry_price: float = 0.0,
+        stop_loss: float = 0.0,
+        take_profit: float = 0.0,
+        bar_index: int = 0,
+        timestamp: str = "",
         order_type: str = "market",
         setup_id: str = "",
         entry_bid: float = 0.0,
         entry_ask: float = 0.0,
-        slippage: float = 0.0
+        slippage: float = 0.0,
+        symbol: Optional[str] = None,
+        open_bar_index: Optional[int] = None
     ) -> Optional[SimulatedPosition]:
         """
         Opens a new simulated MT5 position with authoritative tracking.
         """
+        target = spec or symbol
+        if isinstance(target, str):
+            resolved_spec = self.broker.get_symbol_spec(target)
+        else:
+            resolved_spec = target
+
+        actual_bar_index = open_bar_index if open_bar_index is not None else bar_index
+
         can_open, reason, req_margin = self.can_open_position(
-            spec, volume, entry_price, direction, stop_loss, take_profit
+            resolved_spec, volume, entry_price, direction, stop_loss, take_profit
         )
         if not can_open:
             return None
@@ -180,7 +193,7 @@ class VirtualMT5Account:
         equity_before = self.equity
         margin_before = self.used_margin
 
-        commission = round(spec.commission_per_lot * volume, 2)
+        commission = round(resolved_spec.commission_per_lot * volume, 2)
         self.balance = round(self.balance - commission, 2)
         self.equity = round(self.equity - commission, 2)
         self.total_commission = round(self.total_commission + commission, 2)
@@ -195,18 +208,18 @@ class VirtualMT5Account:
             self.peak_margin_utilization = round(current_util, 2)
 
         initial_sl_dist = abs(entry_price - stop_loss)
-        tick_units = (initial_sl_dist / spec.tick_size) if spec.tick_size > 0 else 0.0
-        initial_risk_money = max(0.01, round(tick_units * spec.tick_value * volume, 2))
+        tick_units = (initial_sl_dist / resolved_spec.tick_size) if resolved_spec.tick_size > 0 else 0.0
+        initial_risk_money = max(0.01, round(tick_units * resolved_spec.tick_value * volume, 2))
 
-        spread_pts = abs(entry_ask - entry_bid) if (entry_ask > 0 and entry_bid > 0) else (spec.typical_spread_pips * spec.tick_size * spec.pip_multiplier)
-        spread_ticks = spread_pts / spec.tick_size if spec.tick_size > 0 else 0.0
-        entry_spread_cost = round(spread_ticks * spec.tick_value * volume, 2)
+        spread_pts = abs(entry_ask - entry_bid) if (entry_ask > 0 and entry_bid > 0) else (resolved_spec.typical_spread_pips * resolved_spec.tick_size * resolved_spec.pip_multiplier)
+        spread_ticks = spread_pts / resolved_spec.tick_size if resolved_spec.tick_size > 0 else 0.0
+        entry_spread_cost = round(spread_ticks * resolved_spec.tick_value * volume, 2)
         self.total_spread_cost = round(self.total_spread_cost + entry_spread_cost, 2)
 
         pos = SimulatedPosition(
             ticket=ticket,
-            setup_id=setup_id or f"SETUP-{spec.symbol}-{ticket}",
-            symbol=spec.symbol,
+            setup_id=setup_id or f"SETUP-{resolved_spec.symbol}-{ticket}",
+            symbol=resolved_spec.symbol,
             direction=direction.lower(),
             order_type=order_type,
             volume=volume,
@@ -221,7 +234,7 @@ class VirtualMT5Account:
             slippage=slippage,
             entry_bid=entry_bid or entry_price,
             entry_ask=entry_ask or entry_price,
-            entry_spread=round(spread_pts, spec.decimals),
+            entry_spread=round(spread_pts, resolved_spec.decimals),
             entry_spread_cost=entry_spread_cost,
             balance_before=balance_before,
             equity_before=equity_before,
@@ -321,9 +334,9 @@ class VirtualMT5Account:
 
         dd_dollars = self.peak_equity - self.equity
         dd_pct = (dd_dollars / self.peak_equity * 100.0) if self.peak_equity > 0 else 0.0
-        if dd_dollars > self.max_drawdown_dollars:
-            self.max_drawdown_dollars = round(dd_dollars, 2)
+        if dd_pct > self.max_drawdown_pct:
             self.max_drawdown_pct = round(dd_pct, 2)
+            self.max_drawdown_dollars = round(dd_dollars, 2)
             self.max_floating_drawdown_dollars = round(dd_dollars, 2)
             self.max_floating_drawdown_pct = round(dd_pct, 2)
 
@@ -357,7 +370,8 @@ class VirtualMT5Account:
         close_bar_index: int,
         close_timestamp: str,
         exit_bid: float = 0.0,
-        exit_ask: float = 0.0
+        exit_ask: float = 0.0,
+        intrabar_resolution_method: str = "OHLC_UNAMBIGUOUS"
     ) -> Optional[Dict[str, Any]]:
         """
         Closes an open simulated position, realizes P/L, frees margin, and logs record.
@@ -469,6 +483,7 @@ class VirtualMT5Account:
             "mfe_pips": mfe_pips,
             "mae_pips": mae_pips,
             "exit_reason": exit_reason,
+            "intrabar_resolution_method": intrabar_resolution_method,
             "outcome": outcome,
             "balance_before": pos.balance_before,
             "equity_before": pos.equity_before,

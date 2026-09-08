@@ -34,34 +34,41 @@ export class RiskService {
       throw new BadRequestException('Stop Loss distance must be greater than zero pips.');
     }
 
-    // 4. Small Account Dollar Risk Guard (<$150 balance)
-    if (balance > 0 && balance < 150) {
-      const dollarRiskAt001 = stopLossDistancePips * 0.01 * 10.0;
-      // Allow trades within 35% of small account balance or $15 max risk
-      const maxAllowedRisk = Math.max(15.0, balance * 0.35);
-      if (dollarRiskAt001 > maxAllowedRisk && dollarRiskAt001 > balance) {
-        throw new BadRequestException(
-          `Stop loss risk (~$${dollarRiskAt001.toFixed(2)}) exceeds account balance ($${balance.toFixed(2)}). Select an instrument with tighter stop or lower contract size.`,
-        );
-      }
+    // 4. Strict Risk Budget Enforcement (Zero Affordable Override)
+    const riskBudget = balance * (riskPercent / 100);
+    const lossAtMinLot = stopLossDistancePips * 0.01 * 10.0;
+    if (balance > 0 && lossAtMinLot > riskBudget) {
+      throw new BadRequestException(
+        `UNEXECUTABLE_AT_BROKER_MIN_VOLUME: Stop loss risk at minimum broker lot 0.01 (~$${lossAtMinLot.toFixed(2)}) ` +
+        `exceeds approved risk budget ($${riskBudget.toFixed(2)}). Trade rejected by Capital Shield.`,
+      );
     }
 
     return true;
   }
 
   /**
-   * Calculate position size in lots
+   * Calculate position size in lots strictly clamped to risk budget and rounded DOWN to step
    */
   calculateLotSize(
     balance: number,
     riskPercent: number,
     stopLossDistancePips: number,
-    pipValueUsd: number = 10.0, // standard lot pip value
+    pipValueUsd: number = 10.0,
+    minVolume: number = 0.01,
+    volStep: number = 0.01,
   ): number {
-    const riskAmount = balance * (riskPercent / 100);
-    const rawLotSize = riskAmount / (stopLossDistancePips * pipValueUsd);
+    const riskBudget = balance * (riskPercent / 100);
+    const lossPerLot = stopLossDistancePips * pipValueUsd;
+    if (lossPerLot <= 0) return 0.0;
+    const rawLotSize = riskBudget / lossPerLot;
     
-    // Round to 2 decimal places (standard broker precision)
-    return Math.max(0.01, Math.round(rawLotSize * 100) / 100);
+    // Round DOWN to nearest broker volume step
+    const stepped = Math.floor(rawLotSize / volStep) * volStep;
+    const rounded = Math.round(stepped * 100) / 100;
+    if (rounded < minVolume) {
+      return 0.0; // Unexecutable at broker minimum volume
+    }
+    return rounded;
   }
 }

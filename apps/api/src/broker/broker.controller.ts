@@ -92,16 +92,20 @@ export class BrokerController {
   private extractUserId(authHeader: string): string {
     const token = authHeader?.replace('Bearer ', '').trim();
     if (!token || token === 'undefined' || token === 'null') {
-      return 'user-1';
+      throw new UnauthorizedException('Valid authentication session token required');
     }
     try {
       const payloadBase64 = token.split('.')[1];
       if (payloadBase64) {
         const base64 = payloadBase64.replace(/-/g, '+').replace(/_/g, '/');
         const payload = JSON.parse(Buffer.from(base64, 'base64').toString('utf-8'));
-        if (payload?.sub) return payload.sub;
+        const sub = payload?.sub;
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (sub && uuidRegex.test(sub)) {
+          return sub;
+        }
       }
     } catch (_) {}
-    return 'user-1';
+    throw new UnauthorizedException('Valid authentication session token required');
   }
 }

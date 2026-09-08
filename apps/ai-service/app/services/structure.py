@@ -5,6 +5,7 @@ Identifies BOS, CHoCH, Order Blocks, and Fair Value Gaps from price feeds.
 
 import pandas as pd
 import numpy as np
+from typing import Optional
 
 
 def detect_market_structure(df: pd.DataFrame) -> dict:

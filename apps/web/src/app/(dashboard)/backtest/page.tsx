@@ -63,32 +63,55 @@ interface TradeAutopsy {
 interface SimulatedTrade {
   id: number;
   ticket?: number;
+  trade_id?: number;
+  setup_id?: string;
+  timestamp?: string;
+  close_timestamp?: string;
   symbol?: string;
   pair?: string;
   direction: 'BUY' | 'SELL' | 'long' | 'short';
   setup_family?: string;
   lot?: number;
   volume?: number;
+  entry?: number;
   entry_price: number;
+  sl?: number;
   stop_loss: number;
   initial_stop_loss?: number;
   current_stop_loss?: number;
+  tp?: number;
   take_profit: number;
   exit_price: number;
+  initial_risk_money?: number;
+  initial_risk_r?: number;
+  gross_pnl?: number;
+  commission?: number;
+  swap?: number;
+  spread?: number;
+  spread_cost?: number;
+  slippage?: number;
   outcome: 'WIN' | 'LOSS' | 'BREAKEVEN';
   pnl_pips?: number;
   pnl_dollars?: number;
   net_pnl?: number;
   pnl_r?: number;
   r_multiple?: number;
+  mfe?: number;
+  mae?: number;
   mfe_pips?: number;
   mae_pips?: number;
   mfe_r?: number;
   mae_r?: number;
   bars_held?: number;
-  equity_after?: number;
+  duration_bars?: number;
+  balance_before?: number;
+  equity_before?: number;
   balance_after?: number;
+  equity_after?: number;
+  margin_before?: number;
+  margin_after?: number;
   margin_used?: number;
+  required_margin?: number;
   margin_level_at_entry?: number;
   exit_reason?: string;
   autopsy?: TradeAutopsy;
@@ -380,66 +403,79 @@ export default function BacktestSimulatorPage() {
 
     const headers = [
       'Trade_ID',
+      'Setup_ID',
+      'Timestamp',
       'Symbol',
       'Direction',
-      'Setup_Family',
-      'Lot_Size',
+      'Volume',
       'Entry_Price',
       'Initial_Stop_Loss',
-      'Current_Stop_Loss',
       'Take_Profit',
       'Exit_Price',
-      'Terminal_Outcome',
-      'Net_PnL_USD',
+      'Initial_Risk_Money',
+      'Initial_Risk_R',
+      'Gross_PnL',
+      'Commission',
+      'Swap',
+      'Spread_Cost',
+      'Slippage',
+      'Net_PnL',
       'Realized_R',
       'PnL_Pips',
-      'MFE_Pips',
       'MFE_R',
-      'MAE_Pips',
       'MAE_R',
-      'Root_Cause_Attribution',
-      'Clinical_Summary',
-      'Sentinel_Action',
       'Exit_Reason',
+      'Outcome',
+      'Balance_Before',
+      'Equity_Before',
       'Balance_After',
-      'Equity_After'
+      'Equity_After',
+      'Margin_Before',
+      'Margin_After',
+      'Root_Cause_Attribution',
+      'Clinical_Summary'
     ];
 
     const rows = trades.map((t) => {
       const pnl = t.pnl_dollars ?? t.net_pnl ?? 0;
       const r = t.pnl_r ?? t.r_multiple ?? 0;
       const initialSl = t.initial_stop_loss || t.stop_loss;
-      const currentSl = t.current_stop_loss || t.stop_loss;
-      const mfePips = t.autopsy?.mfe_pips ?? t.mfe_pips ?? (Number(t.autopsy?.mfe_r ?? t.mfe_r ?? 0) * 15).toFixed(1);
-      const maePips = t.autopsy?.mae_pips ?? t.mae_pips ?? (Number(t.autopsy?.mae_r ?? t.mae_r ?? 0) * 15).toFixed(1);
       const rootCause = t.autopsy?.root_cause || (t.outcome === 'WIN' ? 'CLEAN_EXPANSION_TP' : t.outcome === 'BREAKEVEN' ? 'PROTECTIVE_BREAKEVEN' : 'NORMAL_STATISTICAL_LOSS');
       const clinicalSummary = (t.autopsy?.clinical_summary || t.autopsy?.cause_description || '').replace(/"/g, '""');
 
       return [
-        t.id,
+        t.trade_id ?? t.id,
+        `"${t.setup_id || `SETUP-${t.symbol || 'SYM'}-${t.id}`}"`,
+        `"${t.timestamp || ''}"`,
         t.symbol || t.pair || 'EURUSD',
         String(t.direction).toUpperCase(),
-        `"${(t.setup_family || 'SMC Setup').replace(/"/g, '""')}"`,
-        t.lot ?? t.volume ?? 0.01,
-        t.entry_price,
+        t.volume ?? t.lot ?? 0.01,
+        t.entry_price ?? t.entry ?? 0,
         initialSl,
-        currentSl,
-        t.take_profit,
+        t.take_profit ?? t.tp ?? 0,
         t.exit_price,
-        t.outcome,
+        (t.initial_risk_money ?? 1.0).toFixed(2),
+        1.0,
+        (t.gross_pnl ?? pnl).toFixed(2),
+        (t.commission ?? 0).toFixed(2),
+        (t.swap ?? 0).toFixed(2),
+        (t.spread_cost ?? 0).toFixed(2),
+        (t.slippage ?? 0).toFixed(5),
         pnl.toFixed(2),
         r.toFixed(2),
         t.pnl_pips ?? 0,
-        mfePips,
-        t.autopsy?.mfe_r ?? t.mfe_r ?? 0,
-        maePips,
-        t.autopsy?.mae_r ?? t.mae_r ?? 0,
-        `"${rootCause}"`,
-        `"${clinicalSummary}"`,
-        `"${t.autopsy?.sentinel_action || t.exit_reason || ''}"`,
+        t.mfe_r ?? 0,
+        t.mae_r ?? 0,
         `"${t.exit_reason || ''}"`,
-        t.balance_after ?? 0,
-        t.equity_after ?? 0
+        t.outcome,
+        (t.balance_before ?? 0).toFixed(2),
+        (t.equity_before ?? 0).toFixed(2),
+        (t.balance_after ?? 0).toFixed(2),
+        (t.equity_after ?? 0).toFixed(2),
+        (t.margin_before ?? 0).toFixed(2),
+        (t.margin_after ?? 0).toFixed(2),
+        `"${rootCause}"`,
+        `"${clinicalSummary}"`
       ].join(',');
     });
 

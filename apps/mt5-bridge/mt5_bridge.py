@@ -130,7 +130,16 @@ def calculate_safe_lot_size(symbol_info, equity: float, sl_dist_points: float, r
     loss_at_min_volume = loss_per_1_lot * min_volume
 
     if loss_at_min_volume > max_risk_dollars:
-        # Micro-account rule: allow minimum broker volume (0.01) if loss is affordable within account capacity
+        # Micro-account rule: on small accounts ($20-$25), if min lot risks excessive equity (>20%), veto trade
+        if equity <= 25.0 and loss_at_min_volume > (equity * 0.20):
+            return {
+                "valid": False,
+                "lot": 0.0,
+                "error": f"Capital Shield Veto: Risk at min volume (${loss_at_min_volume:.2f}) exceeds small-account safety threshold",
+                "max_risk_dollars": max_risk_dollars,
+                "est_loss": loss_at_min_volume
+            }
+
         max_affordable_loss = max(15.0, equity * 0.40)
         if loss_at_min_volume <= max_affordable_loss and loss_at_min_volume <= equity:
             return {

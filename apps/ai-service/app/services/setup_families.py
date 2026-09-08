@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 class CandidateSetup(BaseModel):
     id: str
+    setup_id: str = ""
     symbol: str
     setup_family: str
     direction: str  # "BUY" or "SELL"
@@ -337,17 +338,19 @@ def detect_all_setup_families(
         ote_premium = range_low + (total_range * 0.62)   # 62% retracement from low
 
         if current_close <= ote_discount:
-            sl = round(range_low - (atr * 0.2), 5)
+            # Bullish: SL must be strictly below current_close and range_low
+            sl_anchor = min(current_close, range_low)
+            sl = round(sl_anchor - max(atr * 0.25, 0.0005), 5)
             sl_dist = abs(current_close - sl)
-            tp = round(range_high, 5)
-            rr = round(abs(tp - current_close) / sl_dist, 2) if sl_dist > 0 else 3.0
-            if rr >= 2.2:
+            tp = round(max(range_high, current_close + (sl_dist * 2.5)), 5)
+            rr = round(abs(tp - current_close) / sl_dist, 2) if sl_dist > 0 else 2.5
+            if rr >= 2.0 and sl < current_close < tp:
                 candidates.append(CandidateSetup(
                     id=f"{symbol}-FVG-RETRACE-BUY",
                     symbol=symbol,
                     setup_family="FVG Retracement",
                     direction="BUY",
-                    order_type="buy limit",
+                    order_type="market",
                     entry_price=current_close,
                     stop_loss=sl,
                     take_profit=tp,
@@ -360,17 +363,19 @@ def detect_all_setup_families(
                     details={"ote_level": ote_discount, "dealing_range": total_range}
                 ))
         elif current_close >= ote_premium:
-            sl = round(range_high + (atr * 0.2), 5)
+            # Bearish: SL must be strictly above current_close and range_high
+            sl_anchor = max(current_close, range_high)
+            sl = round(sl_anchor + max(atr * 0.25, 0.0005), 5)
             sl_dist = abs(sl - current_close)
-            tp = round(range_low, 5)
-            rr = round(abs(current_close - tp) / sl_dist, 2) if sl_dist > 0 else 3.0
-            if rr >= 2.2:
+            tp = round(min(range_low, current_close - (sl_dist * 2.5)), 5)
+            rr = round(abs(current_close - tp) / sl_dist, 2) if sl_dist > 0 else 2.5
+            if rr >= 2.0 and tp < current_close < sl:
                 candidates.append(CandidateSetup(
                     id=f"{symbol}-FVG-RETRACE-SELL",
                     symbol=symbol,
                     setup_family="FVG Retracement",
                     direction="SELL",
-                    order_type="sell limit",
+                    order_type="market",
                     entry_price=current_close,
                     stop_loss=sl,
                     take_profit=tp,
@@ -391,27 +396,28 @@ def detect_all_setup_families(
         if closes[i] > opens[i] and lows[i] < last_low:  # Bullish OB violated into breakdown
             breaker_level = float(highs[i])
             if abs(current_close - breaker_level) <= (atr * 0.3) and current_close < breaker_level:
-                sl = round(breaker_level + (atr * 0.3), 5)
+                sl = round(max(current_close, breaker_level) + max(atr * 0.3, 0.0005), 5)
                 sl_dist = abs(sl - current_close)
                 tp = round(current_close - (sl_dist * 3.0), 5)
-                candidates.append(CandidateSetup(
-                    id=f"{symbol}-BREAKER-SELL",
-                    symbol=symbol,
-                    setup_family="Breaker Block",
-                    direction="SELL",
-                    order_type="sell limit",
-                    entry_price=round(breaker_level, 5),
-                    stop_loss=sl,
-                    take_profit=tp,
-                    risk_reward=3.0,
-                    invalidation_level=sl,
-                    target_liquidity_level=range_low,
-                    setup_quality_score=82.0,
-                    confluence_factors=["Bearish Breaker Block", "Violated demand flipped to supply", "High liquidity rejection"],
-                    timeframe=timeframe,
-                    details={"breaker_level": breaker_level}
-                ))
-                break
+                if tp < current_close < sl:
+                    candidates.append(CandidateSetup(
+                        id=f"{symbol}-BREAKER-SELL",
+                        symbol=symbol,
+                        setup_family="Breaker Block",
+                        direction="SELL",
+                        order_type="market",
+                        entry_price=current_close,
+                        stop_loss=sl,
+                        take_profit=tp,
+                        risk_reward=3.0,
+                        invalidation_level=sl,
+                        target_liquidity_level=range_low,
+                        setup_quality_score=82.0,
+                        confluence_factors=["Bearish Breaker Block", "Violated demand flipped to supply", "High liquidity rejection"],
+                        timeframe=timeframe,
+                        details={"breaker_level": breaker_level}
+                    ))
+                    break
 
     # ─────────────────────────────────────────────────────────────
     # Family 7: Premium / Discount Reversal
@@ -420,11 +426,12 @@ def detect_all_setup_families(
     if total_range > 0:
         pos_pct = (current_close - range_low) / total_range
         if pos_pct <= 0.15:  # Deep discount exhaustion
-            sl = round(range_low - (atr * 0.25), 5)
+            sl_anchor = min(current_close, range_low)
+            sl = round(sl_anchor - max(atr * 0.25, 0.0005), 5)
             sl_dist = abs(current_close - sl)
-            tp = round(equilibrium, 5)
+            tp = round(max(equilibrium, current_close + (sl_dist * 2.0)), 5)
             rr = round(abs(tp - current_close) / sl_dist, 2) if sl_dist > 0 else 2.5
-            if rr >= 2.0:
+            if rr >= 2.0 and sl < current_close < tp:
                 candidates.append(CandidateSetup(
                     id=f"{symbol}-DISCOUNT-REV-BUY",
                     symbol=symbol,
@@ -443,11 +450,12 @@ def detect_all_setup_families(
                     details={"position_pct": pos_pct, "equilibrium": equilibrium}
                 ))
         elif pos_pct >= 0.85:  # Deep premium exhaustion
-            sl = round(range_high + (atr * 0.25), 5)
+            sl_anchor = max(current_close, range_high)
+            sl = round(sl_anchor + max(atr * 0.25, 0.0005), 5)
             sl_dist = abs(sl - current_close)
-            tp = round(equilibrium, 5)
+            tp = round(min(equilibrium, current_close - (sl_dist * 2.0)), 5)
             rr = round(abs(current_close - tp) / sl_dist, 2) if sl_dist > 0 else 2.5
-            if rr >= 2.0:
+            if rr >= 2.0 and tp < current_close < sl:
                 candidates.append(CandidateSetup(
                     id=f"{symbol}-PREMIUM-REV-SELL",
                     symbol=symbol,
@@ -614,4 +622,36 @@ def detect_all_setup_families(
                     details={"avg_impulse_ratio": float(np.mean(recent_bodies) / avg_body)}
                 ))
 
-    return candidates
+    # Strict Directional Order Invariant & Setup-ID Validation
+    current_bar_idx = len(df) - 1
+    validated_candidates: List[CandidateSetup] = []
+
+    for c in candidates:
+        family_slug = c.setup_family.replace(" ", "_").replace("/", "_").upper()
+        c.setup_id = f"SETUP-{symbol}-{family_slug}-B{current_bar_idx}"
+        c.id = c.setup_id
+
+        # Structural Order Invariant:
+        # Long: SL < Entry < TP
+        # Short: TP < Entry < SL
+        if c.direction == "BUY":
+            if not (c.stop_loss < c.entry_price < c.take_profit):
+                continue
+        elif c.direction == "SELL":
+            if not (c.take_profit < c.entry_price < c.stop_loss):
+                continue
+        else:
+            continue
+
+        sl_dist = abs(c.entry_price - c.stop_loss)
+        tp_dist = abs(c.take_profit - c.entry_price)
+        if sl_dist <= 0:
+            continue
+
+        c.risk_reward = round(tp_dist / sl_dist, 2)
+        if c.risk_reward < 1.5:
+            continue
+
+        validated_candidates.append(c)
+
+    return validated_candidates

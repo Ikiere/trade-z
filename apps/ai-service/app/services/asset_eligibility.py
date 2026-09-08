@@ -110,15 +110,14 @@ def evaluate_instrument_eligibility(
     # Small Account Rule:
     # If account is small ($20 to $250), minimum broker lot (0.01) is the physical floor.
     # An instrument is eligible at 0.01 lot as long as:
-    # 1. The account has sufficient margin: margin_req <= equity * 0.80
-    # 2. Dollar risk at min lot does not exceed max affordable capacity (<= max(12.0, equity * 0.35))
+    # 1. The account has sufficient margin: margin_req <= equity * 0.70
+    # 2. Dollar risk at min lot does not exceed max affordable capacity (<= equity * 0.25)
     # If it DOES exceed this threshold (e.g. Gold with a massive stop on a $20 account),
     # it is deferred to lower-risk watchlist pairs (e.g. EURUSD, USDJPY, Crypto).
     pct_of_account = (loss_at_min_vol / equity * 100.0) if equity > 0 else 0.0
-    max_affordable_dollar_risk = max(12.0, equity * 0.35) if equity > 0 else 0.0
+    max_affordable_dollar_risk = max(2.0, equity * 0.25) if equity > 0 else 0.0
 
-    if equity > 0 and (loss_at_min_vol > max_affordable_dollar_risk or margin_req > equity * 0.80):
-        # Determine alternatives based on lower tick value / smaller stop distance
+    if equity > 0 and (loss_at_min_vol > max_affordable_dollar_risk or margin_req > equity * 0.70):
         alternatives = []
         if "XAU" in sym or "GOLD" in sym or "BTC" in sym:
             alternatives = ["EURUSD", "AUDUSD", "USDJPY", "GBPUSD"]
@@ -127,7 +126,7 @@ def evaluate_instrument_eligibility(
 
         reason = (
             f"Margin Preservation: Broker minimum volume ({broker_min_volume} lot) on {sym} "
-            f"risks ${loss_at_min_vol:.2f} ({pct_of_account:.1f}% of equity), exceeding affordable capacity (${max_affordable_dollar_risk:.2f}). "
+            f"risks ${loss_at_min_vol:.2f} ({pct_of_account:.1f}% of equity), exceeding your maximum affordable risk budget (${max_affordable_dollar_risk:.2f}). "
             f"Sizing deferred to lower-risk watchlist pairs."
         )
 
@@ -147,7 +146,7 @@ def evaluate_instrument_eligibility(
         )
 
     # Micro-account calibration: If loss at min volume exceeds nominal risk_budget (e.g. 1% of $50 = $0.50, but loss is $1.50)
-    # but is well within affordable capacity, execute at broker floor volume
+    # but is within affordable capacity, execute at broker floor volume
     if equity > 0 and loss_at_min_vol > risk_budget:
         return EligibilityResult(
             is_eligible=True,
@@ -164,12 +163,13 @@ def evaluate_instrument_eligibility(
             margin_requirement_estimate=round(margin_req, 2)
         )
 
-    # Account has sufficient equity: calculate exact recommended lot
+    # Account has sufficient equity: calculate exact recommended lot with institutional cap
     import math
     target_vol = risk_budget / loss_per_1_lot if loss_per_1_lot > 0 else broker_min_volume
-    # Step clamp
     stepped_vol = math.floor(target_vol / broker_vol_step) * broker_vol_step
-    recommended_lot = round(max(broker_min_volume, min(100.0, stepped_vol)), 2)
+    # Institutional max lot ceiling (max 10.0 lots to prevent geometric runaway compounding)
+    max_inst_vol = 10.0
+    recommended_lot = round(max(broker_min_volume, min(max_inst_vol, stepped_vol)), 2)
     dollar_loss_recommended = round(loss_per_1_lot * recommended_lot, 2)
 
     return EligibilityResult(

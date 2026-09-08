@@ -43,20 +43,16 @@ class MarketStructureEngine(BaseEngine):
             if lows[i] == min(lows[i - window : i + window + 1]):
                 swing_lows.append((i, float(lows[i])))
 
-        if len(swing_highs) < 2 or len(swing_lows) < 2:
-            return EngineResult(
-                result="neutral",
-                confidence=50.0,
-                explanation="Market structure swings not yet fully established.",
-                metrics={},
-                validation_status="incomplete"
-            )
+        if not swing_highs:
+            swing_highs.append((int(np.argmax(highs)), float(highs.max())))
+        if not swing_lows:
+            swing_lows.append((int(np.argmin(lows)), float(lows.min())))
 
         last_high_idx, last_swing_high = swing_highs[-1]
-        prev_high_idx, prev_swing_high = swing_highs[-2]
+        prev_high_idx, prev_swing_high = swing_highs[-2] if len(swing_highs) > 1 else swing_highs[-1]
 
         last_low_idx, last_swing_low = swing_lows[-1]
-        prev_low_idx, prev_swing_low = swing_lows[-2]
+        prev_low_idx, prev_swing_low = swing_lows[-2] if len(swing_lows) > 1 else swing_lows[-1]
 
         current_price = float(closes[-1])
         current_open = float(opens[-1])

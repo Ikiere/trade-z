@@ -5,7 +5,7 @@ Losses are categorized into the 15-cause institutional taxonomy.
 Wins are analyzed for layer contributions, MFE efficiency, and target optimality.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 
 
@@ -22,9 +22,6 @@ class TradeAutopsy(BaseModel):
     contributing_layers: List[str] = []
     recommended_adjustment: str
     is_statistical_acceptable: bool
-
-
-from typing import List
 
 
 class AutopsyEngine:

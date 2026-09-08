@@ -126,10 +126,15 @@ export class BrokerService {
 
       return json;
     } catch (e: any) {
+      const bridgeUrl = this.getBridgeUrl();
+      const isLocal = bridgeUrl.includes('127.0.0.1') || bridgeUrl.includes('localhost');
+      const hint = isLocal
+        ? 'Launch start_mt5_bridge.bat on your laptop, or set MT5_BRIDGE_URL on Render to point to your EC2 VPS.'
+        : `Cannot reach MT5 Bridge at ${bridgeUrl}. Check: (1) EC2 Security Group allows port 5001, (2) the bridge script is running on the VPS.`;
       return {
         connected: false,
         status: 'offline',
-        error: 'Local MT5 Bridge is not running. Launch start_mt5_bridge.bat on your laptop.',
+        error: hint,
       };
     }
   }

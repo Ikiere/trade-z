@@ -202,6 +202,8 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
             self._handle_history(parsed.query)
         elif path in ['/quote', '/price', '/tick']:
             self._handle_quote(parsed.query)
+        elif path in ['/candles', '/rates', '/bars', '/ohlc']:
+            self._handle_candles(parsed.query)
         else:
             self._send_json(404, {'success': False, 'error': 'Not Found'})
 
@@ -492,6 +494,65 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
             'spread': round(tick.ask - tick.bid, sym_info.digits),
             'digits': sym_info.digits,
             'point': sym_info.point,
+        })
+
+    def _handle_candles(self, query_str: str):
+        """
+        Returns real-time authentic broker OHLC candles directly from MT5 terminal.
+        Provides zero-delay, zero-rate-limit market data without external API dependencies.
+        """
+        if not MT5_AVAILABLE or not mt5.initialize():
+            self._send_json(503, {'success': False, 'error': 'MT5 terminal not running or not responding'})
+            return
+
+        params = parse_qs(query_str)
+        raw_pair = params.get('pair', params.get('symbol', ['EURUSD']))[0]
+        tf_str = params.get('timeframe', params.get('interval', params.get('tf', ['15m'])))[0].lower()
+        count = int(params.get('count', params.get('outputsize', [60]))[0])
+        count = max(10, min(count, 300))
+
+        symbol = get_broker_symbol(raw_pair)
+        if not mt5.symbol_select(symbol, True):
+            self._send_json(400, {'success': False, 'error': f'Symbol "{symbol}" not found in MT5 Market Watch'})
+            return
+
+        tf_map = {
+            '1m': mt5.TIMEFRAME_M1,
+            '5m': mt5.TIMEFRAME_M5,
+            '15m': mt5.TIMEFRAME_M15,
+            '15min': mt5.TIMEFRAME_M15,
+            '30m': mt5.TIMEFRAME_M30,
+            '30min': mt5.TIMEFRAME_M30,
+            '1h': mt5.TIMEFRAME_H1,
+            '4h': mt5.TIMEFRAME_H4,
+            '1d': mt5.TIMEFRAME_D1,
+            '1day': mt5.TIMEFRAME_D1,
+        }
+        tf = tf_map.get(tf_str, mt5.TIMEFRAME_M15)
+
+        rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)
+        if rates is None or len(rates) == 0:
+            self._send_json(400, {'success': False, 'error': f'No candle data available from MT5 for {symbol}'})
+            return
+
+        candles = []
+        for r in rates:
+            candles.append({
+                'time': int(r['time']),
+                'open': float(r['open']),
+                'high': float(r['high']),
+                'low': float(r['low']),
+                'close': float(r['close']),
+                'volume': float(r['tick_volume']),
+            })
+
+        self._send_json(200, {
+            'success': True,
+            'symbol': symbol,
+            'pair': raw_pair,
+            'timeframe': tf_str,
+            'count': len(candles),
+            'candles': candles
         })
 
     def _handle_order(self, data: dict):

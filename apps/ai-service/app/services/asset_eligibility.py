@@ -70,7 +70,8 @@ def evaluate_instrument_eligibility(
     broker_vol_step: float = 0.01,
     broker_tick_value: Optional[float] = None,
     broker_tick_size: Optional[float] = None,
-    leverage: float = 100.0
+    leverage: float = 100.0,
+    strict_risk_enforcement: bool = False
 ) -> EligibilityResult:
     """
     Evaluates whether an asset can be safely executed for the given account balance
@@ -111,11 +112,31 @@ def evaluate_instrument_eligibility(
     # If account is small ($20 to $250), minimum broker lot (0.01) is the physical floor.
     # An instrument is eligible at 0.01 lot as long as:
     # 1. The account has sufficient margin: margin_req <= equity * 0.70
-    # 2. Dollar risk at min lot does not exceed max affordable capacity (<= equity * 0.25)
-    # If it DOES exceed this threshold (e.g. Gold with a massive stop on a $20 account),
-    # it is deferred to lower-risk watchlist pairs (e.g. EURUSD, USDJPY, Crypto).
+    # 2. Dollar risk at min lot does not exceed max affordable capacity
     pct_of_account = (loss_at_min_vol / equity * 100.0) if equity > 0 else 0.0
-    max_affordable_dollar_risk = max(2.0, equity * 0.25) if equity > 0 else 0.0
+    max_affordable_dollar_risk = max(5.0, equity * 0.25) if equity > 0 else 0.0
+
+    if strict_risk_enforcement and equity > 0 and loss_at_min_vol > (risk_budget * 1.5):
+        alternatives = ["EURUSD", "GBPUSD", "USDJPY"] if ("XAU" in sym or "GOLD" in sym or "BTC" in sym) else []
+        reason = (
+            f"SETUP_VALID_BUT_NOT_EXECUTABLE: Minimum broker lot ({broker_min_volume}) on {sym} "
+            f"risks ${loss_at_min_vol:.2f} ({pct_of_account:.1f}% of equity), exceeding 1.5x risk budget (${risk_budget:.2f}). "
+            f"Redirecting candidate search to lower point-value watchlist pairs."
+        )
+        return EligibilityResult(
+            is_eligible=False,
+            symbol=sym,
+            equity=equity,
+            risk_percent=effective_risk_pct,
+            risk_budget_dollars=round(risk_budget, 2),
+            min_volume=broker_min_volume,
+            recommended_lot=0.0,
+            dollar_loss_at_min_volume=loss_at_min_vol,
+            dollar_loss_at_recommended_lot=0.0,
+            ineligibility_reason=reason,
+            suggested_alternatives=alternatives,
+            margin_requirement_estimate=round(margin_req, 2)
+        )
 
     if equity > 0 and (loss_at_min_vol > max_affordable_dollar_risk or margin_req > equity * 0.70):
         alternatives = []

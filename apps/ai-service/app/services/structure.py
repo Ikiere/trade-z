@@ -148,17 +148,22 @@ def detect_market_structure(df: pd.DataFrame) -> dict:
     }
 
 
-def generate_simulated_candles(pair: str, timeframe: str) -> pd.DataFrame:
+def generate_simulated_candles(
+    pair: str,
+    timeframe: str,
+    seed_offset: int = 0,
+    start_price: Optional[float] = None
+) -> pd.DataFrame:
     """
-    Generates a highly realistic 60-candle dataset dynamically based on pair name and current date.
+    Generates a highly realistic 60-candle dataset dynamically based on pair name, current date, and seed offset.
     Provides natural price structures, trends, order blocks, and pullbacks.
     """
     import numpy as np
     from datetime import datetime
 
-    # Seed depends on pair name + current day/hour to evolve dynamically over time
+    # Seed depends on pair name + current day/hour + seed_offset to evolve dynamically
     now = datetime.now()
-    seed_str = f"{pair}_{timeframe}_{now.year}_{now.month}_{now.day}_{now.hour}"
+    seed_str = f"{pair}_{timeframe}_{now.year}_{now.month}_{now.day}_{now.hour}_{seed_offset}"
     seed = abs(hash(seed_str)) % 1000000
     np.random.seed(seed)
 
@@ -166,7 +171,7 @@ def generate_simulated_candles(pair: str, timeframe: str) -> pd.DataFrame:
     try:
         from app.services.asset_classifier import classify_asset
         asset_info = classify_asset(pair)
-        base_price = float(asset_info.get("base_price", 1.0))
+        base_price = float(start_price) if start_price is not None else float(asset_info.get("base_price", 1.0))
         pips_scale = float(asset_info.get("pip_size", 0.0001))
         if asset_info.get("is_crypto", False):
             noise_mult = max(base_price * 0.0025, pips_scale * 2.0)
@@ -178,12 +183,12 @@ def generate_simulated_candles(pair: str, timeframe: str) -> pd.DataFrame:
             noise_mult = max(base_price * 0.00035, pips_scale * 1.5)
     except Exception:
         u = pair.upper()
-        base_price = 1.0800
+        base_price = float(start_price) if start_price is not None else 1.0800
         noise_mult = 0.0003
         pips_scale = 0.0001
 
     # Trend direction: 60% chance of a clear trend structure (either up or down)
-    trend_val = hash(pair + "_trend") % 3
+    trend_val = hash(f"{pair}_trend_{seed_offset}") % 3
     trend_bias = 0
     if trend_val == 0:
         trend_bias = 1.2  # Bullish
@@ -195,7 +200,7 @@ def generate_simulated_candles(pair: str, timeframe: str) -> pd.DataFrame:
     
     for i in range(60):
         # Sine wave swing structure + random noise
-        swing = 0.8 * np.sin(i / 6.0)
+        swing = 0.8 * np.sin((i + (seed_offset * 12)) / 6.0)
         noise = np.random.normal(0, 0.8)
         change = (trend_bias * 0.4 + swing + noise) * noise_mult
         current += change

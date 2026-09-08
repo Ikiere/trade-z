@@ -73,8 +73,13 @@ class VirtualMT5Account:
         self.free_margin = self.initial_balance
         self.margin_level = 0.0  # 0% when no open positions
         self.peak_equity = self.initial_balance
+        self.peak_balance = self.initial_balance
         self.max_drawdown_dollars = 0.0
         self.max_drawdown_pct = 0.0
+        self.max_floating_drawdown_dollars = 0.0
+        self.max_floating_drawdown_pct = 0.0
+        self.max_closed_drawdown_dollars = 0.0
+        self.max_closed_drawdown_pct = 0.0
 
         # Margin & Execution Statistics
         self.peak_margin_utilization = 0.0
@@ -319,6 +324,8 @@ class VirtualMT5Account:
         if dd_dollars > self.max_drawdown_dollars:
             self.max_drawdown_dollars = round(dd_dollars, 2)
             self.max_drawdown_pct = round(dd_pct, 2)
+            self.max_floating_drawdown_dollars = round(dd_dollars, 2)
+            self.max_floating_drawdown_pct = round(dd_pct, 2)
 
         # Hard Broker Stop-Out Check
         liquidated_tickets: List[int] = []
@@ -371,6 +378,14 @@ class VirtualMT5Account:
 
         # Update balance and margins
         self.balance = round(self.balance + net_pnl, 2)
+        if self.balance > self.peak_balance:
+            self.peak_balance = self.balance
+        closed_dd_dollars = self.peak_balance - self.balance
+        closed_dd_pct = (closed_dd_dollars / self.peak_balance * 100.0) if self.peak_balance > 0 else 0.0
+        if closed_dd_dollars > self.max_closed_drawdown_dollars:
+            self.max_closed_drawdown_dollars = round(closed_dd_dollars, 2)
+            self.max_closed_drawdown_pct = round(closed_dd_pct, 2)
+
         self.used_margin = max(0.0, round(self.used_margin - pos.required_margin, 2))
         self.equity = round(self.balance + sum(p.floating_pnl for p in self.open_positions.values()), 2)
         self.free_margin = max(0.0, round(self.equity - self.used_margin, 2))

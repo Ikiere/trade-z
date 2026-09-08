@@ -41,6 +41,8 @@ class CandidateSetup(BaseModel):
     target_liquidity_level: float
     setup_quality_score: float  # 0 - 100
     expected_value: float = 0.0  # Statistical EV in R
+    sample_size: int = 0
+    evidence_tier: str = "INSUFFICIENT_EVIDENCE"
     confluence_factors: List[str] = Field(default_factory=list)
     regime: str = "normal"
     timeframe: str = "15m"

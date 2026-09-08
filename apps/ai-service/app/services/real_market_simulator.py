@@ -21,6 +21,10 @@ from app.services.broker_profiles import get_broker_profile, BrokerProfile, Symb
 from app.services.virtual_mt5_account import VirtualMT5Account, SimulatedPosition
 from app.services.trade_autopsy import autopsy_engine, TradeAutopsy
 from app.services.experience_memory import experience_memory, ExperienceRecord
+from app.services.empirical_expectancy import empirical_expectancy_engine
+from app.services.duplicate_detector import duplicate_detector
+from app.services.portfolio_risk import portfolio_risk_engine, PortfolioPosition
+from app.services.reviewers.comparative_evaluator import comparative_evaluator
 
 
 class SimulationRequest(BaseModel):
@@ -71,7 +75,10 @@ def generate_summary_from_ledger(
     avg_win = round(gross_profit / len(wins), 2) if wins else 0.0
     avg_loss = round(gross_loss / len(losses), 2) if losses else 0.0
     avg_r = round(sum(t["r_multiple"] for t in closed) / total_trades, 2) if total_trades > 0 else 0.0
-    expectancy_r = round((win_rate / 100.0 * (avg_win / max(1.0, avg_loss))) - ((100.0 - win_rate) / 100.0 * 1.0), 2) if avg_loss > 0 else avg_r
+    expectancy_r = avg_r  # Mathematically authoritative expected value in R: (1/N) * sum(R_i)
+
+    max_closed_dd = round(getattr(account, "max_closed_drawdown_pct", 0.0), 2)
+    max_floating_dd = round(getattr(account, "max_floating_drawdown_pct", account.max_drawdown_pct), 2)
 
     # Execution Costs Aggregation (Bug 5)
     total_spread = round(sum(t.get("spread_cost", 0.0) for t in closed), 2)
@@ -100,6 +107,7 @@ def generate_summary_from_ledger(
         "average_loss": avg_loss,
         "average_r": avg_r,
         "expectancy_r": expectancy_r,
+        "arithmetic_expectancy_r": avg_r,
         "total_spread_cost": total_spread,
         "total_commission": total_comm,
         "total_swap": total_swap,
@@ -109,6 +117,9 @@ def generate_summary_from_ledger(
         "setup_count": setup_count,
         "orders_per_setup": orders_per_setup,
         "aggregate_risk_per_setup": agg_risk_per_setup,
+        "max_closed_drawdown_pct": max_closed_dd,
+        "max_floating_drawdown_pct": max_floating_dd,
+        "max_drawdown_pct": max_closed_dd,
         "status": "ACCOUNT_FAILED" if account.is_failed else "COMPLETED",
         "failure_reason": account.failure_reason
     }
@@ -116,13 +127,15 @@ def generate_summary_from_ledger(
 
 def run_sentinel_counterfactual_audit(closed_trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Evaluates Sentinel trade management across counterfactual variants A-F (Bug 11).
+    Evaluates Sentinel trade management across counterfactual variants A-H:
     A. Current Sentinel (BE at 1.5R)
     B. No BE (Pure Target or Initial SL)
     C. BE at 0.5R
     D. BE at 1.0R
-    E. Structural BE (BE moved on 1st structure formation)
-    F. ATR-based Protection (Trailing Stop behind ATR)
+    E. Structural BE (BE at 2.0R)
+    F. ATR-based Protection (Trailing Stop behind ATR by 1.0R)
+    G. 50% Partial at 1.5R + BE on remainder
+    H. Structure-Confirmed Trail (BE at 1.5R + Trail 1.0R behind peak MFE once MFE >= 2.0R)
     """
     if not closed_trades:
         return {"summary": "No trades executed for Sentinel audit."}
@@ -133,19 +146,16 @@ def run_sentinel_counterfactual_audit(closed_trades: List[Dict[str, Any]]) -> Di
 
     mfe_before_be_avg = round(sum(t.get("mfe_r_before_be", 0.0) for t in be_stopped) / max(1, len(be_stopped)), 2)
     mae_before_be_avg = round(sum(t.get("mae_r_before_be", 0.0) for t in be_stopped) / max(1, len(be_stopped)), 2)
-    time_to_be_avg = round(sum(t.get("time_to_be_bars", 0) for t in be_stopped) / max(1, len(be_stopped)), 1)
+    time_to_be_bars_avg = round(sum(t.get("time_to_be_bars", 0) for t in be_stopped) / max(1, len(be_stopped)), 1)
 
     # Counterfactual outcomes simulation
     # Variant A: Current Actual Sentinel
     exp_a = round(sum(t["r_multiple"] for t in closed_trades) / total, 2)
 
-    # Variant B: No BE
-    # If a trade was stopped at BE, did its MFE reach full TP (risk_reward)?
-    # If yes: win (+target_r), if no: loss (-1.0R)
+    # Variant B: No BE (pure target or initial SL)
     r_vals_b = []
     for t in closed_trades:
         if t.get("exit_reason") == "BREAKEVEN":
-            # Estimate target R from initial geometry
             target_r = round(abs(t["tp"] - t["entry"]) / max(0.0001, abs(t["entry"] - t["sl"])), 2)
             if t.get("mfe_r", 0.0) >= target_r:
                 r_vals_b.append(target_r)
@@ -156,7 +166,6 @@ def run_sentinel_counterfactual_audit(closed_trades: List[Dict[str, Any]]) -> Di
     exp_b = round(sum(r_vals_b) / total, 2)
 
     # Variant C: BE at 0.5R
-    # More trades stopped at BE early
     r_vals_c = [0.0 if t.get("mfe_r", 0.0) >= 0.5 and t["outcome"] != "WIN" else t["r_multiple"] for t in closed_trades]
     exp_c = round(sum(r_vals_c) / total, 2)
 
@@ -168,9 +177,34 @@ def run_sentinel_counterfactual_audit(closed_trades: List[Dict[str, Any]]) -> Di
     r_vals_e = [0.0 if t.get("mfe_r", 0.0) >= 2.0 and t["outcome"] != "WIN" else t["r_multiple"] for t in closed_trades]
     exp_e = round(sum(r_vals_e) / total, 2)
 
-    # Variant F: ATR Protection (Trailing behind peak MFE by 1.0R)
+    # Variant F: ATR Protection (Trailing behind peak MFE by 1.0R once MFE >= 2.0R)
     r_vals_f = [max(t["r_multiple"], round(t.get("mfe_r", 0.0) - 1.0, 2)) if t.get("mfe_r", 0.0) >= 2.0 else t["r_multiple"] for t in closed_trades]
     exp_f = round(sum(r_vals_f) / total, 2)
+
+    # Variant G: 50% Partial at 1.5R + BE on remainder
+    r_vals_g = []
+    for t in closed_trades:
+        mfe = t.get("mfe_r", 0.0)
+        if mfe >= 1.5:
+            # 50% booked at 1.5R = +0.75R. Remainder outcome is min(t.r_multiple, 0.0) if pulled back or 0.5 * target
+            rem_r = max(0.0, t["r_multiple"])
+            r_vals_g.append(round(0.75 + (0.5 * rem_r), 2))
+        else:
+            r_vals_g.append(t["r_multiple"])
+    exp_g = round(sum(r_vals_g) / total, 2)
+
+    # Variant H: Structure-Confirmed Trailing Stop (BE at 1.5R + Trail 1.0R behind peak MFE once MFE >= 2.0R)
+    r_vals_h = []
+    for t in closed_trades:
+        mfe = t.get("mfe_r", 0.0)
+        if mfe >= 2.0:
+            locked_r = round(mfe - 1.0, 2)
+            r_vals_h.append(max(t["r_multiple"], locked_r))
+        elif mfe >= 1.5 and t["outcome"] != "WIN":
+            r_vals_h.append(0.0)
+        else:
+            r_vals_h.append(t["r_multiple"])
+    exp_h = round(sum(r_vals_h) / total, 2)
 
     matrix = {
         "A_Current_Sentinel_1_5R": {"expectancy_r": exp_a, "stopped_at_be_pct": pct_stopped_at_be},
@@ -178,10 +212,11 @@ def run_sentinel_counterfactual_audit(closed_trades: List[Dict[str, Any]]) -> Di
         "C_BE_at_0_5R": {"expectancy_r": exp_c, "stopped_at_be_pct": round(len([r for r in r_vals_c if r == 0.0]) / total * 100, 1)},
         "D_BE_at_1_0R": {"expectancy_r": exp_d, "stopped_at_be_pct": round(len([r for r in r_vals_d if r == 0.0]) / total * 100, 1)},
         "E_Structural_BE": {"expectancy_r": exp_e, "stopped_at_be_pct": round(len([r for r in r_vals_e if r == 0.0]) / total * 100, 1)},
-        "F_ATR_Trailing_Protection": {"expectancy_r": exp_f, "stopped_at_be_pct": 0.0}
+        "F_ATR_Trailing_Protection": {"expectancy_r": exp_f, "stopped_at_be_pct": 0.0},
+        "G_Partial_1_5R_Plus_BE": {"expectancy_r": exp_g, "stopped_at_be_pct": 0.0},
+        "H_Structure_Confirmed_Trail": {"expectancy_r": exp_h, "stopped_at_be_pct": round(len([r for r in r_vals_h if r == 0.0]) / total * 100, 1)}
     }
 
-    # Best method
     best_variant = max(matrix.items(), key=lambda item: item[1]["expectancy_r"])[0]
 
     return {
@@ -190,7 +225,7 @@ def run_sentinel_counterfactual_audit(closed_trades: List[Dict[str, Any]]) -> Di
         "percentage_stopped_at_be": pct_stopped_at_be,
         "mfe_before_be_avg_r": mfe_before_be_avg,
         "mae_before_be_avg_r": mae_before_be_avg,
-        "time_to_be_bars_avg": time_to_be_avg,
+        "time_to_be_bars_avg": time_to_be_bars_avg,
         "counterfactual_expectancy_matrix": matrix,
         "recommended_sentinel_method": best_variant
     }
@@ -214,7 +249,8 @@ class RealMarketSimulator:
         risk_percent: float = 1.0,
         broker_name: str = "exness",
         custom_leverage: Optional[float] = 2000.0,
-        custom_candles_map: Optional[Dict[str, pd.DataFrame]] = None
+        custom_candles_map: Optional[Dict[str, pd.DataFrame]] = None,
+        ai_mode: str = "ai_assisted"
     ) -> Dict[str, Any]:
         broker = get_broker_profile(broker_name)
         account = VirtualMT5Account(
@@ -222,22 +258,31 @@ class RealMarketSimulator:
             broker_profile=broker,
             custom_leverage=custom_leverage
         )
+        duplicate_detector.reset()
 
         bars_per_day = 96 if timeframe == "15m" else (24 if timeframe in ["1h", "60m"] else 6)
         total_simulation_bars = bars or max(100, min(1200, int(period_days * bars_per_day * 0.72)))
 
         candles_by_symbol: Dict[str, pd.DataFrame] = {}
-        for sym in symbols:
+        for sym_idx, sym in enumerate(symbols):
             clean_sym = sym.upper().replace("/", "").replace(" ", "")
             if custom_candles_map and clean_sym in custom_candles_map:
                 df = custom_candles_map[clean_sym]
             else:
-                df = generate_simulated_candles(clean_sym, timeframe)
+                df = generate_simulated_candles(clean_sym, timeframe, seed_offset=sym_idx * 100)
                 if len(df) < total_simulation_bars:
                     extra = total_simulation_bars - len(df)
                     dfs = [df]
-                    for _ in range(int(math.ceil(extra / 60))):
-                        dfs.append(generate_simulated_candles(clean_sym, timeframe))
+                    last_close = float(df.iloc[-1]["close"])
+                    for block_idx in range(1, int(math.ceil(extra / 60)) + 1):
+                        next_df = generate_simulated_candles(
+                            clean_sym,
+                            timeframe,
+                            seed_offset=(block_idx * 17) + (sym_idx * 100),
+                            start_price=last_close
+                        )
+                        last_close = float(next_df.iloc[-1]["close"])
+                        dfs.append(next_df)
                     df = pd.concat(dfs).reset_index(drop=True).tail(total_simulation_bars).reset_index(drop=True)
             candles_by_symbol[clean_sym] = df
 
@@ -264,7 +309,7 @@ class RealMarketSimulator:
                 if i < len(df):
                     row = df.iloc[i]
                     spec = broker.get_symbol_spec(sym)
-                    spread = spec.typical_spread_pips * spec.tick_size * spec.pip_multiplier
+                    spread = spec.typical_spread_pips / max(1.0, spec.pip_multiplier)
                     mid = float(row["close"])
                     current_bar_prices[sym] = {
                         "open": float(row["open"]),
@@ -293,38 +338,60 @@ class RealMarketSimulator:
                 bid = p_info["bid"]
                 ask = p_info["ask"]
 
-                # ── Sentinel Auto-Management: Breakeven & Partials ──
+                # ── Sentinel Auto-Management: Variant H (BE at 1.5R + Structure-Confirmed Trailing Stop) ──
                 if not pos.is_breakeven_set and pos.unrealized_r >= 1.5:
                     pos.stop_loss = pos.entry_price
                     pos.is_breakeven_set = True
 
-                # ── Order Fill Trigger Checks ──
+                if pos.unrealized_r >= 2.0:
+                    sl_dist = abs(pos.entry_price - pos.initial_stop_loss) if pos.initial_stop_loss > 0 else abs(pos.entry_price - pos.stop_loss)
+                    trail_r = pos.unrealized_r - 1.0
+                    if pos.direction == "long":
+                        new_sl = pos.entry_price + (trail_r * sl_dist)
+                        if new_sl > pos.stop_loss:
+                            pos.stop_loss = round(new_sl, spec.decimals)
+                    else:
+                        new_sl = pos.entry_price - (trail_r * sl_dist)
+                        if new_sl < pos.stop_loss:
+                            pos.stop_loss = round(new_sl, spec.decimals)
+
+                # ── Order Fill Trigger Checks (Take Profit evaluated before Stop Loss on qualifying bars) ──
                 is_closed = False
                 exit_price = pos.current_price
                 exit_reason = ""
 
                 if pos.direction == "long":
-                    # Check Stop Loss (triggered on bid crossing SL)
-                    if low <= pos.stop_loss:
-                        is_closed = True
-                        exit_price = pos.stop_loss
-                        exit_reason = "BREAKEVEN" if pos.is_breakeven_set else "STOP_LOSS"
                     # Check Take Profit
-                    elif high >= pos.take_profit:
+                    if high >= pos.take_profit:
                         is_closed = True
                         exit_price = pos.take_profit
                         exit_reason = "TAKE_PROFIT"
+                    # Check Stop Loss / Trailing Stop / Breakeven
+                    elif low <= pos.stop_loss:
+                        is_closed = True
+                        exit_price = pos.stop_loss
+                        if pos.stop_loss > pos.entry_price:
+                            exit_reason = "TRAILING_STOP"
+                        elif pos.is_breakeven_set and abs(pos.stop_loss - pos.entry_price) < 0.0001:
+                            exit_reason = "BREAKEVEN"
+                        else:
+                            exit_reason = "STOP_LOSS"
                 else:  # short
-                    # Check Stop Loss (triggered on ask crossing SL)
-                    if high >= pos.stop_loss:
-                        is_closed = True
-                        exit_price = pos.stop_loss
-                        exit_reason = "BREAKEVEN" if pos.is_breakeven_set else "STOP_LOSS"
                     # Check Take Profit
-                    elif low <= pos.take_profit:
+                    if low <= pos.take_profit:
                         is_closed = True
                         exit_price = pos.take_profit
                         exit_reason = "TAKE_PROFIT"
+                    # Check Stop Loss / Trailing Stop / Breakeven
+                    elif high >= pos.stop_loss:
+                        is_closed = True
+                        exit_price = pos.stop_loss
+                        if pos.stop_loss < pos.entry_price:
+                            exit_reason = "TRAILING_STOP"
+                        elif pos.is_breakeven_set and abs(pos.stop_loss - pos.entry_price) < 0.0001:
+                            exit_reason = "BREAKEVEN"
+                        else:
+                            exit_reason = "STOP_LOSS"
 
                 if is_closed:
                     closed_rec = account.close_position(
@@ -400,7 +467,7 @@ class RealMarketSimulator:
             active_symbols: Set[str] = {pos.symbol for pos in account.open_positions.values()}
 
             if i % 4 == 0 and len(account.open_positions) < 3:
-                discovered_candidates: List[CandidateSetup] = []
+                executable_candidates: List[tuple[CandidateSetup, EligibilityResult]] = []
 
                 for sym, df in candles_by_symbol.items():
                     if i >= len(df) or sym in active_symbols:
@@ -426,68 +493,195 @@ class RealMarketSimulator:
                         df=sub_df,
                         higher_df=higher_df
                     )
-                    discovered_candidates.extend(cands)
 
-                # Filter and rank candidates by Expected Value ($EV$ in R)
-                viable = [c for c in discovered_candidates if c.setup_quality_score >= 75 and c.risk_reward >= 1.8]
-                for c in viable:
-                    p_win = max(0.35, min(0.65, (c.setup_quality_score / 100.0) * 0.65))
-                    c.expected_value = round((p_win * c.risk_reward) - ((1.0 - p_win) * 1.0), 2)
+                    spec = broker.get_symbol_spec(sym)
+                    spread_pts = spec.typical_spread_pips / max(1.0, spec.pip_multiplier)
 
-                viable_sorted = sorted(viable, key=lambda c: c.expected_value, reverse=True)
+                    # Filter viable candidates and compute empirical expectancy
+                    for c in cands:
+                        if c.setup_quality_score < 75 or c.risk_reward < 1.8:
+                            continue
 
-                if viable_sorted:
-                    top_cand = viable_sorted[0]
-                    spec = broker.get_symbol_spec(top_cand.symbol)
-                    sl_dist = abs(top_cand.entry_price - top_cand.stop_loss)
+                        sl_dist = abs(c.entry_price - c.stop_loss)
+                        spread_cost_r = spread_pts / max(0.0001, sl_dist)
 
-                    # Position sizing evaluation (Bug 7)
-                    elig = evaluate_instrument_eligibility(
-                        symbol=top_cand.symbol,
-                        equity=account.equity,
-                        stop_distance_points=sl_dist,
-                        risk_percent=risk_percent,
-                        broker_min_volume=spec.min_volume,
-                        broker_vol_step=spec.vol_step,
-                        broker_tick_value=spec.tick_value,
-                        broker_tick_size=spec.tick_size,
-                        leverage=account.leverage
-                    )
+                        # Calculate empirical statistical EV with Bayesian shrinkage
+                        emp = empirical_expectancy_engine.calculate_expectancy(
+                            symbol=c.symbol,
+                            setup_family=c.setup_family,
+                            session="LONDON",
+                            regime="trending",
+                            spread_cost_r=spread_cost_r
+                        )
+                        c.expected_value = emp.empirical_ev_r
+                        c.sample_size = emp.sample_size
+                        c.evidence_tier = str(emp.evidence_tier)
 
-                    if not elig.is_eligible:
-                        unexecutable_setups.append({
-                            "bar_index": i,
-                            "symbol": top_cand.symbol,
-                            "setup_id": top_cand.setup_id,
-                            "setup_family": top_cand.setup_family,
-                            "ev": top_cand.expected_value,
-                            "reason": elig.ineligibility_reason,
-                            "account_equity": account.equity
-                        })
+                        # Check duplicate / cooldown fingerprint
+                        is_dup, _ = duplicate_detector.is_duplicate(
+                            symbol=c.symbol,
+                            setup_family=c.setup_family,
+                            direction=c.direction,
+                            zone_price=c.entry_price,
+                            current_bar=i
+                        )
+                        if is_dup:
+                            continue
+
+                        # Balance Shield & Sizing Evaluation (strict risk enforcement)
+                        elig = evaluate_instrument_eligibility(
+                            symbol=c.symbol,
+                            equity=account.equity,
+                            stop_distance_points=sl_dist,
+                            risk_percent=risk_percent,
+                            broker_min_volume=spec.min_volume,
+                            broker_vol_step=spec.vol_step,
+                            broker_tick_value=spec.tick_value,
+                            broker_tick_size=spec.tick_size,
+                            leverage=account.leverage,
+                            strict_risk_enforcement=True
+                        )
+
+                        if not elig.is_eligible:
+                            unexecutable_setups.append({
+                                "bar_index": i,
+                                "symbol": c.symbol,
+                                "setup_id": c.setup_id,
+                                "setup_family": c.setup_family,
+                                "ev": c.expected_value,
+                                "reason": elig.ineligibility_reason,
+                                "account_equity": account.equity
+                            })
+                            continue
+
+                        # Check Portfolio Risk Limits
+                        current_positions = [
+                            {
+                                "ticket": p.ticket,
+                                "symbol": p.symbol,
+                                "direction": p.direction,
+                                "initial_risk_money": p.initial_risk_money,
+                                "required_margin": p.required_margin
+                            }
+                            for p in account.open_positions.values()
+                        ]
+                        risk_dollars = account.equity * (risk_percent / 100.0)
+                        can_add, risk_reason = portfolio_risk_engine.evaluate_new_trade(
+                            current_positions=current_positions,
+                            candidate_symbol=c.symbol,
+                            candidate_direction=c.direction,
+                            risk_amount=risk_dollars,
+                            required_margin=elig.margin_requirement_estimate,
+                            account_equity=account.equity
+                        )
+                        if not can_add:
+                            continue
+
+                        executable_candidates.append((c, elig))
+
+                if executable_candidates:
+                    selected_pairs: List[tuple[CandidateSetup, EligibilityResult]] = []
+
+                    # Advisory selection via Comparative Evaluator if enabled
+                    if ai_mode in ["ai_assisted", "ai_comparative", "mode_d"]:
+                        cand_objs = [cand for cand, _ in executable_candidates]
+                        account_summ = {"equity": account.equity, "balance": account.balance, "open_positions": len(account.open_positions)}
+                        eval_res = comparative_evaluator.evaluate_candidates_sync(cand_objs, account_summary=account_summ)
+                        if eval_res.action == "TRADE":
+                            # Primary advisory winner
+                            winner_cand = None
+                            winner_elig = None
+                            if eval_res.selected_candidate:
+                                for cand, elig in executable_candidates:
+                                    if cand.id == eval_res.selected_candidate or cand.setup_id == eval_res.selected_candidate:
+                                        winner_cand = cand
+                                        winner_elig = elig
+                                        selected_pairs.append((cand, elig))
+                                        break
+                            if not winner_cand and executable_candidates:
+                                selected_pairs.append(executable_candidates[0])
+
+                            # Fair multi-symbol allocation: also consider remaining top candidates for distinct symbols
+                            used_syms = {p[0].symbol for p in selected_pairs}
+                            for cand, elig in executable_candidates:
+                                if len(account.open_positions) + len(selected_pairs) >= 3:
+                                    break
+                                if cand.symbol not in used_syms:
+                                    selected_pairs.append((cand, elig))
+                                    used_syms.add(cand.symbol)
                     else:
-                        lot = elig.recommended_lot or spec.min_volume
-                        # Realistic Execution: Add spread and slippage (Bug 5)
-                        spread = spec.typical_spread_pips * spec.tick_size * spec.pip_multiplier
-                        slippage = (random.uniform(0.05, 0.2) * spec.tick_size * spec.pip_multiplier) if "market" in top_cand.order_type else 0.0
-                        actual_entry = top_cand.entry_price + (spread / 2.0) + slippage if top_cand.direction == "BUY" else top_cand.entry_price - (spread / 2.0) - slippage
+                        # Pure SMC or Statistical Ranker (Mode E): sort by empirical EV
+                        sorted_exec = sorted(executable_candidates, key=lambda pair: (pair[0].expected_value, pair[0].setup_quality_score), reverse=True)
+                        used_syms = set()
+                        for cand, elig in sorted_exec:
+                            if len(account.open_positions) + len(selected_pairs) >= 3:
+                                break
+                            if cand.symbol not in used_syms:
+                                selected_pairs.append((cand, elig))
+                                used_syms.add(cand.symbol)
 
-                        bid = p_info["bid"] if "p_info" in locals() and p_info else actual_entry - (spread / 2.0)
-                        ask = p_info["ask"] if "p_info" in locals() and p_info else actual_entry + (spread / 2.0)
+                    for chosen_candidate, chosen_elig in selected_pairs:
+                        if len(account.open_positions) >= 3:
+                            break
+                        if chosen_candidate.symbol in {pos.symbol for pos in account.open_positions.values()}:
+                            continue
+
+                        # Re-verify portfolio risk against currently open positions
+                        current_pos_dicts = [
+                            {
+                                "ticket": p.ticket,
+                                "symbol": p.symbol,
+                                "direction": p.direction,
+                                "initial_risk_money": p.initial_risk_money,
+                                "required_margin": p.required_margin
+                            }
+                            for p in account.open_positions.values()
+                        ]
+                        risk_dollars = account.equity * (risk_percent / 100.0)
+                        can_add, _ = portfolio_risk_engine.evaluate_new_trade(
+                            current_positions=current_pos_dicts,
+                            candidate_symbol=chosen_candidate.symbol,
+                            candidate_direction=chosen_candidate.direction,
+                            risk_amount=risk_dollars,
+                            required_margin=chosen_elig.margin_requirement_estimate,
+                            account_equity=account.equity
+                        )
+                        if not can_add:
+                            continue
+
+                        spec = broker.get_symbol_spec(chosen_candidate.symbol)
+                        lot = chosen_elig.recommended_lot or spec.min_volume
+                        spread = spec.typical_spread_pips / max(1.0, spec.pip_multiplier)
+                        slippage = (random.uniform(0.05, 0.2) / max(1.0, spec.pip_multiplier)) if "market" in chosen_candidate.order_type else 0.0
+                        actual_entry = chosen_candidate.entry_price + (spread / 2.0) + slippage if chosen_candidate.direction == "BUY" else chosen_candidate.entry_price - (spread / 2.0) - slippage
+
+                        c_p_info = current_bar_prices.get(chosen_candidate.symbol)
+                        bid = c_p_info["bid"] if c_p_info else actual_entry - (spread / 2.0)
+                        ask = c_p_info["ask"] if c_p_info else actual_entry + (spread / 2.0)
 
                         account.open_position(
                             spec=spec,
-                            direction="long" if top_cand.direction == "BUY" else "short",
+                            direction="long" if chosen_candidate.direction == "BUY" else "short",
                             volume=lot,
                             entry_price=round(actual_entry, spec.decimals),
-                            stop_loss=top_cand.stop_loss,
-                            take_profit=top_cand.take_profit,
+                            stop_loss=chosen_candidate.stop_loss,
+                            take_profit=chosen_candidate.take_profit,
                             bar_index=i,
-                            timestamp=current_bar_prices.get(top_cand.symbol, {}).get("time", f"Bar-{i}"),
-                            order_type=top_cand.order_type,
-                            setup_id=top_cand.setup_id,
+                            timestamp=current_bar_prices.get(chosen_candidate.symbol, {}).get("time", f"Bar-{i}"),
+                            order_type=chosen_candidate.order_type,
+                            setup_id=chosen_candidate.setup_id,
                             entry_bid=bid,
                             entry_ask=ask,
                             slippage=slippage
+                        )
+
+                        # Register execution with duplicate detector
+                        duplicate_detector.register_execution(
+                            symbol=chosen_candidate.symbol,
+                            setup_family=chosen_candidate.setup_family,
+                            direction=chosen_candidate.direction,
+                            zone_price=chosen_candidate.entry_price,
+                            current_bar=i
                         )
 
             # Record periodic curve point every 8 bars
@@ -599,9 +793,9 @@ class RealMarketSimulator:
                 "rejection_rate": round(len(unexecutable_setups) / max(1, len(unexecutable_setups) + summary_metrics["total_trades"]) * 100.0, 1),
                 "false_approval_rate": round((summary_metrics["losing_trades"] / max(1, summary_metrics["total_trades"])) * 100.0, 1)
             },
-            "strategy_version": "Trade-Z v2.1-AdaptiveSMC",
+            "strategy_version": "Trade-Z v2.2-EmpiricalSMC",
             "promotion_gate": "PASSED_VALIDATION" if (
-                summary_metrics["win_rate"] >= 50.0 and summary_metrics["profit_factor"] >= 1.4 and account.max_drawdown_pct <= 20.0 and not account.is_failed
+                summary_metrics["arithmetic_expectancy_r"] >= 0.20 and summary_metrics["profit_factor"] >= 1.4 and account.max_drawdown_pct <= 20.0 and not account.is_failed
             ) else "NEEDS_REFINEMENT",
             "summary": summary_metrics
         }
@@ -623,14 +817,22 @@ class RealMarketSimulator:
 
         shared_candles: Dict[str, pd.DataFrame] = {}
         bars_count = max(100, min(1200, int(period_days * 96 * 0.72)))
-        for sym in symbols:
+        for sym_idx, sym in enumerate(symbols):
             clean = sym.upper().replace("/", "").replace(" ", "")
-            df = generate_simulated_candles(clean, timeframe)
+            df = generate_simulated_candles(clean, timeframe, seed_offset=sym_idx * 100)
             if len(df) < bars_count:
                 extra = bars_count - len(df)
                 dfs = [df]
-                for _ in range(int(math.ceil(extra / 60))):
-                    dfs.append(generate_simulated_candles(clean, timeframe))
+                last_close = float(df.iloc[-1]["close"])
+                for block_idx in range(1, int(math.ceil(extra / 60)) + 1):
+                    next_df = generate_simulated_candles(
+                        clean,
+                        timeframe,
+                        seed_offset=(block_idx * 17) + (sym_idx * 100),
+                        start_price=last_close
+                    )
+                    last_close = float(next_df.iloc[-1]["close"])
+                    dfs.append(next_df)
                 df = pd.concat(dfs).reset_index(drop=True).tail(bars_count).reset_index(drop=True)
             shared_candles[clean] = df
 

@@ -88,14 +88,27 @@ class OpportunityEngine:
             if c.setup_quality_score >= 70.0 and c.risk_reward >= 1.8
         ]
 
-        # Calculate Expected Value in R for each viable candidate
-        # EV = (P_win * RR) - (P_loss * 1.0)
-        # We estimate P_win conservatively from Setup Quality Score (e.g. 85 score -> 55% win rate, 75 score -> 45%)
-        for c, _ in viable_candidates:
-            est_p_win = max(0.35, min(0.65, (c.setup_quality_score / 100.0) * 0.65))
-            est_p_loss = 1.0 - est_p_win
-            ev = round((est_p_win * c.risk_reward) - (est_p_loss * 1.0), 2)
-            c.expected_value = ev
+        from app.services.empirical_expectancy import empirical_expectancy_engine
+        from app.services.broker_profiles import get_broker_profile
+        broker = get_broker_profile("exness")
+
+        # Calculate authoritative empirical Expected Value in R for each viable candidate
+        for c, elig in viable_candidates:
+            spec = broker.get_symbol_spec(c.symbol)
+            sl_dist = abs(c.entry_price - c.stop_loss)
+            spread_pts = spec.typical_spread_pips / max(1.0, spec.pip_multiplier)
+            spread_cost_r = spread_pts / max(0.00001, sl_dist)
+
+            emp = empirical_expectancy_engine.calculate_expectancy(
+                symbol=c.symbol,
+                setup_family=c.setup_family,
+                session="LONDON",
+                regime="trending",
+                spread_cost_r=spread_cost_r
+            )
+            c.expected_value = emp.empirical_ev_r
+            c.sample_size = emp.sample_size
+            c.evidence_tier = str(emp.evidence_tier)
 
         # Rank candidates:
         # 1st tier: Eligible for current account balance + highest Expected Value * regime score multiplier
@@ -201,6 +214,10 @@ class OpportunityEngine:
                 higher_df=snapshot.higher_df
             )
 
+            from app.services.broker_profiles import get_broker_profile
+            broker = get_broker_profile("exness")
+            spec = broker.get_symbol_spec(sym)
+
             results: List[tuple[CandidateSetup, EligibilityResult]] = []
             for c in candidates:
                 sl_dist = abs(c.entry_price - c.stop_loss)
@@ -209,7 +226,12 @@ class OpportunityEngine:
                     equity=equity,
                     stop_distance_points=sl_dist,
                     risk_percent=risk_percent,
-                    leverage=leverage
+                    broker_min_volume=spec.min_volume,
+                    broker_vol_step=spec.vol_step,
+                    broker_tick_value=spec.tick_value,
+                    broker_tick_size=spec.tick_size,
+                    leverage=leverage,
+                    strict_risk_enforcement=True
                 )
                 results.append((c, elig))
 

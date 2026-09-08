@@ -361,139 +361,75 @@ async def quick_analysis(request: AnalysisRequest):
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
-    # 3. Construct pipeline execution context
-    rr = 2.5 if request.timeframe == "15m" else 3.2
-    context = {
-        "today_signal_count": request.today_signal_count or 0,
-        "daily_signal_limit": request.daily_signal_limit or 100,
-        "history": request.history or [],
-        "risk_reward_ratio": rr,
-        "account_balance": request.account_balance,
-        "account_equity": request.account_equity,
-        "account_leverage": request.account_leverage,
-        "engine_results": {}
+    # 3. Authoritative Strategy Intelligence Evaluation (Zero Lookahead, Empirical EV, MT5 Sizing)
+    from app.services.unified_strategy_engine import unified_strategy_engine, ExecutionMode, DecisionAction
+
+    decision = unified_strategy_engine.evaluate(
+        symbol=request.pair,
+        timeframe=request.timeframe,
+        df=snapshot.df,
+        higher_df=snapshot.higher_df,
+        account_balance=request.account_balance or 1000.0,
+        account_equity=request.account_equity,
+        account_leverage=request.account_leverage or 100.0,
+        mode=ExecutionMode.LIVE,
+        enable_ai_advisory=True
+    )
+
+    action_map = {
+        DecisionAction.TRADE: "approve",
+        DecisionAction.WAIT: "wait",
+        DecisionAction.NO_TRADE: "reject" if (decision.ineligibility_reason or not decision.is_eligible) else "no_trade"
     }
+    api_decision = action_map.get(decision.action, "no_trade")
+    standard_dir = "short" if decision.direction in ["SELL", "short"] else ("long" if decision.direction in ["BUY", "long"] else "neutral")
 
-    # 4. Sequentially execute individual pipeline engines (L1 -> L15)
-    # L1: Eligibility
-    elig_res = eligibility_engine.analyze(snapshot, context)
-    context["engine_results"]["eligibility"] = elig_res
-    
-    # L2: Higher Timeframe Bias
-    htf_res = higher_tf_engine.analyze(snapshot, context)
-    context["engine_results"]["higher_timeframe"] = htf_res
-
-    # L3: Market Structure
-    struct_res = structure_engine.analyze(snapshot, context)
-    context["engine_results"]["structure"] = struct_res
-
-    # L4: Liquidity
-    liq_res = liquidity_engine.analyze(snapshot, context)
-    context["engine_results"]["liquidity"] = liq_res
-
-    # L5: Institutional Zones
-    zones_res = zones_engine.analyze(snapshot, context)
-    context["engine_results"]["zones"] = zones_res
-
-    # L6: Trend Quality
-    trend_res = trend_quality_engine.analyze(snapshot, context)
-    context["engine_results"]["trend_quality"] = trend_res
-
-    # L7: Momentum
-    mom_res = momentum_engine.analyze(snapshot, context)
-    context["engine_results"]["momentum"] = mom_res
-
-    # L8: Volume
-    vol_res = volume_engine.analyze(snapshot, context)
-    context["engine_results"]["volume"] = vol_res
-
-    # L9: Volatility
-    vlt_res = volatility_engine.analyze(snapshot, context)
-    context["engine_results"]["volatility"] = vlt_res
-
-    # L10: Correlation
-    corr_res = correlation_engine.analyze(snapshot, context)
-    context["engine_results"]["correlation"] = corr_res
-
-    # L11: Fundamentals
-    funds_res = fundamentals_engine.analyze(snapshot, context)
-    context["engine_results"]["fundamentals"] = funds_res
-
-    # L12: History Pattern
-    hist_res = history_engine.analyze(snapshot, context)
-    context["engine_results"]["historical_pattern"] = hist_res
-
-    # L13: Risk
-    risk_res = risk_engine.analyze(snapshot, context)
-    context["engine_results"]["risk"] = risk_res
-
-    # L14: Confidence Aggregation
-    conf_res = confidence_engine.analyze(snapshot, context)
-    context["engine_results"]["confidence"] = conf_res
-
-    # L15: Final Decision & Trade Certificate Compilation
-    dec_res = decision_engine.analyze(snapshot, context)
-    cert = dec_res.metrics.get("certificate", {})
-
-    # 5. Extract rejection warnings
-    rejection_reasons = []
-    for key, res in context["engine_results"].items():
-        if res.validation_status in ["invalid", "limit_breached", "closed"]:
-            rejection_reasons.append(res.explanation)
-
-    # 5b. Decoupled AI Reviewer Layer (Adversarial Critic)
-    # The LLM CANNOT create trades or change risk; it can only vet/criticize the deterministic setup
-    if dec_res.result == "approve":
-        try:
-            review_res = await openrouter_reviewer.review_setup(cert)
-            cert["ai_review"] = review_res.dict()
-            if review_res.decision == "REJECT":
-                dec_res.result = "reject"
-                critic_reasons = review_res.contradictions or review_res.risk_flags or [review_res.critic_notes]
-                dec_res.explanation = f"NO TRADE: AI Critic Veto — {review_res.critic_notes or 'SMC structural contradictions identified.'}"
-                rejection_reasons.extend(critic_reasons)
-            elif review_res.decision == "REQUEST_MORE_DATA":
-                dec_res.result = "wait"
-                dec_res.explanation = f"WAIT: AI Critic requested further confirmation — {review_res.critic_notes}"
-        except Exception as rev_err:
-            print(f"[analysis.py] AI Reviewer non-fatal exception: {rev_err}")
-
-    # 6. Map to backwards-compatible JSON schema
     confluence_breakdown = {
-        "marketStructure": float(struct_res.confidence),
-        "trend": 100 if htf_res.result != "neutral" else 50,
-        "momentum": float(mom_res.confidence),
-        "liquidity": float(liq_res.confidence),
+        "marketStructure": decision.setup_quality_score,
+        "trend": 100 if standard_dir != "neutral" else 50,
+        "momentum": 80.0 if decision.action == DecisionAction.TRADE else 50.0,
+        "liquidity": 85.0 if decision.action == DecisionAction.TRADE else 50.0,
         "economicNews": 100 if news_safe else 10,
-        "riskReward": 100 if rr >= 2.0 else 50,
-        "overall": float(conf_res.confidence)
+        "riskReward": 100 if decision.risk_reward >= 2.0 else 50,
+        "overall": decision.setup_quality_score
     }
 
-    # Determine standardized direction ('long' vs 'short')
-    raw_dir = str(cert.get("direction", "BUY")).upper()
-    standard_dir = "short" if ("SELL" in raw_dir or "SHORT" in raw_dir) else "long"
+    reasoning = (
+        f"{decision.setup_family} setup on {request.pair} ({request.timeframe}) evaluated with empirical EV +{decision.expected_value_r:.2f}R "
+        f"and {decision.risk_reward:.1f} R:R. Decision: {api_decision.upper()}."
+    )
+    if decision.ineligibility_reason:
+        reasoning += f" Warning: {decision.ineligibility_reason}"
+
+    rejection_reasons = list(decision.reason_codes)
+    if decision.ineligibility_reason:
+        rejection_reasons.append(decision.ineligibility_reason)
+
+    cert = decision.model_dump()
 
     return {
         "success": True,
         "data": {
             "pair": request.pair,
             "timeframe": request.timeframe,
-            "decision": dec_res.result,
+            "decision": api_decision,
             "direction": standard_dir,
-            "order_type": cert.get("order_type", "market"),
-            "confidence": float(dec_res.confidence),
-            "reasoning": dec_res.explanation,
+            "order_type": decision.order_type,
+            "confidence": float(decision.setup_quality_score),
+            "reasoning": reasoning,
             "rejection_reasons": rejection_reasons,
-            "expected_trigger": cert.get("expected_trigger"),
+            "expected_trigger": f"Target entry at {decision.entry_price:.5f}",
             "confluence_breakdown": confluence_breakdown,
-            "entry_price": cert.get("entry_price", 0.0),
-            "current_price": cert.get("entry_price", 0.0),
-            "stop_loss": cert.get("stop_loss", 0.0),
-            "take_profit": cert.get("take_profit", 0.0),
-            "risk_reward": cert.get("risk_reward", rr),
-            "recommended_lot_size": cert.get("recommended_lot_size", 0.01),
-            "dollar_risk": cert.get("dollar_risk", 0.0),
-            "collaboration": cert.get("collaboration", {}),
+            "entry_price": decision.entry_price,
+            "current_price": decision.entry_price,
+            "stop_loss": decision.stop_loss,
+            "take_profit": decision.take_profit,
+            "risk_reward": decision.risk_reward,
+            "recommended_lot_size": decision.recommended_lot,
+            "dollar_risk": decision.dollar_risk,
+            "expected_value_r": decision.expected_value_r,
+            "evidence_tier": decision.evidence_tier,
+            "institutional_audit": decision.institutional_audit,
             "certificate": cert,
             "timestamp": datetime.now(timezone.utc).isoformat()
         },

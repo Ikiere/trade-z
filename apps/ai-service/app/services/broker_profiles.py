@@ -260,3 +260,43 @@ def get_broker_profile(name: Optional[str] = None) -> BrokerProfile:
         return EXNESS_PROFILE
     key = name.lower().replace(" ", "_")
     return AVAILABLE_BROKERS.get(key, EXNESS_PROFILE)
+
+
+def sync_from_mt5_symbol_info(
+    symbol: str,
+    mt5_info: Dict[str, Any],
+    profile: Optional[BrokerProfile] = None
+) -> SymbolSpec:
+    """
+    Dynamically synchronizes an authoritative SymbolSpec from live MT5 terminal bridge data.
+    """
+    prof = profile or EXNESS_PROFILE
+    clean_sym = symbol.upper().replace("/", "").replace(" ", "")
+    base_spec = prof.get_symbol_spec(clean_sym)
+
+    digits = int(mt5_info.get("digits", base_spec.decimals))
+    point = float(mt5_info.get("point", base_spec.tick_size))
+    spread_points = float(mt5_info.get("spread", base_spec.typical_spread_pips * 10))
+
+    pip_mult = base_spec.pip_multiplier
+    spread_pips = spread_points / (10.0 if "JPY" in clean_sym or "XAU" in clean_sym else 10.0)
+
+    updated_spec = SymbolSpec(
+        symbol=clean_sym,
+        asset_class=base_spec.asset_class,
+        contract_size=float(mt5_info.get("contract_size", base_spec.contract_size)),
+        min_volume=float(mt5_info.get("volume_min", base_spec.min_volume)),
+        vol_step=float(mt5_info.get("volume_step", base_spec.vol_step)),
+        max_volume=float(mt5_info.get("volume_max", base_spec.max_volume)),
+        tick_size=point,
+        tick_value=float(mt5_info.get("trade_tick_value", base_spec.tick_value)),
+        decimals=digits,
+        pip_multiplier=pip_mult,
+        typical_spread_pips=round(spread_pips, 2) if spread_pips > 0 else base_spec.typical_spread_pips,
+        news_spread_pips=base_spec.news_spread_pips,
+        commission_per_lot=base_spec.commission_per_lot,
+        swap_long_points=base_spec.swap_long_points,
+        swap_short_points=base_spec.swap_short_points
+    )
+    prof.symbols[clean_sym] = updated_spec
+    return updated_spec

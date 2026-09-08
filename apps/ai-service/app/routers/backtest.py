@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, List
 
 from app.services.backtester import AIBacktester
 from app.services.real_market_simulator import real_market_simulator
+from app.services.event_driven_simulator import event_driven_simulator
 from app.services.experience_memory import experience_memory
 from app.services.broker_profiles import AVAILABLE_BROKERS, get_broker_profile
 
@@ -54,10 +55,10 @@ class ExperienceQueryPayload(BaseModel):
 @router.post("/simulate")
 async def simulate_market(payload: SimulationPayload):
     """
-    Executes a high-fidelity chronological historical replay simulation
-    with zero look-ahead bias, virtual MT5 account tracking, and forensic trade autopsies.
+    Executes a high-fidelity discrete event-driven simulation
+    with zero look-ahead bias, authentic MT5 margin tracking, and forensic trade autopsies.
     """
-    result = real_market_simulator.run_simulation(
+    result = event_driven_simulator.run_simulation(
         symbols=payload.symbols,
         initial_balance=payload.initial_balance,
         timeframe=payload.timeframe,
@@ -131,7 +132,7 @@ async def list_broker_profiles():
 @router.post("/run")
 async def run_legacy_backtest_endpoint(request: LegacyBacktestRequest):
     sym = request.pair.upper()
-    return real_market_simulator.run_simulation(
+    return event_driven_simulator.run_simulation(
         symbols=[sym],
         initial_balance=10000.0,
         timeframe=request.timeframe,

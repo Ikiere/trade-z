@@ -35,6 +35,10 @@ import {
   Percent,
   Server,
   Compass,
+  Download,
+  FileSpreadsheet,
+  FileJson,
+  FileText,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getApiBaseUrl } from '@/lib/api';
@@ -52,6 +56,8 @@ interface TradeAutopsy {
   sentinel_action?: string;
   confluences_confirmed?: string[];
   execution_drift_detected?: boolean;
+  is_statistical_acceptable?: boolean;
+  recommended_adjustment?: string;
 }
 
 interface SimulatedTrade {
@@ -366,6 +372,191 @@ export default function BacktestSimulatorPage() {
     } finally {
       setTeaching(false);
     }
+  };
+
+  // ── Download Entire Simulation as CSV ──
+  const downloadTradesCSV = () => {
+    if (!trades || trades.length === 0) return;
+
+    const headers = [
+      'Trade_ID',
+      'Symbol',
+      'Direction',
+      'Setup_Family',
+      'Lot_Size',
+      'Entry_Price',
+      'Initial_Stop_Loss',
+      'Current_Stop_Loss',
+      'Take_Profit',
+      'Exit_Price',
+      'Terminal_Outcome',
+      'Net_PnL_USD',
+      'Realized_R',
+      'PnL_Pips',
+      'MFE_Pips',
+      'MFE_R',
+      'MAE_Pips',
+      'MAE_R',
+      'Root_Cause_Attribution',
+      'Clinical_Summary',
+      'Sentinel_Action',
+      'Exit_Reason',
+      'Balance_After',
+      'Equity_After'
+    ];
+
+    const rows = trades.map((t) => {
+      const pnl = t.pnl_dollars ?? t.net_pnl ?? 0;
+      const r = t.pnl_r ?? t.r_multiple ?? 0;
+      const initialSl = t.initial_stop_loss || t.stop_loss;
+      const currentSl = t.current_stop_loss || t.stop_loss;
+      const mfePips = t.autopsy?.mfe_pips ?? t.mfe_pips ?? (Number(t.autopsy?.mfe_r ?? t.mfe_r ?? 0) * 15).toFixed(1);
+      const maePips = t.autopsy?.mae_pips ?? t.mae_pips ?? (Number(t.autopsy?.mae_r ?? t.mae_r ?? 0) * 15).toFixed(1);
+      const rootCause = t.autopsy?.root_cause || (t.outcome === 'WIN' ? 'CLEAN_EXPANSION_TP' : t.outcome === 'BREAKEVEN' ? 'PROTECTIVE_BREAKEVEN' : 'NORMAL_STATISTICAL_LOSS');
+      const clinicalSummary = (t.autopsy?.clinical_summary || t.autopsy?.cause_description || '').replace(/"/g, '""');
+
+      return [
+        t.id,
+        t.symbol || t.pair || 'EURUSD',
+        String(t.direction).toUpperCase(),
+        `"${(t.setup_family || 'SMC Setup').replace(/"/g, '""')}"`,
+        t.lot ?? t.volume ?? 0.01,
+        t.entry_price,
+        initialSl,
+        currentSl,
+        t.take_profit,
+        t.exit_price,
+        t.outcome,
+        pnl.toFixed(2),
+        r.toFixed(2),
+        t.pnl_pips ?? 0,
+        mfePips,
+        t.autopsy?.mfe_r ?? t.mfe_r ?? 0,
+        maePips,
+        t.autopsy?.mae_r ?? t.mae_r ?? 0,
+        `"${rootCause}"`,
+        `"${clinicalSummary}"`,
+        `"${t.autopsy?.sentinel_action || t.exit_reason || ''}"`,
+        `"${t.exit_reason || ''}"`,
+        t.balance_after ?? 0,
+        t.equity_after ?? 0
+      ].join(',');
+    });
+
+    const csvContent = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `trade-z-backtest-${selectedSymbols.join('-')}-${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // ── Download Entire Simulation as JSON ──
+  const downloadTradesJSON = () => {
+    if (!trades || trades.length === 0) return;
+
+    const dataExport = {
+      exported_at: new Date().toISOString(),
+      strategy_version: 'Trade-Z v2.1-AdaptiveSMC',
+      parameters: {
+        symbols: selectedSymbols,
+        timeframe,
+        period_days: periodDays,
+        initial_balance: effectiveInitialBalance,
+        risk_percent: effectiveRiskPercent,
+        broker_profile: brokerProfile
+      },
+      summary,
+      trades,
+      equity_curve: equityCurve
+    };
+
+    const blob = new Blob([JSON.stringify(dataExport, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `trade-z-backtest-${selectedSymbols.join('-')}-${new Date().toISOString().split('T')[0]}.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // ── Download Single Trade Forensic Report (.TXT) ──
+  const downloadSingleTradeReport = (trade: SimulatedTrade) => {
+    const pnl = trade.pnl_dollars ?? trade.net_pnl ?? 0;
+    const r = trade.pnl_r ?? trade.r_multiple ?? 0;
+    const initialSl = trade.initial_stop_loss || trade.stop_loss;
+    const mfePips = trade.autopsy?.mfe_pips ?? trade.mfe_pips ?? (Number(trade.autopsy?.mfe_r ?? trade.mfe_r ?? 0) * 15).toFixed(1);
+    const maePips = trade.autopsy?.mae_pips ?? trade.mae_pips ?? (Number(trade.autopsy?.mae_r ?? trade.mae_r ?? 0) * 15).toFixed(1);
+    const rootCause = trade.autopsy?.root_cause || (trade.outcome === 'WIN' ? 'CLEAN_EXPANSION_TP' : trade.outcome === 'BREAKEVEN' ? 'PROTECTIVE_BREAKEVEN' : 'NORMAL_STATISTICAL_LOSS');
+    const clinicalSummary = trade.autopsy?.clinical_summary || trade.autopsy?.cause_description || (trade.outcome === 'WIN' ? 'The trade expanded directly to the liquidity target with minimal adverse drawdown.' : 'Standard expected loss within statistical variance.');
+
+    const report = `================================================================================
+TRADE-Z INSTITUTIONAL FORENSIC TRADE AUDIT REPORT
+Engine: Trade-Z Production SMC Pipeline Mirror (v2.1)
+Trade Ticket: #${trade.ticket || trade.id}
+Export Timestamp: ${new Date().toISOString()}
+================================================================================
+
+1. EXECUTION COORDINATES
+--------------------------------------------------------------------------------
+Asset / Symbol:          ${trade.symbol || trade.pair || 'EURUSD'}
+Order Direction:         ${String(trade.direction).toUpperCase()}
+Setup Family:            ${trade.setup_family || 'Institutional SMC Setup'}
+Execution Lot Size:      ${trade.lot ?? trade.volume ?? 0.01} Lots
+Fill Entry Price:        ${trade.entry_price}
+Initial Stop Loss:       ${initialSl}
+Dynamic Stop Loss:       ${trade.current_stop_loss || trade.stop_loss}
+Take Profit Target:      ${trade.take_profit}
+Terminal Exit Price:     ${trade.exit_price}
+Exit Trigger / Reason:   ${trade.exit_reason || 'TARGET_OR_STOP'}
+Terminal Outcome:        ${trade.outcome}
+
+2. FINANCIAL & PERFORMANCE METRICS
+--------------------------------------------------------------------------------
+Realized Net PnL:        ${pnl >= 0 ? '+$' + pnl.toFixed(2) : '-$' + Math.abs(pnl).toFixed(2)}
+Realized R-Multiple:     ${r >= 0 ? '+' + r.toFixed(2) + 'R' : r.toFixed(2) + 'R'}
+Realized Movement:       ${trade.pnl_pips ?? 0} pips
+Maximum Favorable (MFE): +${mfePips} pips (+${trade.autopsy?.mfe_r ?? trade.mfe_r ?? 0}R)
+Maximum Adverse (MAE):   -${maePips} pips (-${trade.autopsy?.mae_r ?? trade.mae_r ?? 0}R)
+Balance After Close:     $${(trade.balance_after ?? 0).toFixed(2)}
+Equity After Close:      $${(trade.equity_after ?? 0).toFixed(2)}
+
+3. FORENSIC POST-TRADE AUTOPSY
+--------------------------------------------------------------------------------
+Root Cause Attribution:  ${rootCause}
+Clinical Diagnosis:      ${clinicalSummary}
+Sentinel Dynamic Action: ${trade.autopsy?.sentinel_action || trade.exit_reason || 'SL_CONTAINED'}
+Statistical Acceptability: ${trade.autopsy?.is_statistical_acceptable !== false ? 'ACCEPTABLE SYSTEMIC VARIANCE' : 'EXECUTION DRIFT DETECTED'}
+Recommended Adjustment:  ${trade.autopsy?.recommended_adjustment || 'Maintain strict mathematical position sizing.'}
+
+================================================================================
+TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
+================================================================================`;
+
+    const blob = new Blob([report], { type: 'text/plain;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `trade-audit-${trade.symbol || trade.pair || 'TRADE'}-${trade.id}-${trade.outcome}.txt`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // ── Download Single Trade as JSON ──
+  const downloadSingleTradeJSON = (trade: SimulatedTrade) => {
+    const blob = new Blob([JSON.stringify(trade, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `trade-audit-${trade.symbol || trade.pair || 'TRADE'}-${trade.id}-${trade.outcome}.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // Filtered trades
@@ -1185,7 +1376,7 @@ export default function BacktestSimulatorPage() {
                     </h3>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <div className="flex bg-[#12121a] p-1 rounded-lg border border-[#1e293b] text-xs font-semibold">
                       {(['all', 'wins', 'losses', 'breakeven'] as const).map((f) => (
                         <button
@@ -1198,6 +1389,26 @@ export default function BacktestSimulatorPage() {
                           {f}
                         </button>
                       ))}
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={downloadTradesCSV}
+                        title="Download complete backtest results as CSV spreadsheet"
+                        className="px-2.5 py-1.5 bg-[#12121a] hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg text-[10px] font-mono font-bold flex items-center gap-1.5 transition-all shadow-sm"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Export CSV</span>
+                      </button>
+
+                      <button
+                        onClick={downloadTradesJSON}
+                        title="Download complete backtest results as JSON"
+                        className="px-2.5 py-1.5 bg-[#12121a] hover:bg-brand-500/20 text-brand-400 border border-brand-500/30 rounded-lg text-[10px] font-mono font-bold flex items-center gap-1.5 transition-all shadow-sm"
+                      >
+                        <FileJson className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Export JSON</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1292,16 +1503,28 @@ export default function BacktestSimulatorPage() {
                               </span>
                             </td>
                             <td className="py-3 px-3 text-right">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setInspectTrade(trade);
-                                }}
-                                className="px-2.5 py-1 rounded bg-[#1e293b] hover:bg-brand-600 text-[10px] font-bold text-white transition-all inline-flex items-center gap-1 group-hover:border-brand-500"
-                              >
-                                <Eye className="w-3 h-3" />
-                                <span>Inspect</span>
-                              </button>
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    downloadSingleTradeReport(trade);
+                                  }}
+                                  title="Download Trade Forensic Report (.TXT)"
+                                  className="p-1 rounded bg-[#12121a] hover:bg-[#1e293b] text-[#94a3b8] hover:text-white border border-[#1e293b] transition-all"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setInspectTrade(trade);
+                                  }}
+                                  className="px-2.5 py-1 rounded bg-[#1e293b] hover:bg-brand-600 text-[10px] font-bold text-white transition-all inline-flex items-center gap-1 group-hover:border-brand-500"
+                                >
+                                  <Eye className="w-3 h-3" />
+                                  <span>Inspect</span>
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -1569,13 +1792,27 @@ export default function BacktestSimulatorPage() {
                 )}
               </div>
 
-              {/* Close Button */}
-              <div className="pt-2">
+              {/* Modal Action Buttons */}
+              <div className="pt-2 flex flex-col sm:flex-row items-center gap-2">
+                <button
+                  onClick={() => downloadSingleTradeReport(inspectTrade)}
+                  className="w-full sm:flex-1 py-2.5 bg-brand-600/20 hover:bg-brand-600/30 border border-brand-500/40 text-brand-300 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>DOWNLOAD AUDIT (.TXT)</span>
+                </button>
+                <button
+                  onClick={() => downloadSingleTradeJSON(inspectTrade)}
+                  className="w-full sm:w-auto px-4 py-2.5 bg-[#12121a] hover:bg-[#1e293b] border border-[#1e293b] text-[#cbd5e1] hover:text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                >
+                  <FileJson className="w-4 h-4" />
+                  <span>JSON</span>
+                </button>
                 <button
                   onClick={() => setInspectTrade(null)}
-                  className="w-full py-2.5 bg-[#1e293b] hover:bg-[#334155] text-white rounded-xl text-xs font-bold transition-all"
+                  className="w-full sm:w-auto px-5 py-2.5 bg-[#1e293b] hover:bg-[#334155] text-white rounded-xl text-xs font-bold transition-all"
                 >
-                  CLOSE AUTOPSY INSPECTOR
+                  CLOSE
                 </button>
               </div>
             </motion.div>

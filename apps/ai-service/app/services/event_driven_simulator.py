@@ -77,11 +77,16 @@ class EventDrivenSimulator:
         allow_synthetic: bool = False,
         sentinel_variant: str = "CURRENT_H",
         monte_carlo_mode: bool = False,
-        monte_carlo_seed: Optional[int] = None
+        monte_carlo_seed: Optional[int] = None,
+        news_windows: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
-        Executes an institutional event-driven simulation over chronological market bars.
-        Fails with DATA_UNAVAILABLE if real historical candles are not supplied in production.
+        Executes an institutional event-driven simulation over a timestamp-synchronized
+        multi-asset timeline. Fails with DATA_UNAVAILABLE if real historical candles are
+        not supplied in production.
+
+        news_windows: Optional list of {"symbol": str, "start": ISO str, "end": ISO str}
+            dicts that block new entries for the given symbol during the specified window.
         """
         b_name = broker_name or self.broker_name
         broker = get_broker_profile(b_name)
@@ -152,12 +157,84 @@ class EventDrivenSimulator:
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
 
-        min_len = min(available_lens)
-        sim_bars = min(bars or min_len, min_len)
-        first_df = list(candles_by_symbol.values())[0]
-        data_start = str(first_df.iloc[0].get("time", "Bar-0")) if len(first_df) > 0 else "Bar-0"
-        data_end = str(first_df.iloc[sim_bars - 1].get("time", f"Bar-{sim_bars-1}")) if sim_bars > 0 else "Bar-0"
-        bar_count = sim_bars
+        # Old min_len/sim_bars/data_start/data_end removed.
+        # Replaced by timestamp-synchronized merged timeline built below.
+
+        warmup = 35
+
+        # ── Build Timestamp-Synchronized Multi-Asset Timeline ──────────────────────
+        # Parse timestamps from every symbol's df into pd.Timestamp (UTC).
+        # The merged timeline is the sorted union of all unique bar timestamps.
+        # On each step, each symbol is looked up by its closest available timestamp.
+
+        def _parse_timestamps(df: pd.DataFrame) -> pd.Series:
+            """Extract and normalize bar timestamps to UTC pd.Timestamp."""
+            for col in ["time", "timestamp", "datetime", "Date", "date"]:
+                if col in df.columns:
+                    try:
+                        return pd.to_datetime(df[col], utc=True)
+                    except Exception:
+                        pass
+            # Fallback: generate synthetic timestamps (15m intervals from epoch)
+            return pd.Series(pd.date_range("2020-01-01", periods=len(df), freq="15min", tz="UTC"))
+
+        # Build per-symbol timestamp index
+        sym_ts: Dict[str, pd.DatetimeIndex] = {}
+        for sym, df in candles_by_symbol.items():
+            ts = _parse_timestamps(df)
+            sym_ts[sym] = pd.DatetimeIndex(ts)
+
+        # Merged sorted timeline of all unique timestamps
+        all_ts_sets = [s for s in sym_ts.values()]
+        if all_ts_sets:
+            merged_timeline = pd.DatetimeIndex(
+                sorted(set().union(*[set(s) for s in all_ts_sets]))
+            )
+        else:
+            merged_timeline = pd.DatetimeIndex([])
+
+        # Optionally limit bar count
+        if bars:
+            merged_timeline = merged_timeline[:bars]
+
+        # Build kill-zone checker ─────────────────────────────────────────────────
+        # Blocks new entries during low-liquidity dead zones (all times UTC):
+        #   21:00–00:00: Sydney open / institutional inactivity
+        #   00:00–02:00: Asia dead zone before Tokyo ramp
+        # Gold (XAUUSD) is exempt from FX kill zones (it trades actively in Asia).
+        _forex_kill_hours_utc = set(range(21, 24)) | set(range(0, 2))  # 21,22,23,0,1
+
+        # Parse news_windows into datetime intervals for fast lookup
+        _parsed_news_windows: List[tuple] = []
+        if news_windows:
+            for nw in news_windows:
+                try:
+                    sym_nw = nw.get("symbol", "").upper()
+                    start_nw = pd.Timestamp(nw["start"]).tz_localize("UTC") if pd.Timestamp(nw["start"]).tzinfo is None else pd.Timestamp(nw["start"]).tz_convert("UTC")
+                    end_nw = pd.Timestamp(nw["end"]).tz_localize("UTC") if pd.Timestamp(nw["end"]).tzinfo is None else pd.Timestamp(nw["end"]).tz_convert("UTC")
+                    _parsed_news_windows.append((sym_nw, start_nw, end_nw))
+                except Exception:
+                    pass
+
+        def _is_in_kill_zone(sym: str, bar_ts: pd.Timestamp) -> bool:
+            """Returns True if sym should be blocked from new entries at this bar's timestamp."""
+            if bar_ts is None:
+                return False
+            # FX kill zone (Gold exempt)
+            if "XAU" not in sym and "BTC" not in sym and "ETH" not in sym:
+                if bar_ts.hour in _forex_kill_hours_utc:
+                    return True
+            # News window
+            for sym_nw, start_nw, end_nw in _parsed_news_windows:
+                if sym_nw == "" or sym_nw == sym:
+                    if start_nw <= bar_ts <= end_nw:
+                        return True
+            return False
+
+        # data provenance
+        data_start_ts = str(merged_timeline[0]) if len(merged_timeline) > 0 else "Bar-0"
+        data_end_ts = str(merged_timeline[-1]) if len(merged_timeline) > 0 else "Bar-0"
+        bar_count = len(merged_timeline)
         missing_ranges: List[str] = []
 
         pending_orders: List[PendingOrder] = []
@@ -167,30 +244,59 @@ class EventDrivenSimulator:
         unexecutable_setups: List[Dict[str, Any]] = []
         completed_autopsies: List[Dict[str, Any]] = []
 
-        warmup = 35
+        # Build per-symbol index position tracker for causal lookup
+        sym_bar_idx: Dict[str, int] = {sym: 0 for sym in candles_by_symbol}
 
-        # 2. Chronological Discrete Event Loop (Zero Lookahead)
-        for i in range(warmup, sim_bars):
+        # 2. Chronological Discrete Event Loop (Timestamp-Synchronized, Zero Lookahead)
+        for timeline_step, bar_ts in enumerate(merged_timeline):
+            if timeline_step < warmup:
+                # Advance each symbol's bar pointer during warmup
+                for sym, df in candles_by_symbol.items():
+                    while sym_bar_idx[sym] < len(df) - 1:
+                        row_ts = sym_ts[sym][sym_bar_idx[sym]]
+                        if row_ts <= bar_ts:
+                            sym_bar_idx[sym] = min(sym_bar_idx[sym] + 1, len(df) - 1)
+                            break
+                        break
+                continue
+
             if account.is_failed:
                 break
 
             # ── Event A: BarEvent Arrival across all symbols ──
             current_bar_prices: Dict[str, Dict[str, float]] = {}
             for sym, df in candles_by_symbol.items():
-                if i < len(df):
-                    row = df.iloc[i]
-                    spec = broker.get_symbol_spec(sym)
-                    spread = spec.typical_spread_pips / max(1.0, spec.pip_multiplier)
-                    mid = float(row["close"])
-                    current_bar_prices[sym] = {
-                        "open": float(row["open"]),
-                        "high": float(row["high"]),
-                        "low": float(row["low"]),
-                        "close": mid,
-                        "bid": mid - (spread / 2.0),
-                        "ask": mid + (spread / 2.0),
-                        "time": str(row.get("time", f"Bar-{i}"))
-                    }
+                # Find the latest bar at or before bar_ts for this symbol
+                sym_idx = sym_bar_idx[sym]
+                # Advance pointer while the next bar's timestamp is <= bar_ts
+                while sym_idx < len(df) - 1 and sym_ts[sym][sym_idx + 1] <= bar_ts:
+                    sym_idx += 1
+                sym_bar_idx[sym] = sym_idx
+
+                row = df.iloc[sym_idx]
+                spec = broker.get_symbol_spec(sym)
+                spread = spec.spread_price()  # Correct price-unit spread
+
+                mid = float(row.get("close", row.iloc[-1]))
+                o = float(row.get("open", mid))
+                h = float(row.get("high", mid))
+                lo = float(row.get("low", mid))
+                bid = mid - (spread / 2.0)
+                ask = mid + (spread / 2.0)
+                current_bar_prices[sym] = {
+                    "open": o,
+                    "high": h,
+                    "low": lo,
+                    "close": mid,
+                    "bid": bid,
+                    "ask": ask,
+                    "bid_high": h - (spread / 2.0),
+                    "bid_low": lo - (spread / 2.0),
+                    "ask_high": h + (spread / 2.0),
+                    "ask_low": lo + (spread / 2.0),
+                    "time": str(row.get("time", row.get("timestamp", str(bar_ts))))
+                }
+            i = timeline_step  # Keep i alias for backward-compatible references below
 
             # Update account equity and check stop-out liquidation
             liquidated = account.update_bar(current_bar_prices, bar_index=i)
@@ -259,26 +365,37 @@ class EventDrivenSimulator:
                         pos.is_breakeven_set = True
 
                 # Order Fill Trigger Checks with Conservative Same-Candle Ambiguity Resolution
+                # Trigger prices use mid OHLC (standard MT5 bar data).
+                # Exit fill prices use bid (for long exits) or ask (for short exits) per MT5 execution rules.
                 is_closed = False
                 exit_price = pos.current_price
                 exit_reason = ""
                 res_method = "OHLC_UNAMBIGUOUS"
+                # Use bid/ask side for actual fill:
+                # - Longs close at bid; shorts close at ask
+                _exit_bid = p_info.get("bid", pos.current_price)
+                _exit_ask = p_info.get("ask", pos.current_price)
+                _bid_low = p_info.get("bid_low", low - spec.spread_price() / 2.0)
+                _ask_high = p_info.get("ask_high", high + spec.spread_price() / 2.0)
 
                 if pos.direction == "long":
-                    # Ambiguity check: high reached TP and low reached SL on the exact same bar
-                    if low <= pos.stop_loss and high >= pos.take_profit:
+                    # SL trigger: bid_low <= stop_loss (longs exit when bid falls to SL)
+                    # TP trigger: bid_high >= take_profit (longs exit when bid rises to TP)
+                    bid_high = p_info.get("bid_high", high - spec.spread_price() / 2.0)
+                    bid_low_val = p_info.get("bid_low", low - spec.spread_price() / 2.0)
+                    if bid_low_val <= pos.stop_loss and bid_high >= pos.take_profit:
                         is_closed = True
-                        exit_price = pos.stop_loss
+                        exit_price = pos.stop_loss  # Conservative SL assumption
                         exit_reason = "STOP_LOSS"
                         res_method = "CONSERVATIVE_SL_ASSUMPTION"
-                    elif high >= pos.take_profit:
+                    elif bid_high >= pos.take_profit:
                         is_closed = True
-                        exit_price = pos.take_profit
+                        exit_price = pos.take_profit  # TP at bid
                         exit_reason = "TAKE_PROFIT"
                         res_method = "OHLC_UNAMBIGUOUS"
-                    elif low <= pos.stop_loss:
+                    elif bid_low_val <= pos.stop_loss:
                         is_closed = True
-                        exit_price = pos.stop_loss
+                        exit_price = pos.stop_loss  # SL at bid
                         res_method = "OHLC_UNAMBIGUOUS"
                         if pos.stop_loss > pos.entry_price:
                             exit_reason = "TRAILING_STOP"
@@ -287,20 +404,23 @@ class EventDrivenSimulator:
                         else:
                             exit_reason = "STOP_LOSS"
                 else:  # short
-                    # Ambiguity check: high reached SL and low reached TP on the exact same bar
-                    if high >= pos.stop_loss and low <= pos.take_profit:
+                    # SL trigger: ask_high >= stop_loss (shorts exit when ask rises to SL)
+                    # TP trigger: ask_low <= take_profit (shorts exit when ask falls to TP)
+                    ask_low_val = p_info.get("ask_low", low + spec.spread_price() / 2.0)
+                    ask_high_val = p_info.get("ask_high", high + spec.spread_price() / 2.0)
+                    if ask_high_val >= pos.stop_loss and ask_low_val <= pos.take_profit:
                         is_closed = True
-                        exit_price = pos.stop_loss
+                        exit_price = pos.stop_loss  # Conservative SL assumption
                         exit_reason = "STOP_LOSS"
                         res_method = "CONSERVATIVE_SL_ASSUMPTION"
-                    elif low <= pos.take_profit:
+                    elif ask_low_val <= pos.take_profit:
                         is_closed = True
-                        exit_price = pos.take_profit
+                        exit_price = pos.take_profit  # TP at ask
                         exit_reason = "TAKE_PROFIT"
                         res_method = "OHLC_UNAMBIGUOUS"
-                    elif high >= pos.stop_loss:
+                    elif ask_high_val >= pos.stop_loss:
                         is_closed = True
-                        exit_price = pos.stop_loss
+                        exit_price = pos.stop_loss  # SL at ask
                         res_method = "OHLC_UNAMBIGUOUS"
                         if pos.stop_loss < pos.entry_price:
                             exit_reason = "TRAILING_STOP"
@@ -310,20 +430,36 @@ class EventDrivenSimulator:
                             exit_reason = "STOP_LOSS"
 
                 if is_closed:
+                    # Correct bid/ask at exit: longs close at bid, shorts close at ask
+                    if pos.direction == "long":
+                        exit_bid = exit_price  # bid exit
+                        exit_ask = round(exit_price + spec.spread_price(), spec.decimals)
+                    else:
+                        exit_ask = exit_price  # ask exit
+                        exit_bid = round(exit_price - spec.spread_price(), spec.decimals)
+
                     closed_rec = account.close_position(
                         ticket=ticket,
                         exit_price=exit_price,
                         exit_reason=exit_reason,
                         close_bar_index=i,
                         close_timestamp=p_info.get("time", f"Bar-{i}"),
-                        exit_bid=p_info.get("bid", exit_price),
-                        exit_ask=p_info.get("ask", exit_price),
+                        exit_bid=exit_bid,
+                        exit_ask=exit_ask,
                         intrabar_resolution_method=res_method
                     )
                     if closed_rec:
+                        # Resolve market context from actual candle data for accurate autopsy
+                        _autopsy_sub_df = candles_by_symbol.get(pos.symbol)
+                        _ctx_resolved = MarketContextResolver.resolve(_autopsy_sub_df) if _autopsy_sub_df is not None else None
+                        _ctx_dict = {
+                            "session": _ctx_resolved.session if _ctx_resolved else "UNKNOWN",
+                            "regime": _ctx_resolved.regime if _ctx_resolved else "unknown",
+                            "spread_pips": spec.typical_spread_pips
+                        }
                         autopsy = autopsy_engine.analyze_trade(
                             trade_record=closed_rec,
-                            market_context={"session": "LONDON", "regime": "trending", "spread_pips": spec.typical_spread_pips}
+                            market_context=_ctx_dict
                         )
                         autopsy_dict = autopsy.model_dump()
                         closed_rec["autopsy"] = autopsy_dict
@@ -345,7 +481,7 @@ class EventDrivenSimulator:
                     continue
 
                 spec = broker.get_symbol_spec(po.symbol)
-                spread = spec.typical_spread_pips / max(1.0, spec.pip_multiplier)
+                spread = spec.spread_price()  # Correct price-unit spread
                 bar_open = p_info["open"]
                 high = p_info["high"]
                 low = p_info["low"]
@@ -353,19 +489,19 @@ class EventDrivenSimulator:
                 fill_price = po.target_price
 
                 if po.direction == "long":
-                    # Buy limit: fills when ask <= target_price
+                    # Buy limit: fills when ask_low <= target_price
                     ask_low = low + (spread / 2.0)
                     if ask_low <= po.target_price:
                         filled = True
-                        # Gap check: if bar opened below target price, fill at bar open + spread/2
+                        # Gap-open: if bar opened below target, fill at open ask
                         ask_open = bar_open + (spread / 2.0)
                         fill_price = ask_open if ask_open < po.target_price else po.target_price
                 else:
-                    # Sell limit: fills when bid >= target_price
+                    # Sell limit: fills when bid_high >= target_price
                     bid_high = high - (spread / 2.0)
                     if bid_high >= po.target_price:
                         filled = True
-                        # Gap check: if bar opened above target price, fill at bar open - spread/2
+                        # Gap-open: if bar opened above target, fill at open bid
                         bid_open = bar_open - (spread / 2.0)
                         fill_price = bid_open if bid_open > po.target_price else po.target_price
 
@@ -392,16 +528,23 @@ class EventDrivenSimulator:
 
             pending_orders = active_pending
 
-            # ── Event D: SignalEvent Generation via UnifiedStrategyEngine (Every 4 Bars) ──
+            # ── Event D: SignalEvent Generation via UnifiedStrategyEngine (Every Bar) ──
+            # Removed: i % 4 == 0 restriction. Strategy now evaluates on every closed 15m bar,
+            # matching live trading cadence where decisions are made on every bar close.
             active_symbols: Set[str] = {pos.symbol for pos in account.open_positions.values()}
 
-            if i % 4 == 0 and len(account.open_positions) < 3:
+            if len(account.open_positions) < 3:
                 for sym, df in candles_by_symbol.items():
-                    if i >= len(df) or sym in active_symbols or len(account.open_positions) >= 3:
+                    sym_curr_idx = sym_bar_idx.get(sym, 0)
+                    if sym_curr_idx <= 0 or sym in active_symbols or len(account.open_positions) >= 3:
                         continue
 
-                    # Strict causal slice (Zero Lookahead)
-                    sub_df = df.iloc[:i+1].copy().reset_index(drop=True)
+                    # Kill-zone check: block new entries during low-liquidity windows
+                    if _is_in_kill_zone(sym, bar_ts):
+                        continue
+
+                    # Strict causal slice (Zero Lookahead) using per-symbol bar pointer
+                    sub_df = df.iloc[:sym_curr_idx + 1].copy().reset_index(drop=True)
                     if len(sub_df) >= 16:
                         n_blocks = len(sub_df) // 4
                         usable_sub = sub_df.iloc[:n_blocks * 4]
@@ -471,16 +614,23 @@ class EventDrivenSimulator:
                             ))
                         else:
                             # Market execution with deterministic bridge latency slippage
-                            spread = spec.typical_spread_pips / max(1.0, spec.pip_multiplier)
+                            spread = spec.spread_price()  # Correct price-unit spread
                             if monte_carlo_mode:
                                 rng = random.Random(monte_carlo_seed) if monte_carlo_seed is not None else random
-                                slippage = (rng.uniform(0.05, 0.2) / max(1.0, spec.pip_multiplier))
+                                # Slippage: 0.05–0.2 pips in price units
+                                slippage = rng.uniform(0.05, 0.2) * spec.tick_size * (spec.pip_multiplier / 10.0)
                             else:
-                                # Canonical deterministic slippage: 0.10 pips based on broker profile latency model
-                                slippage = (0.10 / max(1.0, spec.pip_multiplier))
-                            actual_entry = decision.entry_price + (spread / 2.0) + slippage if decision.direction == "BUY" else decision.entry_price - (spread / 2.0) - slippage
-                            bid = p_info["bid"] if p_info else actual_entry - (spread / 2.0)
-                            ask = p_info["ask"] if p_info else actual_entry + (spread / 2.0)
+                                # Canonical deterministic slippage: 0.10 pips in price units
+                                slippage = 0.10 * spec.tick_size * (spec.pip_multiplier / 10.0)
+                            # Long buys at ask; short sells at bid
+                            if decision.direction == "BUY":
+                                actual_entry = decision.entry_price + (spread / 2.0) + slippage
+                                bid = actual_entry - spread
+                                ask = actual_entry
+                            else:
+                                actual_entry = decision.entry_price - (spread / 2.0) - slippage
+                                bid = actual_entry
+                                ask = actual_entry + spread
 
                             account.open_position(
                                 spec=spec,
@@ -508,7 +658,7 @@ class EventDrivenSimulator:
                             active_symbols.add(sym)
 
             # Record periodic curve point every 8 bars
-            if i % 8 == 0 or i == sim_bars - 1:
+            if i % 8 == 0 or timeline_step == len(merged_timeline) - 1:
                 equity_curve.append({
                     "bar": i,
                     "balance": round(account.balance, 2),
@@ -518,21 +668,27 @@ class EventDrivenSimulator:
 
         # Close open positions at simulation end
         for ticket, pos in list(account.open_positions.items()):
-            p_info = current_bar_prices.get(pos.symbol)
+            p_info = current_bar_prices.get(pos.symbol) if 'current_bar_prices' in dir() else {}
             close_price = p_info["close"] if p_info else pos.current_price
             closed_rec = account.close_position(
                 ticket=ticket,
                 exit_price=close_price,
                 exit_reason="SIMULATION_END",
-                close_bar_index=sim_bars,
+                close_bar_index=bar_count,
                 close_timestamp="END",
                 exit_bid=p_info.get("bid", close_price) if p_info else close_price,
                 exit_ask=p_info.get("ask", close_price) if p_info else close_price
             )
             if closed_rec:
+                _end_sub_df = candles_by_symbol.get(pos.symbol)
+                _end_ctx = MarketContextResolver.resolve(_end_sub_df) if _end_sub_df is not None else None
                 autopsy = autopsy_engine.analyze_trade(
                     trade_record=closed_rec,
-                    market_context={"session": "LONDON", "regime": "trending", "spread_pips": 1.0}
+                    market_context={
+                        "session": _end_ctx.session if _end_ctx else "UNKNOWN",
+                        "regime": _end_ctx.regime if _end_ctx else "unknown",
+                        "spread_pips": 1.0
+                    }
                 )
                 autopsy_dict = autopsy.model_dump()
                 closed_rec["autopsy"] = autopsy_dict
@@ -592,8 +748,8 @@ class EventDrivenSimulator:
             "autopsies": completed_autopsies,
             "sentinel_audit": sentinel_audit,
             "data_source": data_source,
-            "data_start": data_start,
-            "data_end": data_end,
+            "data_start": data_start_ts,
+            "data_end": data_end_ts,
             "bar_count": bar_count,
             "missing_ranges": missing_ranges,
             "data_quality_status": data_quality_status,

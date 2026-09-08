@@ -280,10 +280,12 @@ class VirtualMT5Account:
             pos.current_price = bid if pos.direction == "long" else ask
             spec = self.broker.get_symbol_spec(pos.symbol)
 
-            # Accumulate overnight swap on daily boundaries (every 96 15m bars)
+            # Accumulate overnight swap on daily boundaries (every 96 15m bars = 1 day)
             if bar_index > pos.open_bar_index and (bar_index - pos.open_bar_index) % 96 == 0:
                 swap_pts = spec.swap_long_points if pos.direction == "long" else spec.swap_short_points
-                swap_val = round((swap_pts * spec.tick_size / max(0.0001, spec.tick_size)) * spec.tick_value * pos.volume, 2)
+                # MT5 formula: swap_dollar = swap_points * point_value_per_lot * volume
+                # where point_value_per_lot = tick_value / tick_size
+                swap_val = round(swap_pts * spec.point_value_per_lot() * pos.volume, 2)
                 pos.swap = round(pos.swap + swap_val, 2)
                 self.total_swap = round(self.total_swap + swap_val, 2)
 
@@ -390,7 +392,17 @@ class VirtualMT5Account:
             points = (pos.entry_price - exit_price) / spec.tick_size if spec.tick_size > 0 else 0
 
         gross_pnl = round(points * spec.tick_value * pos.volume, 2)
-        net_pnl = round(gross_pnl - pos.commission + pos.swap, 2)
+
+        # Close-side commission (for ECN brokers that charge on both sides).
+        # For Exness (commission_per_lot_close=0.0), this is $0. For IC Markets Raw, this is $7/lot.
+        close_commission = round(spec.commission_per_lot_close * pos.volume, 2)
+        if close_commission > 0:
+            self.balance = round(self.balance - close_commission, 2)
+            self.total_commission = round(self.total_commission + close_commission, 2)
+
+        # Net PnL: entry commission was already deducted at open_position.
+        # Do NOT subtract pos.commission again here — that was a double-charge.
+        net_pnl = round(gross_pnl + pos.swap - close_commission, 2)
 
         # Update balance and margins
         self.balance = round(self.balance + net_pnl, 2)
@@ -464,8 +476,9 @@ class VirtualMT5Account:
             "initial_risk_r": 1.0,
             "gross_pnl": gross_pnl,
             "commission": pos.commission,
+            "close_commission": close_commission,
             "swap": pos.swap,
-            "fees": round(pos.commission + abs(pos.swap), 2),
+            "fees": round(pos.commission + close_commission + abs(pos.swap), 2),
             "spread": pos.entry_spread,
             "spread_cost": pos.entry_spread_cost,
             "entry_bid": pos.entry_bid,

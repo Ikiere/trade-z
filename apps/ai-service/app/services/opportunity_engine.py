@@ -79,8 +79,19 @@ class OpportunityEngine:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        candles_by_symbol: dict = {}
         for res in results:
-            if isinstance(res, list):
+            if isinstance(res, tuple) and len(res) == 3:
+                candidates_list, _, snapshot_df = res
+                # Collect the snapshot df for each symbol so context resolution works
+                if candidates_list and snapshot_df is not None:
+                    first_sym = candidates_list[0].symbol if candidates_list else None
+                    if first_sym:
+                        candles_by_symbol[first_sym] = snapshot_df
+                if isinstance(candidates_list, list):
+                    all_candidates.extend(candidates_list if isinstance(candidates_list[0] if candidates_list else None, tuple) else [])
+            # Legacy: plain list
+            elif isinstance(res, list):
                 all_candidates.extend(res)
 
         # Filter candidates: remove those with quality < 70 or R:R < 1.8
@@ -192,15 +203,17 @@ class OpportunityEngine:
         equity: float,
         risk_percent: float,
         leverage: float
-    ) -> List[tuple[CandidateSetup, EligibilityResult]]:
+    ) -> tuple:
         """
-        Scans a single symbol and returns all candidate setups paired with their eligibility.
+        Scans a single symbol and returns (candidate_pairs, None, snapshot_df).
+        candidate_pairs is a List[tuple[CandidateSetup, EligibilityResult]].
+        snapshot_df is returned so scan_watchlist can build candles_by_symbol.
         """
         sym = symbol.upper().replace("/", "").replace(" ", "")
         try:
             news_safe = await check_news_filter(sym)
             if not news_safe:
-                return []
+                return ([], None, None)
 
             snapshot = await self.market_data_service.get_market_snapshot(
                 symbol=sym,
@@ -210,13 +223,15 @@ class OpportunityEngine:
             )
 
             if snapshot is None or not getattr(snapshot, "is_valid", True) or snapshot.df is None or len(snapshot.df) < 25:
-                return []
+                return ([], None, None)
+
+            snapshot_df = snapshot.df
 
             # Detect setups across 10 families
             candidates = detect_all_setup_families(
                 symbol=sym,
                 timeframe=timeframe,
-                df=snapshot.df,
+                df=snapshot_df,
                 higher_df=snapshot.higher_df
             )
 
@@ -241,8 +256,8 @@ class OpportunityEngine:
                 )
                 results.append((c, elig))
 
-            return results
+            return (results, None, snapshot_df)
 
         except Exception as e:
             print(f"[OpportunityEngine] Non-fatal scan error on {sym}: {e}")
-            return []
+            return ([], None, None)

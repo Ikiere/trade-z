@@ -22,8 +22,32 @@ class SymbolSpec(BaseModel):
     typical_spread_pips: float
     news_spread_pips: float
     commission_per_lot: float = 0.0
+    # ECN brokers charge on both open and close. For Exness (no commission), this is 0.0.
+    # For IC Markets Raw, this equals commission_per_lot (round-trip charged separately).
+    commission_per_lot_close: float = 0.0
     swap_long_points: float = -0.5
     swap_short_points: float = -0.3
+
+    def spread_price(self) -> float:
+        """
+        Returns spread in actual price units (not pips).
+        Formula: 1 pip in price units = tick_size * (pip_multiplier / 10.0)
+        Examples:
+          EURUSD: 0.6 pips * 0.00001 * (10000/10) = 0.6 * 0.00001 * 1000 = 0.00006  ✓
+          XAUUSD: 1.8 pips * 0.01   * (10/10)    = 1.8 * 0.01 * 1      = 0.018     ✓
+          USDJPY: 0.7 pips * 0.001  * (100/10)   = 0.7 * 0.001 * 10    = 0.007     ✓
+          BTCUSD: 12  pips * 0.01   * (1/10)     = 12  * 0.01  * 0.1   = 0.012     ✓ (12 USD)
+        """
+        pip_in_price = self.tick_size * (self.pip_multiplier / 10.0)
+        return round(self.typical_spread_pips * pip_in_price, self.decimals)
+
+    def point_value_per_lot(self) -> float:
+        """
+        Returns dollar value of a single tick move for 1 standard lot.
+        Used for swap and commission-per-pip calculations.
+        Formula: tick_value / tick_size  (= $/tick / price-per-tick = $/price)
+        """
+        return self.tick_value / self.tick_size if self.tick_size > 0 else 0.0
 
 
 class BrokerProfile(BaseModel):
@@ -229,7 +253,8 @@ IC_MARKETS_PROFILE = BrokerProfile(
             pip_multiplier=10000.0,
             typical_spread_pips=0.1,
             news_spread_pips=0.8,
-            commission_per_lot=7.0
+            commission_per_lot=7.0,
+            commission_per_lot_close=7.0
         ),
         "XAUUSD": SymbolSpec(
             symbol="XAUUSD",
@@ -244,7 +269,8 @@ IC_MARKETS_PROFILE = BrokerProfile(
             pip_multiplier=10.0,
             typical_spread_pips=1.1,
             news_spread_pips=3.2,
-            commission_per_lot=7.0
+            commission_per_lot=7.0,
+            commission_per_lot_close=7.0
         ),
     }
 )

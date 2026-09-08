@@ -1059,11 +1059,17 @@ export default function LiveScannerWidget() {
         const cand = topOpp.candidate;
         const elig = topOpp.eligibility;
 
+        const evStr = (Number(cand?.expected_value) || 0).toFixed(2);
+        const rrStr = (Number(cand?.risk_reward) || 0).toFixed(1);
+        const qualStr = (Number(cand?.setup_quality_score) || 0).toFixed(0);
+        const dollarRisk = Number(elig?.dollar_risk_at_min_lot ?? elig?.dollar_loss_at_min_volume) || 0;
+        const budget = Number(elig?.risk_budget ?? elig?.risk_budget_dollars) || 0;
+
         setLogs(prev => [
           `[TOP OPPORTUNITY 🏆] Selected ${cand.symbol} (${cand.setup_family}) | Rank #1`,
-          `  -> Direction: ${cand.direction.toUpperCase()} | EV: +${cand.expected_value.toFixed(2)}R | R:R: ${cand.risk_reward.toFixed(1)} | Quality: ${cand.setup_quality_score}/100`,
-          `  -> Account Eligibility: ${elig.is_eligible ? 'ELIGIBLE' : 'DEFERRED'} (Risk: $${elig.dollar_risk_at_min_lot.toFixed(2)} vs Budget $${elig.risk_budget.toFixed(2)})`,
-          `  -> Selection Audit: ${topOpp.selection_notes}`,
+          `  -> Direction: ${cand.direction ? cand.direction.toUpperCase() : 'LONG'} | EV: +${evStr}R | R:R: ${rrStr} | Quality: ${qualStr}/100`,
+          `  -> Account Eligibility: ${elig?.is_eligible ? 'ELIGIBLE' : 'DEFERRED'} (Risk: $${dollarRisk.toFixed(2)} vs Budget $${budget.toFixed(2)})`,
+          `  -> Selection Audit: ${topOpp.selection_notes || ''}`,
           ...prev,
         ]);
 
@@ -1091,7 +1097,7 @@ export default function LiveScannerWidget() {
           const sessionCheck = checkTradingSession(cand.symbol);
           if (sessionCheck.isEligible) {
             setLogs(prev => [
-              `[AUTONOMOUS AI ⚡] Placing top opportunity ${cand.symbol} on MT5 (EV: +${cand.expected_value.toFixed(2)}R)...`,
+              `[AUTONOMOUS AI ⚡] Placing top opportunity ${cand.symbol} on MT5 (EV: +${evStr}R)...`,
               ...prev,
             ]);
             const ticket = await sendOrderToMt5({
@@ -1249,7 +1255,7 @@ export default function LiveScannerWidget() {
                             <span>Live: <strong className={isProfit ? 'text-emerald-400' : 'text-rose-400'}>{pos.price_current}</strong></span>
                             <span>&bull;</span>
                             <span className={isProfit ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
-                              {isProfit ? '+' : ''}${pos.profit.toFixed(2)}
+                              {isProfit ? '+' : ''}${(Number(pos.profit) || 0).toFixed(2)}
                             </span>
                           </div>
                         </div>
@@ -1663,7 +1669,7 @@ export default function LiveScannerWidget() {
                     ) : (
                       <span className="px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
                         <AlertTriangle className="w-3 h-3 text-amber-400" />
-                        Margin Deferred (Needs ${elig.min_equity_needed_for_001_lot})
+                        Margin Deferred (Needs ${(Number(elig?.min_equity_needed_for_001_lot) || 50).toFixed(0)})
                       </span>
                     )}
                   </div>
@@ -1673,20 +1679,20 @@ export default function LiveScannerWidget() {
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px] font-mono">
                   <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
                     <span className="text-[#64748b] block text-[9px]">EXPECTED VALUE</span>
-                    <span className="text-emerald-400 font-bold">+{cand.expected_value?.toFixed(2)} R</span>
+                    <span className="text-emerald-400 font-bold">+{(Number(cand?.expected_value) || 0).toFixed(2)} R</span>
                   </div>
                   <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
                     <span className="text-[#64748b] block text-[9px]">RISK : REWARD</span>
-                    <span className="text-white font-bold">{cand.risk_reward?.toFixed(1)} : 1</span>
+                    <span className="text-white font-bold">{(Number(cand?.risk_reward) || 0).toFixed(1)} : 1</span>
                   </div>
                   <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
                     <span className="text-[#64748b] block text-[9px]">QUALITY SCORE</span>
-                    <span className="text-brand-400 font-bold">{cand.setup_quality_score?.toFixed(0)} / 100</span>
+                    <span className="text-brand-400 font-bold">{(Number(cand?.setup_quality_score) || 0).toFixed(0)} / 100</span>
                   </div>
                   <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
                     <span className="text-[#64748b] block text-[9px]">DOLLAR RISK @ 0.01</span>
-                    <span className={elig.is_eligible ? 'text-[#94a3b8]' : 'text-rose-400 font-bold'}>
-                      ${elig.dollar_risk_at_min_lot?.toFixed(2)}
+                    <span className={elig?.is_eligible ? 'text-[#94a3b8]' : 'text-rose-400 font-bold'}>
+                      ${(Number(elig?.dollar_risk_at_min_lot ?? elig?.dollar_loss_at_min_volume) || 0).toFixed(2)}
                     </span>
                   </div>
                   <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
@@ -1843,7 +1849,7 @@ export default function LiveScannerWidget() {
             </div>
             <div className="bg-bg-secondary p-2 rounded border border-[#1e293b]">
               <span className="text-[#64748b] block text-[9px]">CONFIDENCE</span>
-              <span className="text-brand-400 font-bold">{latestSetup.confidence.toFixed(1)}%</span>
+              <span className="text-brand-400 font-bold">{(Number(latestSetup.confidence) || 0).toFixed(1)}%</span>
             </div>
           </div>
 

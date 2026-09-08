@@ -7,7 +7,7 @@ to evaluate other instruments on the watchlist (e.g. Forex/Crypto) rather than s
 """
 
 from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from app.services.asset_classifier import classify_asset
 
 
@@ -25,22 +25,27 @@ class EligibilityResult(BaseModel):
     suggested_alternatives: List[str] = Field(default_factory=list)
     margin_requirement_estimate: float = 0.0
 
+    @computed_field
     @property
     def risk_budget(self) -> float:
         return self.risk_budget_dollars
 
+    @computed_field
     @property
     def dollar_risk_at_min_lot(self) -> float:
         return self.dollar_loss_at_min_volume
 
+    @computed_field
     @property
     def recommended_lot_size(self) -> float:
         return self.recommended_lot
 
+    @computed_field
     @property
     def reason(self) -> str:
         return self.ineligibility_reason or ""
 
+    @computed_field
     @property
     def min_equity_needed_for_001_lot(self) -> float:
         pct = max(0.001, self.risk_percent / 100.0)

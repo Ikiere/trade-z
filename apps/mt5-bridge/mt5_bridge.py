@@ -130,14 +130,25 @@ def calculate_safe_lot_size(symbol_info, equity: float, sl_dist_points: float, r
     loss_at_min_volume = loss_per_1_lot * min_volume
 
     if loss_at_min_volume > max_risk_dollars:
-        # Crucial small-account safety: broker minimum volume is too large for account size and SL distance
+        # Micro-account rule: allow minimum broker volume (0.01) if loss is affordable within account capacity
+        max_affordable_loss = max(15.0, equity * 0.40)
+        if loss_at_min_volume <= max_affordable_loss and loss_at_min_volume <= equity:
+            return {
+                "valid": True,
+                "lot": min_volume,
+                "error": None,
+                "max_risk_dollars": max_risk_dollars,
+                "est_loss": loss_at_min_volume
+            }
+
+        # Only veto if the risk would severely impair or wipe the account
         return {
             "valid": False,
             "lot": 0.0,
             "error": (
                 f"Capital Shield Veto: Broker minimum volume ({min_volume}) with stop distance ({sl_dist_points:.5f}) "
                 f"would risk ${loss_at_min_volume:.2f} ({ (loss_at_min_volume / equity * 100.0):.1f}% of equity), "
-                f"exceeding max allowed {effective_risk_pct:.1f}% risk (${max_risk_dollars:.2f}) on equity ${equity:.2f}."
+                f"exceeding maximum affordable risk on equity ${equity:.2f}."
             ),
             "max_risk_dollars": max_risk_dollars,
             "est_loss": loss_at_min_volume
@@ -640,18 +651,19 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
 
         lot = sizing["lot"]
 
-        # If explicit lot was provided, verify it strictly stays under the hard 2.0% risk cap
+        # If explicit lot was provided, verify it strictly stays under safe risk
         if user_lot:
             requested_lot = round(float(user_lot), 2)
             tick_val = float(sym_info.trade_tick_value or 1.0)
             tick_sz = float(sym_info.trade_tick_size or 0.00001)
             est_loss_requested = (sl_dist / tick_sz) * tick_val * requested_lot
-            if est_loss_requested > max_allowed_loss:
+            max_affordable = max(max_allowed_loss, max(15.0, acc.equity * 0.40))
+            if requested_lot > float(sym_info.volume_min or 0.01) and est_loss_requested > max_affordable:
                 self._send_json(400, {
                     'success': False,
                     'error': (
                         f"Capital Shield Veto: Requested lot {requested_lot} risks ${est_loss_requested:.2f}, "
-                        f"which exceeds maximum allowed {effective_risk_pct:.1f}% risk (${max_allowed_loss:.2f}) on equity ${acc.equity:.2f}."
+                        f"which exceeds maximum affordable risk on equity ${acc.equity:.2f}."
                     ),
                     'risk_veto': True
                 })

@@ -101,14 +101,15 @@ export class TradesService {
       throw new BadRequestException('Global Trading Kill Switch is ACTIVE (TRADING_ENABLED=false). Order execution is suspended.');
     }
 
-    // 3. Smart Account Capital Protection (Institutional 0.5% - 2.0% Hard Cap)
+    // 3. Smart Account Capital Protection (Micro-Account & Institutional Calibration)
     const approxDollarLossFor001 = stopLossDistancePips * (sym.includes('JPY') ? 0.065 : sym.includes('XAU') || sym.includes('GOLD') ? 1.0 : sym.includes('BTC') ? 0.01 : 0.10);
     const effectiveRiskPct = Math.min(Math.max(tradeData.riskPercent || 1.0, 0.5), 2.0);
     const maxAllowedDollarRisk = equity * (effectiveRiskPct / 100.0);
 
-    if (equity > 0 && approxDollarLossFor001 > maxAllowedDollarRisk) {
+    // Only block if dollar loss at minimum 0.01 lot strictly exceeds total account equity (insufficient capital)
+    if (equity > 0 && approxDollarLossFor001 > equity) {
       throw new BadRequestException(
-        `Capital Shield Veto: Broker minimum volume (0.01 lot) risks ~$${approxDollarLossFor001.toFixed(2)} (${((approxDollarLossFor001 / equity) * 100).toFixed(1)}% of equity), exceeding maximum allowed ${effectiveRiskPct.toFixed(1)}% risk ($${maxAllowedDollarRisk.toFixed(2)}) on $${equity.toFixed(2)} equity. Trade blocked to protect capital.`,
+        `Margin Veto: Broker minimum volume (0.01 lot) risks ~$${approxDollarLossFor001.toFixed(2)}, which exceeds total account equity ($${equity.toFixed(2)}). Select an asset with lower tick value.`,
       );
     }
 
@@ -124,12 +125,14 @@ export class TradesService {
       5,   // max open positions
     );
 
-    // 5. Compute lot size based on true account equity
-    const lotSize = this.riskService.calculateLotSize(
+    // 5. Compute lot size based on true account equity, or respect passed lot
+    const calculatedLot = this.riskService.calculateLotSize(
       equity,
       tradeData.riskPercent || 1.0,
       stopLossDistancePips,
     );
+    const explicitLot = (tradeData as any).lot_size || (tradeData as any).lotSize;
+    const lotSize = (typeof explicitLot === 'number' && explicitLot >= 0.01) ? explicitLot : Math.max(0.01, calculatedLot);
 
     // 6. If local MT5 bridge is active, dispatch order to MetaTrader 5
     let mt5Ticket: any = null;
@@ -175,7 +178,7 @@ export class TradesService {
       pnl: 0,
       pips: 0,
       opened_at: new Date().toISOString(),
-      broker_id: mt5Ticket ? `MT5-#${mt5Ticket}` : 'trade-z-auto',
+      broker_id: mt5Ticket ? `MT5-#${mt5Ticket}` : ((tradeData as any).mt5_ticket ? `MT5-#${(tradeData as any).mt5_ticket}` : 'trade-z-auto'),
     };
 
     const { data, error } = await this.supabase

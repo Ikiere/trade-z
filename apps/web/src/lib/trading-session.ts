@@ -62,100 +62,83 @@ export function checkTradingSession(pair: string, customDate?: Date): SessionShi
     };
   }
 
-  // 3. Asset-Specific Intraday Sessions
+  // 3. Asset-Specific Intraday Sessions (Weekdays Sunday 21:00 UTC – Friday 21:00 UTC)
   const isGold = upper.includes('XAU') || upper.includes('GOLD');
   const isAsianPair = upper.includes('JPY') || upper.includes('AUD') || upper.includes('NZD');
 
-  // Asian / Tokyo Session: 00:00 to 09:00 UTC
-  // London Session: 08:00 to 16:30 UTC
-  // New York Session: 13:00 to 21:00 UTC
-  // London / NY Overlap: 13:00 to 16:30 UTC
+  // Daily Rollover Spread Gap: 21:00 UTC to 22:00 UTC
+  // Institutional inter-bank liquidity settlement. Broker spreads temporarily widen.
+  const isRolloverGap = currentMinutes >= 21 * 60 && currentMinutes < 22 * 60;
+  if (isRolloverGap) {
+    return {
+      isEligible: false,
+      isCrypto: false,
+      currentUtcTime: timeStr,
+      sessionName: 'Daily Rollover Spread Gap',
+      activeHours: '22:00 – 21:00 UTC (Next Day)',
+      nextOpenUtc: '22:00 UTC (Tokyo Pre-Open)',
+      message: `${upper} is in the daily interbank rollover gap (${timeStr}). Spreads temporarily widen during bank settlement. Reopening at 22:00 UTC.`,
+    };
+  }
 
   if (isGold) {
-    // Gold peak institutional liquidity: 07:00 UTC (London/Frankfurt Open) to 21:00 UTC (NY Close)
-    const goldStart = 7 * 60; // 07:00 UTC (08:00 BST / European open)
-    const goldEnd = 21 * 60; // 21:00 UTC
-    const isOpen = currentMinutes >= goldStart && currentMinutes < goldEnd;
-
-    if (!isOpen) {
-      return {
-        isEligible: false,
-        isCrypto: false,
-        currentUtcTime: timeStr,
-        sessionName: 'London & New York Gold Session',
-        activeHours: '07:00 – 21:00 UTC',
-        nextOpenUtc: '07:00 UTC (London Open)',
-        message: `XAUUSD is outside active London & New York session hours (${timeStr}). Outside session, institutional spreads widen and erratic wicks occur. Please wait until 07:00 UTC.`,
-      };
-    }
-
+    // Peak volume: 07:00 to 21:00 UTC (London & NY)
+    // Asian Gold trading: 22:00 to 07:00 UTC (Shanghai/Tokyo/Sydney)
+    const isPeak = currentMinutes >= 7 * 60 && currentMinutes < 21 * 60;
     const isOverlap = currentMinutes >= 12 * 60 && currentMinutes <= 16 * 60 + 30;
+
     return {
       isEligible: true,
       isCrypto: false,
       currentUtcTime: timeStr,
-      sessionName: isOverlap ? 'London / NY Overlap (Prime)' : 'London & NY Gold Session',
-      activeHours: '07:00 – 21:00 UTC',
+      sessionName: isOverlap
+        ? 'London / NY Overlap (Prime Volume)'
+        : isPeak
+        ? 'London & NY Gold Session'
+        : 'Asian Gold Session (Tokyo / Shanghai)',
+      activeHours: '22:00 – 21:00 UTC',
       nextOpenUtc: 'Active Now',
-      message: `XAUUSD in active high-liquidity session. Favorable execution spreads.`,
+      message: isPeak
+        ? `XAUUSD in active high-liquidity session. Favorable execution spreads.`
+        : `XAUUSD in Asian session liquidity. Moderate volatility and slightly wider spreads.`,
     };
   }
 
   if (isAsianPair) {
-    // JPY / AUD / NZD pairs are active during Asian Session (00:00 - 09:00 UTC), London (07:00 - 16:30 UTC), and NY (12:00 - 21:00 UTC)
-    // Dead zone: 21:00 UTC to 00:00 UTC (End of NY to Tokyo Open)
-    const deadStart = 21 * 60;
-    const isDeadZone = currentMinutes >= deadStart;
-
-    if (isDeadZone) {
-      return {
-        isEligible: false,
-        isCrypto: false,
-        currentUtcTime: timeStr,
-        sessionName: 'Inter-Session Liquidity Gap',
-        activeHours: '00:00 – 21:00 UTC',
-        nextOpenUtc: '00:00 UTC (Tokyo Open)',
-        message: `${pair} is in the daily inter-session rollover gap (${timeStr}). Spreads are inflated. Resuming at 00:00 UTC Tokyo open.`,
-      };
-    }
-
+    const isAsianPrime = currentMinutes < 7 * 60;
     return {
       isEligible: true,
       isCrypto: false,
       currentUtcTime: timeStr,
-      sessionName: currentMinutes < 7 * 60 ? 'Tokyo / Asian Session' : currentMinutes < 12 * 60 ? 'London Session' : 'London / NY Overlap',
-      activeHours: '00:00 – 21:00 UTC',
+      sessionName: isAsianPrime
+        ? 'Tokyo / Asian Session (Prime)'
+        : currentMinutes < 12 * 60
+        ? 'London Session'
+        : 'London / NY Overlap',
+      activeHours: '22:00 – 21:00 UTC',
       nextOpenUtc: 'Active Now',
       message: `${pair} in active trading session.`,
     };
   }
 
   // European / US Forex pairs (EURUSD, GBPUSD, EURGBP, USDCAD, USDCHF)
-  // Active London (07:00 UTC / 08:00 BST) through New York close (21:00 UTC)
-  const euroStart = 7 * 60; // 07:00 UTC
-  const euroEnd = 21 * 60; // 21:00 UTC
-  const isEuroActive = currentMinutes >= euroStart && currentMinutes < euroEnd;
-
-  if (!isEuroActive) {
-    return {
-      isEligible: false,
-      isCrypto: false,
-      currentUtcTime: timeStr,
-      sessionName: 'London & New York Forex Session',
-      activeHours: '07:00 – 21:00 UTC',
-      nextOpenUtc: '07:00 UTC (London Open)',
-      message: `${pair} is outside active London & NY session hours (${timeStr}). Low volatility chop detected. Wait until 07:00 UTC London opening bells.`,
-    };
-  }
-
+  // Active 24/5 with Peak London (07:00 UTC) through NY Close (21:00 UTC)
+  const isEuroPeak = currentMinutes >= 7 * 60 && currentMinutes < 21 * 60;
   const isPrime = currentMinutes >= 12 * 60 && currentMinutes <= 16 * 60 + 30;
+
   return {
     isEligible: true,
     isCrypto: false,
     currentUtcTime: timeStr,
-    sessionName: isPrime ? 'London / NY Overlap (Peak Volume)' : 'Active London Session',
-    activeHours: '07:00 – 21:00 UTC',
+    sessionName: isPrime
+      ? 'London / NY Overlap (Peak Volume)'
+      : isEuroPeak
+      ? 'Active London & NY Session'
+      : 'Asian Intraday Session (Lower Volatility)',
+    activeHours: '22:00 – 21:00 UTC',
     nextOpenUtc: 'Active Now',
-    message: `${pair} in active session with strong institutional volume.`,
+    message: isEuroPeak
+      ? `${pair} in active session with strong institutional volume.`
+      : `${pair} trading in Asian session. Clean technical structure with moderate volatility.`,
   };
 }

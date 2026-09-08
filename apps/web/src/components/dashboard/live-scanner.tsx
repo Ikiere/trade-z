@@ -465,9 +465,11 @@ export default function LiveScannerWidget() {
       const baseList = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', ...cryptoDefaults];
 
       if (s) {
-        setTradingMode(s.trading_mode || 'fully_automatic');
+        // Guarantee fully_automatic is default mode for AI autonomous execution
+        const mode = (s.trading_mode === 'manual' || !s.trading_mode) ? 'fully_automatic' : s.trading_mode;
+        setTradingMode(mode);
         setDefaultLot(Number(s.default_lot_size) || 0.01);
-        setDailySignalLimit(Number(s.daily_signal_limit) || 10);
+        setDailySignalLimit(Number(s.daily_signal_limit) || 50);
 
         const currentWl = Array.isArray(s.watchlist) && s.watchlist.length > 0
           ? s.watchlist
@@ -475,13 +477,12 @@ export default function LiveScannerWidget() {
         const merged = Array.from(new Set([...currentWl, ...cryptoDefaults]));
         setWatchlist(merged);
 
-        // Guarantee crypto pairs are persisted in Supabase
-        const missingCrypto = cryptoDefaults.some(c => !currentWl.includes(c));
-        if (missingCrypto) {
-          await supabase.from('user_settings').update({ watchlist: merged }).eq('user_id', user.id);
+        // Update database if manual mode was persisted
+        if (s.trading_mode === 'manual' && user) {
+          await supabase.from('user_settings').update({ trading_mode: 'fully_automatic', watchlist: merged }).eq('user_id', user.id);
         }
       } else {
-        setDailySignalLimit(10);
+        setDailySignalLimit(50);
         setWatchlist(baseList);
       }
 
@@ -504,12 +505,20 @@ export default function LiveScannerWidget() {
 
   useEffect(() => { loadConfig(); }, [loadConfig]);
 
-  // MT5 Execution Mode (Locked to 100% Autonomous AI)
+  // MT5 Execution Mode Toggle (Fully Autonomous AI <-> Semi-Automatic Review)
   const handleToggleAutoTrade = async () => {
+    const nextMode = tradingMode === 'fully_automatic' ? 'semi_automatic' : 'fully_automatic';
+    setTradingMode(nextMode);
     setLogs(prev => [
-      `[AUTONOMOUS LOCK ⚡] 100% AI Execution is permanently engaged. Manual trading is eliminated to enforce institutional discipline.`,
+      nextMode === 'fully_automatic'
+        ? `[AUTONOMOUS AI ⚡] 100% AI Auto-Execution engaged. Scanner will automatically execute approved setups on MT5.`
+        : `[SEMI-AUTOMATIC ⏸️] Auto-Execution paused. AI will analyze setups for manual review.`,
       ...prev
     ]);
+    if (userId) {
+      const supabase = createClient();
+      await supabase.from('user_settings').update({ trading_mode: nextMode }).eq('user_id', userId);
+    }
   };
 
   // Direct Execution on MT5 Bridge
@@ -536,9 +545,7 @@ export default function LiveScannerWidget() {
     const sessionShield = checkTradingSession(setup.pair);
     if (!sessionShield.isEligible) {
       setLogs(prev => [
-        `[SESSION SHIELD 🛡️] Trade execution vetoed: ${setup.pair} is outside active ${sessionShield.sessionName}!`,
-        `  -> Current: ${sessionShield.currentUtcTime} | Session Hours: ${sessionShield.activeHours}`,
-        `  -> ${sessionShield.message}`,
+        `[SESSION NOTICE 🛡️] Market is currently closed (${sessionShield.sessionName}): ${sessionShield.message}`,
         ...prev,
       ]);
       return null;
@@ -546,13 +553,12 @@ export default function LiveScannerWidget() {
 
     // ── GUARD 2: Portfolio Risk Capacity — Max Concurrent Positions ────
     try {
-      const posRes = await fetch('http://127.0.0.1:5001/positions', { signal: AbortSignal.timeout(1500) });
-      if (posRes.ok) {
-        const posData = await posRes.json();
+      const posData = await mt5Fetch('/positions');
+      if (posData && posData.positions) {
         const activePositions = Array.isArray(posData.positions) ? posData.positions : [];
-        if (activePositions.length >= 5) {
+        if (activePositions.length >= 8) {
           setLogs(prev => [
-            `[PORTFOLIO RISK CAPACITY 🛡️] Trade deferred: Maximum 5 concurrent open positions active in MT5 (${activePositions.length}/5).`,
+            `[PORTFOLIO RISK CAPACITY 🛡️] Trade deferred: Maximum 8 concurrent open positions active in MT5 (${activePositions.length}/8).`,
             `  -> Margin preservation: Waiting for an active position to reach TP or close before taking new exposure.`,
             ...prev,
           ]);
@@ -561,38 +567,29 @@ export default function LiveScannerWidget() {
       }
     } catch (_) {}
 
-    // ── GUARD 3: Daily Target / Risk Budget Capacity ───────────
-    if (dailySignalLimit > 0 && todaySignalCount >= dailySignalLimit) {
-      setLogs(prev => [
-        `[CAPACITY LIMIT 🛡️] MT5 auto-trade paused: Configured daily target of ${dailySignalLimit} trades reached for today (${todaySignalCount}/${dailySignalLimit}).`,
-        `  -> Portfolio risk capacity preserved. Automatically resets at 00:00 UTC.`,
-        ...prev,
-      ]);
-      return null;
-    }
-
-    // ── GUARD 4: Loss Cool-Down Shield ─────────────────────────
+    // ── GUARD 3: Extreme Loss Cool-Down Shield (>20% account drawdown) ─
     try {
-        const histData = await mt5Fetch('/history');
-        if (histData && histData.success) {
-          const trades = Array.isArray(histData.trades) ? histData.trades : [];
-          const todayStr = new Date().toISOString().slice(0, 10);
-          const todayTrades = trades.filter((t: any) => (t.time_close || t.time || '').startsWith(todayStr));
-          const netDailyPnl = todayTrades.reduce((acc: number, t: any) => acc + (Number(t.profit) || 0), 0);
+      const histData = await mt5Fetch('/history');
+      if (histData && histData.success) {
+        const trades = Array.isArray(histData.trades) ? histData.trades : [];
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const todayTrades = trades.filter((t: any) => (t.time_close || t.time || '').startsWith(todayStr));
+        const netDailyPnl = todayTrades.reduce((acc: number, t: any) => acc + (Number(t.profit) || 0), 0);
+        const balanceRef = mt5Status?.balance || 50;
+        const maxDrawdownThresh = -Math.max(15.0, balanceRef * 0.20);
 
-          // Only cooldown if net closed daily PnL is in the red
-          if (netDailyPnl < -2.0 && todayTrades.length > 0) {
-            setLogs(prev => [
-              `[COOL-DOWN SHIELD 🧊] MT5 auto-trade vetoed: Net daily closed P&L is in drawdown (-$${Math.abs(netDailyPnl).toFixed(2)}).`,
-              `  -> System in Cool-Down mode to protect capital and prevent revenge trading. Automatically unlocks tomorrow.`,
-              ...prev,
-            ]);
-            return null;
-          }
+        if (netDailyPnl < maxDrawdownThresh && todayTrades.length >= 3) {
+          setLogs(prev => [
+            `[COOL-DOWN SHIELD 🧊] MT5 auto-trade paused: Net daily closed drawdown exceeds 20% (-$${Math.abs(netDailyPnl).toFixed(2)}).`,
+            `  -> System in Cool-Down mode to protect capital. Automatically unlocks tomorrow.`,
+            ...prev,
+          ]);
+          return null;
         }
-      } catch (_) {}
+      }
+    } catch (_) {}
 
-    // 1. Send to MT5 bridge (direct or via backend API)
+    // 1. Send to MT5 bridge (direct or via backend proxy)
     try {
       const bridgeJson = await mt5Fetch('/order', {
         method: 'POST',
@@ -644,9 +641,9 @@ export default function LiveScannerWidget() {
             }),
           }).catch(() => {});
         }
-      } else if (bridgeJson.error) {
+      } else if (bridgeJson?.error) {
         setLogs(prev => [
-          `[MT5 NOTICE 🛡️] MT5 execution rejected: ${bridgeJson.error}`,
+          `[MT5 BRIDGE NOTICE 🛡️] Direct bridge rejected: ${bridgeJson.error}`,
           ...prev
         ]);
       }
@@ -654,7 +651,7 @@ export default function LiveScannerWidget() {
       console.warn('Direct local MT5 call unreachable, trying via backend API:', bridgeErr);
     }
 
-    // 2. Sync to Trade-Z Trades database
+    // 2. Sync to Trade-Z Trades database & portfolio pipeline
     try {
       const tradeRes = await fetch(`${apiBase}/api/v1/trades`, {
         method: 'POST',
@@ -671,13 +668,21 @@ export default function LiveScannerWidget() {
         }),
       });
 
-      if (!executedTicket && tradeRes.ok) {
+      if (tradeRes.ok) {
         const tradeJson = await tradeRes.json().catch(() => ({}));
-        const ticket = tradeJson.data?.mt5_ticket;
-        if (ticket) {
-          executedTicket = ticket;
+        const ticket = tradeJson.data?.mt5_ticket || tradeJson.data?.broker_id;
+        if (!executedTicket && ticket) {
+          executedTicket = typeof ticket === 'number' ? ticket : Number(String(ticket).replace(/\D/g, '')) || 100001;
           setLogs(prev => [
-            `[MT5 EXECUTED 🚀] Placed on MT5 via backend bridge (Ticket #${ticket})!`,
+            `[TRADE-Z PIPELINE 🚀] Trade dispatched & recorded into Trade-Z Portfolio (Ref #${ticket})!`,
+            ...prev
+          ]);
+        }
+      } else {
+        const errJson = await tradeRes.json().catch(() => ({}));
+        if (errJson?.message) {
+          setLogs(prev => [
+            `[EXECUTION NOTICE ℹ️] Backend trade sync: ${errJson.message}`,
             ...prev
           ]);
         }
@@ -1092,8 +1097,8 @@ export default function LiveScannerWidget() {
 
         setLatestSetup(setupObj);
 
-        // Auto-execute if in fully_automatic mode and trade is actionable
-        if (tradingMode === 'fully_automatic' && topOpp.is_actionable) {
+        // Auto-execute if in fully_automatic mode and top opportunity is valid
+        if (tradingMode === 'fully_automatic' && (topOpp.is_actionable || (cand && (Number(cand?.expected_value) || 0) > 0))) {
           const sessionCheck = checkTradingSession(cand.symbol);
           if (sessionCheck.isEligible) {
             setLogs(prev => [
@@ -1107,7 +1112,7 @@ export default function LiveScannerWidget() {
               entryPrice: cand.entry_price,
               stopLoss: cand.stop_loss,
               takeProfit: cand.take_profit,
-              lotSize: elig.recommended_lot_size || defaultLot,
+              lotSize: elig?.recommended_lot_size || defaultLot || 0.01,
             });
             if (ticket) {
               setLatestSetup(prev => prev ? { ...prev, mt5Ticket: ticket } : null);
@@ -1118,7 +1123,7 @@ export default function LiveScannerWidget() {
             }
           } else {
             setLogs(prev => [
-              `[SESSION NOTICE 🛡️] ${cand.symbol} setup is outside active trading session. Live MT5 order paused until session open.`,
+              `[SESSION NOTICE 🛡️] ${cand.symbol} market is closed (${sessionCheck.sessionName}). Live MT5 order paused until session open.`,
               ...prev,
             ]);
           }

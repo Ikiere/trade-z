@@ -209,6 +209,19 @@ class EventDrivenSimulator:
                     start_dt = pd.Timestamp("2026-01-15 00:00:00", tz="UTC")
                     cdf["time"] = [(start_dt + pd.Timedelta(minutes=15 * i)).isoformat() for i in range(len(cdf))]
 
+        # 1b. Normalize timestamp column to canonical "time" across all DataFrames
+        # TwelveData returns "datetime"; Yahoo Finance returns "time"; MT5 returns "time".
+        # After this block, every DataFrame is guaranteed to have a "time" column.
+        for clean_sym in list(candles_by_symbol.keys()):
+            cdf = candles_by_symbol[clean_sym]
+            if "time" not in cdf.columns:
+                for _alt in ["datetime", "Date", "date", "timestamp"]:
+                    if _alt in cdf.columns:
+                        cdf = cdf.copy()
+                        cdf["time"] = cdf[_alt].astype(str)
+                        candles_by_symbol[clean_sym] = cdf
+                        break
+
         # 2. Strict Data Quality Verification Gate
         data_quality_reasons: Dict[str, List[str]] = {}
         for sym, df in candles_by_symbol.items():
@@ -359,7 +372,7 @@ class EventDrivenSimulator:
                     "ask_open": o + (spread / 2.0),
                     "ask_high": h + (spread / 2.0),
                     "ask_low": lo + (spread / 2.0),
-                    "time": str(row.get("time", row.get("timestamp", bar_ts_str)))
+                    "time": str(row["time"] if "time" in row.index else (row["datetime"] if "datetime" in row.index else (row["timestamp"] if "timestamp" in row.index else bar_ts_str)))
                 }
 
             # Step 3: Process Pending-Order Fills & Invalidation (Combinations H, I, J)
@@ -672,7 +685,13 @@ class EventDrivenSimulator:
                     sub_df = df.iloc[:sym_curr_idx + 1].copy().reset_index(drop=True)
 
                     # Time-based HTF Resampling (from actual timestamps <= T)
-                    ts_sub = pd.to_datetime(sub_df["time"] if "time" in sub_df.columns else sub_df["timestamp"], utc=True)
+                    # Safely probe for any timestamp column (TwelveData -> 'datetime', Yahoo -> 'time', MT5 -> 'time')
+                    _ts_col_htf = None
+                    for _tc in ["time", "datetime", "Date", "date", "timestamp"]:
+                        if _tc in sub_df.columns:
+                            _ts_col_htf = _tc
+                            break
+                    ts_sub = pd.to_datetime(sub_df[_ts_col_htf], utc=True) if _ts_col_htf else pd.Series(pd.date_range(start="2020-01-01", periods=len(sub_df), freq="15min", tz="UTC"))
                     if len(sub_df) >= 16:
                         htf_period_keys = ts_sub.dt.floor("1h")
                         higher_df = sub_df.groupby(htf_period_keys).agg({

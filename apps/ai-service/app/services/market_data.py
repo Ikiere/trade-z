@@ -157,6 +157,7 @@ class MarketDataService:
             # B. Metals and Forex via Yahoo Finance Chart API
             yf_map = {
                 'XAUUSD': 'GC=F',  # Gold Continuous Futures
+                'XAU': 'GC=F',
                 'GOLD': 'GC=F',
                 'EURUSD': 'EURUSD=X',
                 'GBPUSD': 'GBPUSD=X',
@@ -165,14 +166,22 @@ class MarketDataService:
                 'USDCAD': 'USDCAD=X',
                 'USDCHF': 'USDCHF=X',
                 'NZDUSD': 'NZDUSD=X',
+                'BTCUSD': 'BTC-USD',
+                'ETHUSD': 'ETH-USD',
             }
             yf_sym = yf_map.get(clean_symbol, f"{clean_symbol}=X")
             yf_interval = "15m" if interval in ["15m", "15min"] else "60m" if interval in ["1h", "4h", "240"] else "1d"
-            yf_range = "5d" if yf_interval == "15m" else "1mo"
+            if yf_interval == "15m":
+                yf_range = "60d" if outputsize > 2200 else "1mo" if outputsize > 300 else "5d"
+            elif yf_interval == "60m":
+                yf_range = "3mo" if outputsize > 1500 else "1mo"
+            else:
+                yf_range = "1y" if outputsize > 300 else "6mo"
+
             yf_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_sym}?interval={yf_interval}&range={yf_range}"
 
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            async with httpx.AsyncClient(timeout=6.0, headers=headers) as client:
+            async with httpx.AsyncClient(timeout=12.0, headers=headers) as client:
                 yf_res = await client.get(yf_url)
                 if yf_res.status_code == 200:
                     yf_data = yf_res.json()

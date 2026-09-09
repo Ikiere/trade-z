@@ -62,9 +62,12 @@ class VirtualMT5Account:
         self,
         initial_balance: float = 1000.0,
         broker_profile: Optional[BrokerProfile] = None,
-        custom_leverage: Optional[float] = None
+        custom_leverage: Optional[float] = None,
+        is_cent_account: bool = False
     ):
         self.broker = broker_profile or EXNESS_PROFILE
+        self.is_cent_account = is_cent_account
+        self.cent_mult = 0.01 if is_cent_account else 1.0
         self.leverage_source = "CUSTOM_OVERRIDE" if custom_leverage is not None else "BROKER_PROFILE"
         self.leverage = custom_leverage or self.broker.default_leverage
         self.broker_profile_version = "2.1.0"
@@ -102,9 +105,9 @@ class VirtualMT5Account:
     def calculate_margin(self, spec: SymbolSpec, volume: float, price: float) -> float:
         """
         Computes required margin in USD based on contract size and account leverage.
-        Formula: (volume * contract_size * price) / leverage
+        Formula: (volume * contract_size * price * cent_mult) / leverage
         """
-        base_notional = volume * spec.contract_size * price
+        base_notional = volume * spec.contract_size * price * self.cent_mult
         return round(base_notional / max(1.0, self.leverage), 2)
 
     def can_open_position(
@@ -195,7 +198,7 @@ class VirtualMT5Account:
         equity_before = self.equity
         margin_before = self.used_margin
 
-        commission = round(resolved_spec.commission_per_lot * volume, 2)
+        commission = round(resolved_spec.commission_per_lot * volume * self.cent_mult, 2)
         self.balance = round(self.balance - commission, 2)
         self.equity = round(self.equity - commission, 2)
         self.total_commission = round(self.total_commission + commission, 2)
@@ -211,11 +214,11 @@ class VirtualMT5Account:
 
         initial_sl_dist = abs(entry_price - stop_loss)
         tick_units = (initial_sl_dist / resolved_spec.tick_size) if resolved_spec.tick_size > 0 else 0.0
-        initial_risk_money = max(0.01, round(tick_units * resolved_spec.tick_value * volume, 2))
+        initial_risk_money = max(0.01, round(tick_units * resolved_spec.tick_value * volume * self.cent_mult, 2))
 
         spread_pts = abs(entry_ask - entry_bid) if (entry_ask > 0 and entry_bid > 0) else (resolved_spec.typical_spread_pips * resolved_spec.tick_size * resolved_spec.pip_multiplier)
         spread_ticks = spread_pts / resolved_spec.tick_size if resolved_spec.tick_size > 0 else 0.0
-        entry_spread_cost = round(spread_ticks * resolved_spec.tick_value * volume, 2)
+        entry_spread_cost = round(spread_ticks * resolved_spec.tick_value * volume * self.cent_mult, 2)
         self.total_spread_cost = round(self.total_spread_cost + entry_spread_cost, 2)
 
         pos = SimulatedPosition(
@@ -285,21 +288,21 @@ class VirtualMT5Account:
                 swap_pts = spec.swap_long_points if pos.direction == "long" else spec.swap_short_points
                 # MT5 formula: swap_dollar = swap_points * point_value_per_lot * volume
                 # where point_value_per_lot = tick_value / tick_size
-                swap_val = round(swap_pts * spec.point_value_per_lot() * pos.volume, 2)
+                swap_val = round(swap_pts * spec.point_value_per_lot() * pos.volume * self.cent_mult, 2)
                 pos.swap = round(pos.swap + swap_val, 2)
                 self.total_swap = round(self.total_swap + swap_val, 2)
 
             # Calculate floating PnL
             if pos.direction == "long":
                 points = (bid - pos.entry_price) / spec.tick_size if spec.tick_size > 0 else 0
-                pos.floating_pnl = round(points * spec.tick_value * pos.volume, 2)
+                pos.floating_pnl = round(points * spec.tick_value * pos.volume * self.cent_mult, 2)
                 mfe_delta = high - pos.entry_price
                 mae_delta = pos.entry_price - low
                 pos.mfe_price = max(pos.mfe_price, high)
                 pos.mae_price = min(pos.mae_price, low)
             else:
                 points = (pos.entry_price - ask) / spec.tick_size if spec.tick_size > 0 else 0
-                pos.floating_pnl = round(points * spec.tick_value * pos.volume, 2)
+                pos.floating_pnl = round(points * spec.tick_value * pos.volume * self.cent_mult, 2)
                 mfe_delta = pos.entry_price - low
                 mae_delta = high - pos.entry_price
                 pos.mfe_price = min(pos.mfe_price, low) if pos.mfe_price > 0 else low
@@ -393,11 +396,11 @@ class VirtualMT5Account:
         else:
             points = (pos.entry_price - exit_price) / spec.tick_size if spec.tick_size > 0 else 0
 
-        gross_pnl = round(points * spec.tick_value * pos.volume, 2)
+        gross_pnl = round(points * spec.tick_value * pos.volume * self.cent_mult, 2)
 
         # Close-side commission (for ECN brokers that charge on both sides).
         # For Exness (commission_per_lot_close=0.0), this is $0. For IC Markets Raw, this is $7/lot.
-        close_commission = round(spec.commission_per_lot_close * pos.volume, 2)
+        close_commission = round(spec.commission_per_lot_close * pos.volume * self.cent_mult, 2)
         total_trade_commission = round(pos.commission + close_commission, 2)
         if close_commission > 0:
             self.total_commission = round(self.total_commission + close_commission, 2)

@@ -43,6 +43,7 @@ class SimulationPayload(BaseModel):
     mode: str = "DISCOVERY"
     bootstrap_unknown_edge: bool = True
     dataset_phase: str = "TRAIN"
+    is_cent_account: bool = False
 
 
 class TournamentPayload(BaseModel):
@@ -73,13 +74,14 @@ async def simulate_market(payload: SimulationPayload):
     candles_map: Dict[str, pd.DataFrame] = {}
     market_data = MarketDataService()
 
-    bars_per_day = 96 if payload.timeframe == "15m" else (24 if payload.timeframe in ["1h", "60m"] else 6)
-    target_bars = payload.bars or min(1000, max(100, int(payload.period_days * bars_per_day * 0.72)))
+    bars_per_day = 96 if payload.timeframe in ["15m", "15min"] else (24 if payload.timeframe in ["1h", "60m"] else 6)
+    target_bars = payload.bars or min(3500, max(100, int(payload.period_days * bars_per_day * 0.85)))
+    api_key = os.environ.get("AI_MARKET_DATA_API_KEY", "") or os.environ.get("TWELVEDATA_API_KEY", "")
 
     for sym in payload.symbols:
         clean = sym.upper().replace("/", "").replace(" ", "")
         try:
-            df = await market_data.fetch_candles_with_retry(clean, payload.timeframe, "", outputsize=target_bars)
+            df = await market_data.fetch_candles_with_retry(clean, payload.timeframe, api_key, outputsize=target_bars)
             if df is not None and len(df) >= 20:
                 candles_map[clean] = df
         except Exception as e:
@@ -105,7 +107,8 @@ async def simulate_market(payload: SimulationPayload):
         allow_synthetic=payload.allow_synthetic,
         edge_mode=edge_mode_enum,
         bootstrap_unknown_edge=payload.bootstrap_unknown_edge,
-        dataset_phase=phase_enum
+        dataset_phase=phase_enum,
+        is_cent_account=payload.is_cent_account
     )
     return result
 
@@ -173,8 +176,9 @@ async def run_legacy_backtest_endpoint(request: LegacyBacktestRequest):
     sym = request.pair.upper().replace("/", "").replace(" ", "")
     candles_map: Dict[str, pd.DataFrame] = {}
     market_data = MarketDataService()
+    api_key = os.environ.get("AI_MARKET_DATA_API_KEY", "") or os.environ.get("TWELVEDATA_API_KEY", "")
     try:
-        df = await market_data.fetch_candles_with_retry(sym, request.timeframe, "", outputsize=request.bars)
+        df = await market_data.fetch_candles_with_retry(sym, request.timeframe, api_key, outputsize=request.bars)
         if df is not None and len(df) >= 20:
             candles_map[sym] = df
     except Exception as e:

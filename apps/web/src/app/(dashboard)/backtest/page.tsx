@@ -199,6 +199,7 @@ export default function BacktestSimulatorPage() {
   const [customRiskPct, setCustomRiskPct] = useState<number>(2.0);
   const [brokerProfile, setBrokerProfile] = useState<string>('exness');
   const [allowSynthetic, setAllowSynthetic] = useState<boolean>(false);
+  const [isCentAccount, setIsCentAccount] = useState<boolean>(false);
   const [simulationError, setSimulationError] = useState<string | null>(null);
 
   // ── State for Single Simulation ──
@@ -206,6 +207,8 @@ export default function BacktestSimulatorPage() {
   const [summary, setSummary] = useState<SimulationSummary | null>(null);
   const [trades, setTrades] = useState<SimulatedTrade[]>([]);
   const [equityCurve, setEquityCurve] = useState<{ trade: number; equity: number; balance: number }[]>([]);
+  const [candidateStatistics, setCandidateStatistics] = useState<Record<string, number> | null>(null);
+  const [rejectionStatistics, setRejectionStatistics] = useState<Record<string, number> | null>(null);
   const [learningReport, setLearningReport] = useState<LearningReport | null>(null);
   const [teaching, setTeaching] = useState(false);
   const [rulesApplied, setRulesApplied] = useState(false);
@@ -281,6 +284,7 @@ export default function BacktestSimulatorPage() {
           broker_name: brokerProfile,
           custom_leverage: brokerProfile === 'exness' ? 2000 : 500,
           allow_synthetic: allowSynthetic,
+          is_cent_account: isCentAccount,
         }),
       });
 
@@ -338,6 +342,8 @@ export default function BacktestSimulatorPage() {
         setSummary(simSummary);
         setTrades(isDataUnavailable ? [] : (data.trades || []));
         setEquityCurve(isDataUnavailable ? [] : (data.equity_curve || []));
+        setCandidateStatistics(isDataUnavailable ? null : (data.candidate_statistics || null));
+        setRejectionStatistics(isDataUnavailable ? null : (data.rejection_statistics || null));
       }
     } catch (err: any) {
       console.error('Simulation error:', err);
@@ -516,15 +522,18 @@ export default function BacktestSimulatorPage() {
 
     const dataExport = {
       exported_at: new Date().toISOString(),
-      strategy_version: 'Trade-Z v2.1-AdaptiveSMC',
+      strategy_version: 'Trade-Z v2.2-EmpiricalSMC',
       parameters: {
         symbols: selectedSymbols,
         timeframe,
         period_days: periodDays,
         initial_balance: effectiveInitialBalance,
         risk_percent: effectiveRiskPercent,
-        broker_profile: brokerProfile
+        broker_profile: brokerProfile,
+        is_cent_account: isCentAccount
       },
+      candidate_statistics: candidateStatistics,
+      rejection_statistics: rejectionStatistics,
       summary,
       trades,
       equity_curve: equityCurve
@@ -904,6 +913,20 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
           </div>
         </div>
 
+        {/* Small Account Gold Advisory */}
+        {selectedSymbols.includes('XAUUSD') && Number(effectiveInitialBalance) < 300 && !isCentAccount && (
+          <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-2.5 text-xs text-amber-200">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold">Small Account & Gold Sizing Notice:</span> On Gold (XAUUSD), broker minimum lot is 0.01 ($1.00 loss per $1.00 move). Institutional 15m stop losses are typically $4.00–$10.00. On a ${effectiveInitialBalance} balance at {effectiveRiskPercent}% risk (${((Number(effectiveInitialBalance) * effectiveRiskPercent) / 100).toFixed(2)} budget), Trade-Z's Capital Shield will strictly reject wide stops to protect your balance. Consider adding Forex pairs (EURUSD, GBPUSD) or enabling{' '}
+              <button onClick={() => setIsCentAccount(true)} className="font-bold text-amber-300 underline hover:text-white">
+                Cent Account Mode
+              </button>
+              .
+            </div>
+          </div>
+        )}
+
         {/* Action Button Banner */}
         <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="text-[11px] font-mono text-[#64748b] flex flex-col gap-1">
@@ -913,18 +936,26 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
               <span className="text-white font-bold">{timeframe.toUpperCase()}</span> Timeframe •{' '}
               <span className="text-white font-bold">{periodDays}</span> Days Replay
             </div>
-            <label className="inline-flex items-center gap-2 cursor-pointer text-[10px] select-none text-[#94a3b8] hover:text-white mt-1">
-              <input
-                type="checkbox"
-                checked={allowSynthetic}
-                onChange={(e) => setAllowSynthetic(e.target.checked)}
-                className="rounded border-[#334155] bg-[#12121a] text-brand-500 focus:ring-brand-500/20"
-              />
-              <span>Demo Mode (Synthetic Data Fallback)</span>
-              <span className="text-[9px] text-[#64748b]">
-                {allowSynthetic ? '• Synthetic mock candles permitted' : '• Strict real broker history only'}
-              </span>
-            </label>
+            <div className="flex flex-wrap items-center gap-4 mt-1">
+              <label className="inline-flex items-center gap-2 cursor-pointer text-[10px] select-none text-[#94a3b8] hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={allowSynthetic}
+                  onChange={(e) => setAllowSynthetic(e.target.checked)}
+                  className="rounded border-[#334155] bg-[#12121a] text-brand-500 focus:ring-brand-500/20"
+                />
+                <span>Demo Mode (Synthetic Fallback)</span>
+              </label>
+              <label className="inline-flex items-center gap-2 cursor-pointer text-[10px] select-none text-amber-400 hover:text-amber-300 font-bold">
+                <input
+                  type="checkbox"
+                  checked={isCentAccount}
+                  onChange={(e) => setIsCentAccount(e.target.checked)}
+                  className="rounded border-[#334155] bg-[#12121a] text-amber-500 focus:ring-amber-500/20"
+                />
+                <span>Cent Account Mode (100x Micro Contract Scaling)</span>
+              </label>
+            </div>
           </div>
 
           {activeTab === 'single' ? (
@@ -1326,6 +1357,72 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
                   <Filter className="w-4 h-4 text-amber-400" />
                 </div>
               </div>
+
+              {/* ── Candidate Funnel & Execution Gating Telemetry ── */}
+              {candidateStatistics && (
+                <div className="card p-4 border-[#1e293b] bg-[#12121a] space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Filter className="w-4 h-4 text-brand-400" />
+                      <h3 className="text-xs font-bold text-white font-mono uppercase tracking-wider">
+                        Institutional Candidate Funnel & Execution Gating Telemetry
+                      </h3>
+                    </div>
+                    <span className="text-[10px] font-mono text-[#64748b]">
+                      {candidateStatistics.bars_scanned} Bars Evaluated
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs font-mono">
+                    <div className="p-2.5 rounded-lg bg-[#16161f] border border-[#1e293b]">
+                      <span className="text-[10px] text-[#64748b] block">Setups Detected</span>
+                      <span className="text-base font-bold text-white">{candidateStatistics.candidates_detected ?? 0}</span>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-[#16161f] border border-[#1e293b]">
+                      <span className="text-[10px] text-[#64748b] block">Structure Valid</span>
+                      <span className="text-base font-bold text-brand-300">{candidateStatistics.structure_valid ?? 0}</span>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-[#16161f] border border-[#1e293b]">
+                      <span className="text-[10px] text-[#64748b] block">Session Valid</span>
+                      <span className="text-base font-bold text-blue-300">{candidateStatistics.session_valid ?? 0}</span>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-[#16161f] border border-[#1e293b]">
+                      <span className="text-[10px] text-[#64748b] block">Account Executable</span>
+                      <span className={`text-base font-bold ${(candidateStatistics.account_executable ?? 0) > 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                        {candidateStatistics.account_executable ?? 0}
+                      </span>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-[#16161f] border border-[#1e293b]">
+                      <span className="text-[10px] text-[#64748b] block">Discovery Trades</span>
+                      <span className="text-base font-bold text-purple-400">{candidateStatistics.discovery_trades ?? 0}</span>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-[#16161f] border border-[#1e293b]">
+                      <span className="text-[10px] text-[#64748b] block">Executed Trades</span>
+                      <span className="text-base font-bold text-white">{summary.total_trades ?? 0}</span>
+                    </div>
+                  </div>
+
+                  {rejectionStatistics && Object.keys(rejectionStatistics).length > 0 && (
+                    <div className="pt-2 border-t border-[#1e293b]/60 flex flex-wrap gap-2 items-center text-[11px] font-mono">
+                      <span className="text-[#64748b] font-bold uppercase text-[10px]">Filter & Gating Breakdown:</span>
+                      {Object.entries(rejectionStatistics).map(([code, count]) => (
+                        <span
+                          key={code}
+                          className={`px-2 py-0.5 rounded border text-[10px] font-bold ${
+                            code === 'ACCOUNT_RISK_TOO_HIGH'
+                              ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                              : code === 'SESSION_BLOCKED'
+                              ? 'bg-blue-500/10 border-blue-500/30 text-blue-300'
+                              : 'bg-[#1e293b] border-[#334155] text-[#94a3b8]'
+                          }`}
+                        >
+                          {code.replace(/_/g, ' ')}: {count}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* ── Interactive Performance Visualizer ── */}
               {equityCurve && equityCurve.length > 1 && (

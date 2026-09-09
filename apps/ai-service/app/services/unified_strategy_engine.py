@@ -144,7 +144,8 @@ class UnifiedStrategyEngine:
         min_quality_score: float = 70.0,
         min_risk_reward: float = 1.8,
         min_expectancy_r: float = 0.20,
-        news_windows: Optional[List[Dict[str, Any]]] = None
+        news_windows: Optional[List[Dict[str, Any]]] = None,
+        is_cent_account: bool = False
     ) -> TradingDecision:
         """
         Executes the Canonical 20-Step Executable-First + Edge-First Candidate Pipeline.
@@ -345,7 +346,8 @@ class UnifiedStrategyEngine:
                 broker_tick_value=spec.tick_value,
                 broker_tick_size=spec.tick_size,
                 leverage=account_leverage,
-                strict_risk_enforcement=True
+                strict_risk_enforcement=True,
+                is_cent_account=is_cent_account
             )
             eval_record["eligibility"] = elig
 

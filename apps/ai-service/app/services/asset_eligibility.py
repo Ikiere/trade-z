@@ -71,7 +71,8 @@ def evaluate_instrument_eligibility(
     broker_tick_value: Optional[float] = None,
     broker_tick_size: Optional[float] = None,
     leverage: float = 100.0,
-    strict_risk_enforcement: bool = False
+    strict_risk_enforcement: bool = False,
+    is_cent_account: bool = False
 ) -> EligibilityResult:
     """
     Evaluates whether an asset can be safely executed for the given account balance
@@ -99,12 +100,18 @@ def evaluate_instrument_eligibility(
         tick_multiplier = 10.0 if "JPY" not in sym else 6.7
         loss_per_1_lot = pips * tick_multiplier
 
+    # In Cent Account mode (e.g. Exness Standard Cent), contract size and risk scale down 100x
+    if is_cent_account:
+        loss_per_1_lot = loss_per_1_lot / 100.0
+
     loss_at_min_vol = round(loss_per_1_lot * broker_min_volume, 2)
 
     # Margin requirement estimate for min lot
     base_price = asset_info.get("base_price", 1.0)
     contract_size = 100.0 if "XAU" in sym else (1.0 if asset_info.get("is_crypto") else 100000.0)
     margin_per_1_lot = (base_price * contract_size) / max(1.0, leverage)
+    if is_cent_account:
+        margin_per_1_lot = margin_per_1_lot / 100.0
     margin_req_min_vol = round(margin_per_1_lot * broker_min_volume, 2)
 
     # 1. Authoritative Risk Allowed Volume

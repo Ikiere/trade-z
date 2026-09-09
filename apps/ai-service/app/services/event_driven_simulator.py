@@ -116,7 +116,8 @@ class EventDrivenSimulator:
         requested_start: Optional[str] = None,
         requested_end: Optional[str] = None,
         discovery_budget: Optional[DiscoveryExposureBudget] = None,
-        max_currency_exposure: float = 500000.0
+        max_currency_exposure: float = 500000.0,
+        is_cent_account: bool = False
     ) -> Dict[str, Any]:
         """
         Executes an institutional discrete event simulation with:
@@ -169,7 +170,8 @@ class EventDrivenSimulator:
         account = VirtualMT5Account(
             initial_balance=initial_balance,
             broker_profile=broker,
-            custom_leverage=effective_leverage
+            custom_leverage=effective_leverage,
+            is_cent_account=is_cent_account
         )
         duplicate_detector.reset()
 
@@ -708,7 +710,8 @@ class EventDrivenSimulator:
                         discovery_budget=disc_budget,
                         as_of_timestamp=bar_ts_str,
                         enable_ai_advisory=False,
-                        news_windows=news_windows
+                        news_windows=news_windows,
+                        is_cent_account=is_cent_account
                     )
 
                     # Update Funnel Statistics

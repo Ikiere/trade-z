@@ -7,12 +7,14 @@ experience memory queries, and broker profile configuration.
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
+import pandas as pd
 
 from app.services.backtester import AIBacktester
 from app.services.real_market_simulator import real_market_simulator
 from app.services.event_driven_simulator import event_driven_simulator
 from app.services.experience_memory import experience_memory
 from app.services.broker_profiles import AVAILABLE_BROKERS, get_broker_profile
+from app.services.market_data import MarketDataService
 
 router = APIRouter()
 legacy_backtester = AIBacktester()
@@ -25,6 +27,7 @@ class LegacyBacktestRequest(BaseModel):
     risk_reward: float = 2.5
     min_confidence: float = 65.0
     initial_balance: float = 1000.0
+    allow_synthetic: bool = False
 
 
 class SimulationPayload(BaseModel):
@@ -36,6 +39,7 @@ class SimulationPayload(BaseModel):
     risk_percent: float = 1.0
     broker_name: str = "exness"
     custom_leverage: Optional[float] = None
+    allow_synthetic: bool = False
 
 
 class TournamentPayload(BaseModel):
@@ -58,7 +62,24 @@ async def simulate_market(payload: SimulationPayload):
     """
     Executes a high-fidelity discrete event-driven simulation
     with zero look-ahead bias, authentic MT5 margin tracking, and forensic trade autopsies.
+    Automatically fetches authentic historical candles from available market feeds
+    (MT5 Bridge -> TwelveData -> Binance/Yahoo Finance) before running.
     """
+    candles_map: Dict[str, pd.DataFrame] = {}
+    market_data = MarketDataService()
+
+    bars_per_day = 96 if payload.timeframe == "15m" else (24 if payload.timeframe in ["1h", "60m"] else 6)
+    target_bars = payload.bars or min(1000, max(100, int(payload.period_days * bars_per_day * 0.72)))
+
+    for sym in payload.symbols:
+        clean = sym.upper().replace("/", "").replace(" ", "")
+        try:
+            df = await market_data.fetch_candles_with_retry(clean, payload.timeframe, "", outputsize=target_bars)
+            if df is not None and len(df) >= 20:
+                candles_map[clean] = df
+        except Exception as e:
+            print(f"[simulate_market] Could not fetch real historical candles for {clean}: {e}")
+
     result = event_driven_simulator.run_simulation(
         symbols=payload.symbols,
         initial_balance=payload.initial_balance,
@@ -67,7 +88,9 @@ async def simulate_market(payload: SimulationPayload):
         bars=payload.bars,
         risk_percent=payload.risk_percent,
         broker_name=payload.broker_name,
-        custom_leverage=payload.custom_leverage
+        custom_leverage=payload.custom_leverage,
+        custom_candles_map=candles_map if candles_map else None,
+        allow_synthetic=payload.allow_synthetic
     )
     return result
 
@@ -132,7 +155,16 @@ async def list_broker_profiles():
 # ── LEGACY BACKTEST ENDPOINTS (backward compatibility) ──
 @router.post("/run")
 async def run_legacy_backtest_endpoint(request: LegacyBacktestRequest):
-    sym = request.pair.upper()
+    sym = request.pair.upper().replace("/", "").replace(" ", "")
+    candles_map: Dict[str, pd.DataFrame] = {}
+    market_data = MarketDataService()
+    try:
+        df = await market_data.fetch_candles_with_retry(sym, request.timeframe, "", outputsize=request.bars)
+        if df is not None and len(df) >= 20:
+            candles_map[sym] = df
+    except Exception as e:
+        print(f"[run_legacy_backtest_endpoint] Could not fetch real candles for {sym}: {e}")
+
     return event_driven_simulator.run_simulation(
         symbols=[sym],
         initial_balance=request.initial_balance,
@@ -140,7 +172,9 @@ async def run_legacy_backtest_endpoint(request: LegacyBacktestRequest):
         period_days=max(7, int(request.bars / 96)),
         bars=request.bars,
         risk_percent=1.0,
-        broker_name="exness"
+        broker_name="exness",
+        custom_candles_map=candles_map if candles_map else None,
+        allow_synthetic=request.allow_synthetic
     )
 
 

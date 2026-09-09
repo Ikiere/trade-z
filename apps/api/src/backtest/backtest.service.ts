@@ -19,6 +19,7 @@ export class BacktestService {
     risk_percent?: number;
     broker_name?: string;
     custom_leverage?: number;
+    allow_synthetic?: boolean;
   }) {
     try {
       const response = await fetch(`${this.aiServiceUrl}/api/v1/backtest/simulate`, {
@@ -33,6 +34,7 @@ export class BacktestService {
           risk_percent: params.risk_percent || 1.0,
           broker_name: params.broker_name || 'exness',
           custom_leverage: params.custom_leverage || 2000.0,
+          allow_synthetic: params.allow_synthetic ?? false,
         }),
       });
 
@@ -44,11 +46,23 @@ export class BacktestService {
     }
 
     // Fail closed: Do NOT substitute synthetic candles or Math.random() in production
+    const initBal = params.initial_balance || 1000.0;
     return {
       success: false,
       status: 'BACKTEST_DATA_UNAVAILABLE',
       error: 'BACKTEST_DATA_UNAVAILABLE: Historical market data or AI Simulation Engine is unreachable. Trade-Z strictly forbids synthetic random fallback.',
       timestamp: new Date().toISOString(),
+      summary: {
+        status: 'BACKTEST_DATA_UNAVAILABLE',
+        total_trades: 0,
+        net_pnl: 0.0,
+        starting_balance: initBal,
+        ending_balance: initBal,
+        ending_equity: initBal,
+        win_rate: 0.0,
+        profit_factor: 0.0,
+        net_return_pct: 0.0,
+      },
     };
   }
 

@@ -144,7 +144,7 @@ interface SimulationSummary {
   peak_margin_utilization: number;
   margin_calls: number;
   stop_out_events: number;
-  status: 'COMPLETED' | 'ACCOUNT_FAILED' | 'SURVIVED';
+  status: 'COMPLETED' | 'ACCOUNT_FAILED' | 'SURVIVED' | 'DATA_UNAVAILABLE' | string;
   unexecutable_setups_count: number;
 }
 
@@ -198,6 +198,8 @@ export default function BacktestSimulatorPage() {
   const [riskProfile, setRiskProfile] = useState<'conservative' | 'balanced' | 'aggressive' | 'custom'>('balanced');
   const [customRiskPct, setCustomRiskPct] = useState<number>(2.0);
   const [brokerProfile, setBrokerProfile] = useState<string>('exness');
+  const [allowSynthetic, setAllowSynthetic] = useState<boolean>(false);
+  const [simulationError, setSimulationError] = useState<string | null>(null);
 
   // ── State for Single Simulation ──
   const [loading, setLoading] = useState(false);
@@ -263,6 +265,7 @@ export default function BacktestSimulatorPage() {
     setLoading(true);
     setRulesApplied(false);
     setLearningReport(null);
+    setSimulationError(null);
 
     try {
       const apiBase = getApiBaseUrl();
@@ -277,6 +280,7 @@ export default function BacktestSimulatorPage() {
           risk_percent: effectiveRiskPercent,
           broker_name: brokerProfile,
           custom_leverage: brokerProfile === 'exness' ? 2000 : 500,
+          allow_synthetic: allowSynthetic,
         }),
       });
 
@@ -288,40 +292,56 @@ export default function BacktestSimulatorPage() {
       const data = body.data || body;
 
       if (data) {
-        const simSummary: SimulationSummary = data.summary || {
-          starting_balance: data.initial_balance ?? effectiveInitialBalance,
-          ending_balance: data.final_balance ?? (data.initial_balance ?? effectiveInitialBalance),
-          ending_equity: data.final_equity ?? data.final_balance ?? 0,
-          net_pnl: data.net_pnl ?? 0,
-          net_return_pct: data.net_return_pct ?? 0,
-          total_trades: data.total_trades ?? 0,
-          winning_trades: data.winning_trades ?? 0,
-          losing_trades: data.losing_trades ?? 0,
-          breakeven_trades: data.breakeven_trades ?? 0,
-          win_rate: data.win_rate ?? 0,
-          profit_factor: data.profit_factor ?? 1.0,
-          max_drawdown: data.max_drawdown_pct ?? data.max_drawdown ?? 0,
-          max_drawdown_dollars: data.max_drawdown_dollars ?? 0,
-          expectancy_r: data.expectancy_r ?? 0,
-          risk_of_ruin: data.risk_of_ruin_pct ?? data.risk_of_ruin ?? 0,
-          sharpe_ratio: data.sharpe_ratio ?? 0,
-          average_win: data.average_win ?? 0,
-          average_loss: data.average_loss ?? 0,
-          total_spread_cost: data.total_spread_cost ?? 0,
-          total_commission: data.total_commission ?? 0,
-          total_swap: data.total_swap ?? 0,
-          peak_margin_utilization: data.peak_margin_utilization ?? 0,
-          margin_calls: data.margin_calls ?? 0,
-          stop_out_events: data.stop_out_events ?? 0,
-          status: data.status || (data.final_balance > 0 ? 'COMPLETED' : 'ACCOUNT_FAILED'),
-          unexecutable_setups_count: data.unexecutable_setups_count ?? (data.unexecutable_setups?.length || 0),
+        const rawSummary = data.summary || {};
+        const isDataUnavailable =
+          data.success === false ||
+          data.status === 'DATA_UNAVAILABLE' ||
+          data.status === 'BACKTEST_DATA_UNAVAILABLE' ||
+          rawSummary.status === 'DATA_UNAVAILABLE' ||
+          rawSummary.status === 'BACKTEST_DATA_UNAVAILABLE';
+
+        if (isDataUnavailable) {
+          setSimulationError(
+            data.error ||
+            'Historical market candles could not be retrieved for the selected assets. Toggle Demo Mode below if you wish to run a simulated stress-test.'
+          );
+        }
+
+        const simSummary: SimulationSummary = {
+          starting_balance: rawSummary.starting_balance ?? data.initial_balance ?? effectiveInitialBalance ?? 0,
+          ending_balance: rawSummary.ending_balance ?? data.final_balance ?? (data.initial_balance ?? effectiveInitialBalance ?? 0),
+          ending_equity: rawSummary.ending_equity ?? data.final_equity ?? data.final_balance ?? (data.initial_balance ?? effectiveInitialBalance ?? 0),
+          net_pnl: rawSummary.net_pnl ?? data.net_pnl ?? 0,
+          net_return_pct: rawSummary.net_return_pct ?? data.net_return_pct ?? 0,
+          total_trades: rawSummary.total_trades ?? data.total_trades ?? 0,
+          winning_trades: rawSummary.winning_trades ?? data.winning_trades ?? 0,
+          losing_trades: rawSummary.losing_trades ?? data.losing_trades ?? 0,
+          breakeven_trades: rawSummary.breakeven_trades ?? data.breakeven_trades ?? 0,
+          win_rate: rawSummary.win_rate ?? data.win_rate ?? 0,
+          profit_factor: rawSummary.profit_factor ?? data.profit_factor ?? 1.0,
+          max_drawdown: rawSummary.max_drawdown_pct ?? rawSummary.max_drawdown ?? data.max_drawdown_pct ?? data.max_drawdown ?? 0,
+          max_drawdown_dollars: rawSummary.max_drawdown_dollars ?? data.max_drawdown_dollars ?? 0,
+          expectancy_r: rawSummary.expectancy_r ?? data.expectancy_r ?? 0,
+          risk_of_ruin: rawSummary.risk_of_ruin_pct ?? rawSummary.risk_of_ruin ?? data.risk_of_ruin_pct ?? data.risk_of_ruin ?? 0,
+          sharpe_ratio: rawSummary.sharpe_ratio ?? data.sharpe_ratio ?? 0,
+          average_win: rawSummary.average_win ?? data.average_win ?? 0,
+          average_loss: rawSummary.average_loss ?? data.average_loss ?? 0,
+          total_spread_cost: rawSummary.total_spread_cost ?? data.total_spread_cost ?? 0,
+          total_commission: rawSummary.total_commission ?? data.total_commission ?? 0,
+          total_swap: rawSummary.total_swap ?? data.total_swap ?? 0,
+          peak_margin_utilization: rawSummary.peak_margin_utilization ?? data.peak_margin_utilization ?? 0,
+          margin_calls: rawSummary.margin_calls ?? data.margin_calls ?? 0,
+          stop_out_events: rawSummary.stop_out_events ?? data.stop_out_events ?? 0,
+          status: isDataUnavailable ? 'DATA_UNAVAILABLE' : (rawSummary.status || data.status || (data.final_balance > 0 ? 'COMPLETED' : 'ACCOUNT_FAILED')),
+          unexecutable_setups_count: rawSummary.unexecutable_setups_count ?? data.unexecutable_setups_count ?? (data.unexecutable_setups?.length || 0),
         };
         setSummary(simSummary);
-        setTrades(data.trades || []);
-        setEquityCurve(data.equity_curve || []);
+        setTrades(isDataUnavailable ? [] : (data.trades || []));
+        setEquityCurve(isDataUnavailable ? [] : (data.equity_curve || []));
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Simulation error:', err);
+      setSimulationError(err?.message || 'Failed to communicate with backtest simulator service.');
     } finally {
       setLoading(false);
     }
@@ -886,11 +906,25 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
 
         {/* Action Button Banner */}
         <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="text-[11px] font-mono text-[#64748b]">
-            Target: <span className="text-white font-bold">${effectiveInitialBalance}</span> Balance •{' '}
-            <span className="text-white font-bold">{selectedSymbols.length}</span> Assets •{' '}
-            <span className="text-white font-bold">{timeframe.toUpperCase()}</span> Timeframe •{' '}
-            <span className="text-white font-bold">{periodDays}</span> Days Replay
+          <div className="text-[11px] font-mono text-[#64748b] flex flex-col gap-1">
+            <div>
+              Target: <span className="text-white font-bold">${effectiveInitialBalance}</span> Balance •{' '}
+              <span className="text-white font-bold">{selectedSymbols.length}</span> Assets •{' '}
+              <span className="text-white font-bold">{timeframe.toUpperCase()}</span> Timeframe •{' '}
+              <span className="text-white font-bold">{periodDays}</span> Days Replay
+            </div>
+            <label className="inline-flex items-center gap-2 cursor-pointer text-[10px] select-none text-[#94a3b8] hover:text-white mt-1">
+              <input
+                type="checkbox"
+                checked={allowSynthetic}
+                onChange={(e) => setAllowSynthetic(e.target.checked)}
+                className="rounded border-[#334155] bg-[#12121a] text-brand-500 focus:ring-brand-500/20"
+              />
+              <span>Demo Mode (Synthetic Data Fallback)</span>
+              <span className="text-[9px] text-[#64748b]">
+                {allowSynthetic ? '• Synthetic mock candles permitted' : '• Strict real broker history only'}
+              </span>
+            </label>
           </div>
 
           {activeTab === 'single' ? (
@@ -932,6 +966,37 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
           ) : null}
         </div>
       </div>
+
+      {/* ── Error / Market Data Notice Banner ── */}
+      {simulationError && (
+        <div className="card p-4 border-amber-500/40 bg-amber-500/10 text-amber-200 space-y-2">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <h4 className="text-xs font-bold uppercase tracking-wider font-mono text-amber-300">
+                Market Data Availability Notice
+              </h4>
+              <p className="text-xs font-mono text-amber-200/90 leading-relaxed">
+                {simulationError}
+              </p>
+              {!allowSynthetic && (
+                <div className="pt-1.5">
+                  <button
+                    onClick={() => {
+                      setAllowSynthetic(true);
+                      setSimulationError(null);
+                    }}
+                    className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 rounded text-[11px] font-mono font-bold text-amber-300 transition-colors inline-flex items-center gap-1.5"
+                  >
+                    <Zap className="w-3.5 h-3.5" />
+                    Enable Demo Mode & Test Engine
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── TOURNAMENT TAB VIEW ── */}
       {activeTab === 'tournament' && (
@@ -1025,34 +1090,34 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
                               </span>
                             </td>
                             <td className="py-3 px-3 font-bold text-white">
-                              ${tier.final_balance.toFixed(2)}
+                              ${(tier.final_balance ?? 0).toFixed(2)}
                             </td>
                             <td
                               className={`py-3 px-3 font-bold ${
-                                tier.net_return_pct >= 0 ? 'text-emerald-400' : 'text-red-400'
+                                (tier.net_return_pct ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
                               }`}
                             >
-                              {tier.net_return_pct >= 0 ? `+${tier.net_return_pct}%` : `${tier.net_return_pct}%`}
+                              {(tier.net_return_pct ?? 0) >= 0 ? `+${tier.net_return_pct ?? 0}%` : `${tier.net_return_pct ?? 0}%`}
                               <span className="text-[10px] text-[#64748b] ml-1 font-normal">
-                                (${tier.net_pnl >= 0 ? `+${tier.net_pnl.toFixed(2)}` : tier.net_pnl.toFixed(2)})
+                                (${(tier.net_pnl ?? 0) >= 0 ? `+${(tier.net_pnl ?? 0).toFixed(2)}` : (tier.net_pnl ?? 0).toFixed(2)})
                               </span>
                             </td>
                             <td className="py-3 px-3 text-[#cbd5e1] font-semibold">
-                              {tier.win_rate}%
+                              {tier.win_rate ?? 0}%
                             </td>
                             <td className="py-3 px-3 text-[#cbd5e1] font-semibold">
-                              {tier.profit_factor}x
+                              {tier.profit_factor ?? 0}x
                             </td>
                             <td
                               className={`py-3 px-3 font-semibold ${
-                                tier.max_drawdown_pct > 25 ? 'text-red-400' : 'text-amber-400'
+                                (tier.max_drawdown_pct ?? 0) > 25 ? 'text-red-400' : 'text-amber-400'
                               }`}
                             >
-                              {tier.max_drawdown_pct}%
+                              {tier.max_drawdown_pct ?? 0}%
                             </td>
                             <td className="py-3 px-3 text-[#94a3b8]">
-                              <span className="text-white font-bold">{tier.total_trades}</span> taken
-                              {tier.unexecutable_count > 0 && (
+                              <span className="text-white font-bold">{tier.total_trades ?? 0}</span> taken
+                              {(tier.unexecutable_count ?? 0) > 0 && (
                                 <span className="text-amber-400 text-[10px] ml-1.5">
                                   ({tier.unexecutable_count} skipped)
                                 </span>
@@ -1061,14 +1126,14 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
                             <td className="py-3 px-3 text-right font-bold">
                               <span
                                 className={`${
-                                  tier.risk_of_ruin_pct > 20
+                                  (tier.risk_of_ruin_pct ?? 0) > 20
                                     ? 'text-red-400'
-                                    : tier.risk_of_ruin_pct > 5
+                                    : (tier.risk_of_ruin_pct ?? 0) > 5
                                     ? 'text-amber-400'
                                     : 'text-emerald-400'
                                 }`}
                               >
-                                {tier.risk_of_ruin_pct}%
+                                {tier.risk_of_ruin_pct ?? 0}%
                               </span>
                             </td>
                           </tr>
@@ -1103,7 +1168,9 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
                 className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
                   summary.status === 'ACCOUNT_FAILED'
                     ? 'bg-red-500/10 border-red-500/30 text-red-200'
-                    : summary.net_pnl >= 0
+                    : summary.status === 'DATA_UNAVAILABLE'
+                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+                    : (summary.net_pnl ?? 0) >= 0
                     ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
                     : 'bg-amber-500/10 border-amber-500/30 text-amber-200'
                 }`}
@@ -1111,6 +1178,8 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
                 <div className="flex items-center gap-3">
                   {summary.status === 'ACCOUNT_FAILED' ? (
                     <ShieldAlert className="w-6 h-6 text-red-400 shrink-0" />
+                  ) : summary.status === 'DATA_UNAVAILABLE' ? (
+                    <AlertTriangle className="w-6 h-6 text-amber-400 shrink-0" />
                   ) : (
                     <ShieldCheck className="w-6 h-6 text-emerald-400 shrink-0" />
                   )}
@@ -1119,7 +1188,9 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
                       <span className="text-xs font-mono font-black uppercase tracking-wider">
                         {summary.status === 'ACCOUNT_FAILED'
                           ? '🚨 ACCOUNT FAILED — LIQUIDATION TRIGGERED'
-                          : summary.net_pnl >= 0
+                          : summary.status === 'DATA_UNAVAILABLE'
+                          ? '⚠️ HISTORICAL DATA UNAVAILABLE'
+                          : (summary.net_pnl ?? 0) >= 0
                           ? '🛡️ SURVIVED & PROFITABLE (REAL BROKER RULES)'
                           : '⚠️ SURVIVED IN DRAWDOWN'}
                       </span>
@@ -1130,7 +1201,9 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
                     <p className="text-[11px] font-mono opacity-80 mt-0.5">
                       {summary.status === 'ACCOUNT_FAILED'
                         ? 'Stop-out liquidation was executed by broker emulator. Minimum lot size (0.01) created excessive drawdowns.'
-                        : `Account survived ${summary.total_trades} chronological executions with realistic spread and zero look-ahead bias.`}
+                        : summary.status === 'DATA_UNAVAILABLE'
+                        ? (simulationError || 'Historical market candles were not supplied for the selected symbols. Check Demo Mode to run with simulated data.')
+                        : `Account survived ${summary.total_trades ?? 0} chronological executions with realistic spread and zero look-ahead bias.`}
                     </p>
                   </div>
                 </div>
@@ -1138,11 +1211,11 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
                 <div className="flex items-center gap-3 self-end sm:self-auto">
                   <button
                     onClick={teachAI}
-                    disabled={teaching}
+                    disabled={teaching || summary.status === 'DATA_UNAVAILABLE'}
                     className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
                       rulesApplied
                         ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
-                        : 'bg-brand-600 hover:bg-brand-500 text-white shadow-md shadow-brand-600/30'
+                        : 'bg-brand-600 hover:bg-brand-500 text-white shadow-md shadow-brand-600/30 disabled:opacity-50'
                     }`}
                   >
                     {teaching ? (
@@ -1162,33 +1235,33 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
                 {[
                   {
                     label: 'Final Balance',
-                    value: `$${summary.ending_balance.toFixed(2)}`,
-                    sub: `From $${summary.starting_balance.toLocaleString()}`,
-                    color: summary.ending_balance >= summary.starting_balance ? 'text-emerald-400' : 'text-red-400',
+                    value: `$${(summary.ending_balance ?? 0).toFixed(2)}`,
+                    sub: `From $${(summary.starting_balance ?? 0).toLocaleString()}`,
+                    color: (summary.ending_balance ?? 0) >= (summary.starting_balance ?? 0) ? 'text-emerald-400' : 'text-red-400',
                   },
                   {
                     label: 'Net Return',
-                    value: `${summary.net_return_pct >= 0 ? '+' : ''}${summary.net_return_pct}%`,
-                    sub: `${summary.net_pnl >= 0 ? '+$' : '-$'}${Math.abs(summary.net_pnl).toFixed(2)}`,
-                    color: summary.net_pnl >= 0 ? 'text-emerald-400' : 'text-red-400',
+                    value: `${(summary.net_return_pct ?? 0) >= 0 ? '+' : ''}${summary.net_return_pct ?? 0}%`,
+                    sub: `${(summary.net_pnl ?? 0) >= 0 ? '+$' : '-$'}${Math.abs(summary.net_pnl ?? 0).toFixed(2)}`,
+                    color: (summary.net_pnl ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400',
                   },
                   {
                     label: 'Win Rate',
-                    value: `${summary.win_rate}%`,
-                    sub: `${summary.winning_trades}W / ${summary.losing_trades}L (${summary.breakeven_trades}BE)`,
-                    color: summary.win_rate >= 55 ? 'text-emerald-400' : 'text-amber-400',
+                    value: `${summary.win_rate ?? 0}%`,
+                    sub: `${summary.winning_trades ?? 0}W / ${summary.losing_trades ?? 0}L (${summary.breakeven_trades ?? 0}BE)`,
+                    color: (summary.win_rate ?? 0) >= 55 ? 'text-emerald-400' : 'text-amber-400',
                   },
                   {
                     label: 'Profit Factor',
-                    value: `${summary.profit_factor}x`,
-                    sub: `Expectancy: ${summary.expectancy_r > 0 ? '+' : ''}${summary.expectancy_r}R`,
-                    color: summary.profit_factor >= 1.5 ? 'text-emerald-400' : 'text-amber-400',
+                    value: `${summary.profit_factor ?? 0}x`,
+                    sub: `Expectancy: ${(summary.expectancy_r ?? 0) > 0 ? '+' : ''}${summary.expectancy_r ?? 0}R`,
+                    color: (summary.profit_factor ?? 0) >= 1.5 ? 'text-emerald-400' : 'text-amber-400',
                   },
                   {
                     label: 'Max Drawdown',
-                    value: `${summary.max_drawdown}%`,
+                    value: `${summary.max_drawdown ?? 0}%`,
                     sub: `Peak-to-Trough`,
-                    color: summary.max_drawdown <= 15 ? 'text-emerald-400' : 'text-red-400',
+                    color: (summary.max_drawdown ?? 0) <= 15 ? 'text-emerald-400' : 'text-red-400',
                   },
                   {
                     label: 'Broker Costs',
@@ -1311,14 +1384,15 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
 
                       {/* Curve rendering */}
                       {(() => {
-                        const values = equityCurve.map((pt) => pt.equity);
-                        const minVal = Math.min(...values);
-                        const maxVal = Math.max(...values);
+                        const values = equityCurve.map((pt) => pt.equity ?? 0);
+                        const minVal = values.length > 0 ? Math.min(...values) : 0;
+                        const maxVal = values.length > 0 ? Math.max(...values) : 0;
                         const range = maxVal - minVal || 1;
 
                         const points = equityCurve
                           .map((pt, idx) => {
-                            const normalizedY = 100 - ((pt.equity - minVal) / range) * 85 - 8;
+                            const eq = pt.equity ?? 0;
+                            const normalizedY = 100 - ((eq - minVal) / range) * 85 - 8;
                             return `${idx},${normalizedY}`;
                           })
                           .join(' ');
@@ -1349,10 +1423,10 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
                         Equity Trajectory
                       </span>
                       <span className="text-[#64748b]">
-                        Min: ${Math.min(...equityCurve.map((p) => p.equity)).toFixed(2)}
+                        Min: ${equityCurve.length > 0 ? Math.min(...equityCurve.map((p) => p.equity ?? 0)).toFixed(2) : '0.00'}
                       </span>
                       <span className="text-[#64748b]">
-                        Max: ${Math.max(...equityCurve.map((p) => p.equity)).toFixed(2)}
+                        Max: ${equityCurve.length > 0 ? Math.max(...equityCurve.map((p) => p.equity ?? 0)).toFixed(2) : '0.00'}
                       </span>
                     </div>
                   </div>

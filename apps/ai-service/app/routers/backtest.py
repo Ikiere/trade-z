@@ -40,6 +40,9 @@ class SimulationPayload(BaseModel):
     broker_name: str = "exness"
     custom_leverage: Optional[float] = None
     allow_synthetic: bool = False
+    mode: str = "DISCOVERY"
+    bootstrap_unknown_edge: bool = True
+    dataset_phase: str = "TRAIN"
 
 
 class TournamentPayload(BaseModel):
@@ -65,6 +68,8 @@ async def simulate_market(payload: SimulationPayload):
     Automatically fetches authentic historical candles from available market feeds
     (MT5 Bridge -> TwelveData -> Binance/Yahoo Finance) before running.
     """
+    from app.services.edge_policy import BacktestEdgeMode, DatasetPhase
+
     candles_map: Dict[str, pd.DataFrame] = {}
     market_data = MarketDataService()
 
@@ -80,6 +85,13 @@ async def simulate_market(payload: SimulationPayload):
         except Exception as e:
             print(f"[simulate_market] Could not fetch real historical candles for {clean}: {e}")
 
+    edge_mode_enum = BacktestEdgeMode.DISCOVERY if payload.mode.upper() == "DISCOVERY" else (
+        BacktestEdgeMode.STRICT if payload.mode.upper() == "STRICT" else BacktestEdgeMode.LIVE
+    )
+    phase_enum = DatasetPhase.TRAIN if payload.dataset_phase.upper() == "TRAIN" else (
+        DatasetPhase.VALIDATION if payload.dataset_phase.upper() == "VALIDATION" else DatasetPhase.OOS
+    )
+
     result = event_driven_simulator.run_simulation(
         symbols=payload.symbols,
         initial_balance=payload.initial_balance,
@@ -90,7 +102,10 @@ async def simulate_market(payload: SimulationPayload):
         broker_name=payload.broker_name,
         custom_leverage=payload.custom_leverage,
         custom_candles_map=candles_map if candles_map else None,
-        allow_synthetic=payload.allow_synthetic
+        allow_synthetic=payload.allow_synthetic,
+        edge_mode=edge_mode_enum,
+        bootstrap_unknown_edge=payload.bootstrap_unknown_edge,
+        dataset_phase=phase_enum
     )
     return result
 

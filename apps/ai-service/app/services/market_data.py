@@ -201,6 +201,7 @@ class MarketDataService:
                         if len(rows) >= 20:
                             df = pd.DataFrame(rows).tail(outputsize).reset_index(drop=True)
                             df["datetime"] = pd.to_datetime(df["time"], unit="s", utc=True)
+                            df["time"] = df["datetime"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
                             print(f"[MarketDataService] Priority 3 (Yahoo Finance) Success: Received {len(df)} live candles for {yf_sym} ({yf_interval}).")
                             return df
 

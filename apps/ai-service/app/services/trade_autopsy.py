@@ -66,6 +66,8 @@ class TradeAutopsy(BaseModel):
     recommended_adjustment: str = ""
     is_statistical_acceptable: bool = True
     sentinel_action: Optional[str] = None
+    session: str = ""
+    market_regime: str = ""
 
 
 class AutopsyEngine:
@@ -94,6 +96,8 @@ class AutopsyEngine:
         mae_pips = float(trade_record.get("mae_pips", 0.0))
         sentinel_action = trade_record.get("sentinel_action", exit_reason)
         factors = trade_record.get("factors", {})
+        session = str(market_context.get("session", "UNKNOWN"))
+        regime = str(market_context.get("regime", market_context.get("market_regime", "normal"))).lower()
 
         contributing = []
         if factors.get("higher_tf_aligned"):
@@ -136,7 +140,9 @@ class AutopsyEngine:
                 contributing_layers=contributing,
                 recommended_adjustment=adjustment,
                 is_statistical_acceptable=True,
-                sentinel_action=sentinel_action
+                sentinel_action=sentinel_action,
+                session=session,
+                market_regime=regime
             )
 
         elif outcome == "BREAKEVEN":
@@ -171,7 +177,9 @@ class AutopsyEngine:
                 contributing_layers=contributing,
                 recommended_adjustment=adjustment,
                 is_statistical_acceptable=stat_ok,
-                sentinel_action=sentinel_action
+                sentinel_action=sentinel_action,
+                session=session,
+                market_regime=regime
             )
 
         else:
@@ -259,7 +267,9 @@ class AutopsyEngine:
                 contributing_layers=contributing,
                 recommended_adjustment=adjustment,
                 is_statistical_acceptable=stat_ok,
-                sentinel_action=sentinel_action
+                sentinel_action=sentinel_action,
+                session=session,
+                market_regime=regime
             )
 
     def get_root_cause_distribution(self) -> Dict[str, int]:

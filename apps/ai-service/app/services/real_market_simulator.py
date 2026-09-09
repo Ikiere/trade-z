@@ -166,15 +166,15 @@ def run_sentinel_counterfactual_audit(closed_trades: List[Dict[str, Any]]) -> Di
     exp_b = round(sum(r_vals_b) / total, 2)
 
     # Variant C: BE at 0.5R
-    r_vals_c = [0.0 if t.get("mfe_r", 0.0) >= 0.5 and t["outcome"] != "WIN" else t["r_multiple"] for t in closed_trades]
+    r_vals_c = [0.0 if t.get("mfe_r", 0.0) >= 0.5 and t.get("outcome", "LOSS") != "WIN" else t.get("r_multiple", 0.0) for t in closed_trades]
     exp_c = round(sum(r_vals_c) / total, 2)
 
     # Variant D: BE at 1.0R
-    r_vals_d = [0.0 if t.get("mfe_r", 0.0) >= 1.0 and t["outcome"] != "WIN" else t["r_multiple"] for t in closed_trades]
+    r_vals_d = [0.0 if t.get("mfe_r", 0.0) >= 1.0 and t.get("outcome", "LOSS") != "WIN" else t.get("r_multiple", 0.0) for t in closed_trades]
     exp_d = round(sum(r_vals_d) / total, 2)
 
     # Variant E: Structural BE (BE at 2.0R)
-    r_vals_e = [0.0 if t.get("mfe_r", 0.0) >= 2.0 and t["outcome"] != "WIN" else t["r_multiple"] for t in closed_trades]
+    r_vals_e = [0.0 if t.get("mfe_r", 0.0) >= 2.0 and t.get("outcome", "LOSS") != "WIN" else t.get("r_multiple", 0.0) for t in closed_trades]
     exp_e = round(sum(r_vals_e) / total, 2)
 
     # Variant F: ATR Protection (Trailing behind peak MFE by 1.0R once MFE >= 2.0R)

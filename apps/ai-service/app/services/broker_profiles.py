@@ -38,7 +38,7 @@ class SymbolSpec(BaseModel):
           USDJPY: 0.7 pips * 0.001  * (100/10)   = 0.7 * 0.001 * 10    = 0.007     ✓
           BTCUSD: 12  pips * 0.01   * (1/10)     = 12  * 0.01  * 0.1   = 0.012     ✓ (12 USD)
         """
-        pip_in_price = self.tick_size * (self.pip_multiplier / 10.0)
+        pip_in_price = (1.0 / self.pip_multiplier) if self.pip_multiplier > 0 else (self.tick_size * 10.0)
         return round(self.typical_spread_pips * pip_in_price, self.decimals)
 
     def point_value_per_lot(self) -> float:
@@ -282,10 +282,12 @@ AVAILABLE_BROKERS: Dict[str, BrokerProfile] = {
 
 
 def get_broker_profile(name: Optional[str] = None) -> BrokerProfile:
-    if not name:
+    if not name or name.lower() in ["default", ""]:
         return EXNESS_PROFILE
     key = name.lower().replace(" ", "_")
-    return AVAILABLE_BROKERS.get(key, EXNESS_PROFILE)
+    if key in AVAILABLE_BROKERS:
+        return AVAILABLE_BROKERS[key]
+    raise ValueError(f"BROKER_DATA_UNAVAILABLE: Broker profile '{name}' not found. Generic values cannot be substituted.")
 
 
 def sync_from_mt5_symbol_info(

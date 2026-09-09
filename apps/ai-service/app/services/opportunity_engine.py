@@ -8,6 +8,7 @@ At every scan:
 5. Evaluates account-level instrument eligibility (Small Account Multi-Asset Failover).
 6. Ranks all candidates from highest to lowest expected value.
 7. Passes top candidates to the AI Comparative Evaluator.
+8. Strictly maintains candles_by_symbol mapping and distinguishes NO_SETUP_FOUND, DATA_ERROR, and ENGINE_ERROR.
 """
 
 import asyncio
@@ -40,6 +41,7 @@ class WatchlistOpportunityReport(BaseModel):
     top_selected_opportunity: Optional[RankedOpportunity] = None
     comparative_analysis: Optional[Dict[str, Any]] = None
     account_summary: Dict[str, Any] = Field(default_factory=dict)
+    scan_diagnostics: Dict[str, Any] = Field(default_factory=dict)
 
 
 class OpportunityEngine:
@@ -62,7 +64,7 @@ class OpportunityEngine:
     ) -> WatchlistOpportunityReport:
         """
         Scans all instruments in the watchlist, generates setups across 10 SMC families,
-        evaluates small-account eligibility, and ranks opportunities.
+        evaluates small-account eligibility, maintains candles_by_symbol, and ranks opportunities.
         """
         from datetime import datetime, timezone
         now_str = datetime.now(timezone.utc).isoformat()
@@ -71,6 +73,15 @@ class OpportunityEngine:
         leverage = float(account_leverage or 100.0)
 
         all_candidates: List[tuple[CandidateSetup, EligibilityResult]] = []
+        candles_by_symbol: Dict[str, pd.DataFrame] = {}
+        scan_diagnostics: Dict[str, Any] = {
+            "SUCCESS": 0,
+            "NO_SETUP_FOUND": 0,
+            "DATA_ERROR": 0,
+            "ENGINE_ERROR": 0,
+            "NEWS_BLOCKED": 0,
+            "symbol_errors": {}
+        }
 
         # Concurrent scan across watchlist
         tasks = []
@@ -79,20 +90,27 @@ class OpportunityEngine:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        candles_by_symbol: dict = {}
         for res in results:
-            if isinstance(res, tuple) and len(res) == 3:
+            if isinstance(res, dict):
+                sym = res.get("symbol", "UNKNOWN")
+                status = res.get("status", "ENGINE_ERROR")
+                scan_diagnostics[status] = scan_diagnostics.get(status, 0) + 1
+
+                if res.get("error"):
+                    scan_diagnostics["symbol_errors"][sym] = res["error"]
+
+                snapshot_df = res.get("snapshot_df")
+                if snapshot_df is not None:
+                    candles_by_symbol[sym] = snapshot_df
+
+                candidates_list = res.get("candidates") or []
+                all_candidates.extend(candidates_list)
+            elif isinstance(res, tuple) and len(res) == 3:
                 candidates_list, _, snapshot_df = res
-                # Collect the snapshot df for each symbol so context resolution works
-                if candidates_list and snapshot_df is not None:
-                    first_sym = candidates_list[0].symbol if candidates_list else None
-                    if first_sym:
-                        candles_by_symbol[first_sym] = snapshot_df
                 if isinstance(candidates_list, list):
                     all_candidates.extend(candidates_list if isinstance(candidates_list[0] if candidates_list else None, tuple) else [])
-            # Legacy: plain list
-            elif isinstance(res, list):
-                all_candidates.extend(res)
+            elif isinstance(res, Exception):
+                scan_diagnostics["ENGINE_ERROR"] = scan_diagnostics.get("ENGINE_ERROR", 0) + 1
 
         # Filter candidates: remove those with quality < 70 or R:R < 1.8
         viable_candidates = [
@@ -121,11 +139,11 @@ class OpportunityEngine:
                 regime=ctx.regime,
                 spread_cost_r=spread_cost_r
             )
-            c.expected_value = emp.empirical_ev_r
+            c.expected_value = emp.cost_adjusted_expectancy_r
             c.sample_size = emp.sample_size
             c.evidence_tier = str(emp.evidence_tier)
 
-        # Rank candidates:
+        # Executable-First Ranking:
         # 1st tier: Eligible for current account balance + highest Expected Value * regime score multiplier
         # 2nd tier: Ineligible for current balance (e.g. Gold on $20 account), ranked by EV
         def ranking_key(item: tuple[CandidateSetup, EligibilityResult]):
@@ -140,16 +158,19 @@ class OpportunityEngine:
             )
             regime_multiplier = regime_info.get("score_multiplier", 1.0)
             eligibility_score = 1000.0 if elig.is_eligible else 0.0
-            return eligibility_score + ((c.expected_value * 100.0) * regime_multiplier) + c.setup_quality_score
+            ev_val = c.expected_value if c.expected_value is not None else 0.0
+            return eligibility_score + ((ev_val * 100.0) * regime_multiplier) + c.setup_quality_score
 
         sorted_candidates = sorted(viable_candidates, key=ranking_key, reverse=True)
 
         ranked_opps: List[RankedOpportunity] = []
         for rank_idx, (c, elig) in enumerate(sorted_candidates, start=1):
-            is_actionable = elig.is_eligible and c.expected_value > 0
+            ev_val = c.expected_value if c.expected_value is not None else 0.0
+            is_actionable = elig.is_eligible and (c.expected_value is None or ev_val >= 0)
 
+            ev_str = f"+{c.expected_value:.2f}R" if c.expected_value is not None else "UNKNOWN"
             if elig.is_eligible:
-                notes = f"Rank #{rank_idx}: Top actionable setup on {c.symbol} ({c.setup_family}) with EV +{c.expected_value:.2f}R and {c.risk_reward:.1f} R:R."
+                notes = f"Rank #{rank_idx}: Top actionable setup on {c.symbol} ({c.setup_family}) with EV {ev_str} and {c.risk_reward:.1f} R:R."
             else:
                 notes = f"Rank #{rank_idx}: High-conviction setup ({c.setup_family}) on {c.symbol}, but requires larger equity to trade safely at broker 0.01 min lot. Sizing deferred to eligible assets."
 
@@ -183,7 +204,7 @@ class OpportunityEngine:
                 )
                 comparative_analysis_dict = comp_result.model_dump()
             except Exception as eval_err:
-                print(f"[OpportunityEngine] Comparative evaluation warning: {eval_err}")
+                scan_diagnostics["symbol_errors"]["comparative_evaluator"] = str(eval_err)
 
         return WatchlistOpportunityReport(
             timestamp=now_str,
@@ -192,7 +213,8 @@ class OpportunityEngine:
             ranked_opportunities=ranked_opps,
             top_selected_opportunity=top_selected,
             comparative_analysis=comparative_analysis_dict,
-            account_summary=account_sum
+            account_summary=account_sum,
+            scan_diagnostics=scan_diagnostics
         )
 
     async def _scan_single_symbol(
@@ -203,17 +225,23 @@ class OpportunityEngine:
         equity: float,
         risk_percent: float,
         leverage: float
-    ) -> tuple:
+    ) -> Dict[str, Any]:
         """
-        Scans a single symbol and returns (candidate_pairs, None, snapshot_df).
-        candidate_pairs is a List[tuple[CandidateSetup, EligibilityResult]].
-        snapshot_df is returned so scan_watchlist can build candles_by_symbol.
+        Scans a single symbol and returns structured diagnostic record:
+        {symbol, candidates, snapshot_df, status, error}
+        Distinguishes SUCCESS, NO_SETUP_FOUND, DATA_ERROR, NEWS_BLOCKED, ENGINE_ERROR.
         """
         sym = symbol.upper().replace("/", "").replace(" ", "")
         try:
             news_safe = await check_news_filter(sym)
             if not news_safe:
-                return ([], None, None)
+                return {
+                    "symbol": sym,
+                    "candidates": [],
+                    "snapshot_df": None,
+                    "status": "NEWS_BLOCKED",
+                    "error": "News filter active"
+                }
 
             snapshot = await self.market_data_service.get_market_snapshot(
                 symbol=sym,
@@ -223,7 +251,13 @@ class OpportunityEngine:
             )
 
             if snapshot is None or not getattr(snapshot, "is_valid", True) or snapshot.df is None or len(snapshot.df) < 25:
-                return ([], None, None)
+                return {
+                    "symbol": sym,
+                    "candidates": [],
+                    "snapshot_df": snapshot.df if snapshot is not None else None,
+                    "status": "DATA_ERROR",
+                    "error": "Market snapshot unavailable or insufficient bars (<25)"
+                }
 
             snapshot_df = snapshot.df
 
@@ -256,8 +290,24 @@ class OpportunityEngine:
                 )
                 results.append((c, elig))
 
-            return (results, None, snapshot_df)
+            status = "SUCCESS" if results else "NO_SETUP_FOUND"
+            return {
+                "symbol": sym,
+                "candidates": results,
+                "snapshot_df": snapshot_df,
+                "status": status,
+                "error": None
+            }
 
         except Exception as e:
-            print(f"[OpportunityEngine] Non-fatal scan error on {sym}: {e}")
-            return ([], None, None)
+            return {
+                "symbol": sym,
+                "candidates": [],
+                "snapshot_df": None,
+                "status": "ENGINE_ERROR",
+                "error": str(e)
+            }
+
+
+# Singleton instance
+opportunity_engine = OpportunityEngine()

@@ -162,10 +162,9 @@ def generate_simulated_candles(
     import numpy as np
     from datetime import datetime
 
-    # Seed depends on pair name + current day/hour + seed_offset to evolve dynamically
-    now = datetime.now()
-    seed_str = f"{pair}_{timeframe}_{now.year}_{now.month}_{now.day}_{now.hour}_{seed_offset}"
-    seed = abs(hash(seed_str)) % 1000000
+    import hashlib
+    seed_str = f"{pair}_{timeframe}_{seed_offset}"
+    seed = int(hashlib.md5(seed_str.encode()).hexdigest()[:8], 16) % 1000000
     np.random.seed(seed)
 
     # Dynamically resolve asset class, base price, and volatility scale
@@ -189,7 +188,7 @@ def generate_simulated_candles(
         pips_scale = 0.0001
 
     # Trend direction: 60% chance of a clear trend structure (either up or down)
-    trend_val = hash(f"{pair}_trend_{seed_offset}") % 3
+    trend_val = int(hashlib.md5(f"{pair}_trend_{seed_offset}".encode()).hexdigest()[:8], 16) % 3
     trend_bias = 0
     if trend_val == 0:
         trend_bias = 1.2  # Bullish
@@ -226,7 +225,11 @@ def generate_simulated_candles(
         highs.append(h)
         lows.append(l)
 
+    start_dt = pd.Timestamp("2026-01-15 00:00:00", tz="UTC")
+    times = [(start_dt + pd.Timedelta(minutes=15 * i)).isoformat() for i in range(60)]
+
     df = pd.DataFrame({
+        "time": times,
         "open": opens,
         "high": highs,
         "low": lows,

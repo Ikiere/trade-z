@@ -2,11 +2,19 @@
 Trade-Z Structured Trading Experience Memory:
 Maintains an empirical database of all simulated and live trade setups across all instruments,
 enabling multi-dimensional statistical similarity retrieval, expectancy lookup, and regime edge mapping.
-Does not rely on vague emotional LLM prompts; anchors decisions in mathematical data.
+Enforces phase-aware isolation (TRAIN / VALIDATION / OOS), record immutability, and strict temporal causality.
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
+from datetime import datetime
+import pandas as pd
 from pydantic import BaseModel, Field
+from app.services.edge_policy import (
+    EdgeState,
+    DatasetPhase,
+    parse_to_utc_timestamp,
+    assert_point_in_time_data
+)
 from app.services.empirical_expectancy import (
     EmpiricalExpectancyEngine,
     EmpiricalExpectancyResult,
@@ -17,7 +25,7 @@ from app.services.empirical_expectancy import (
 class ExperienceRecord(BaseModel):
     id: str
     ticket: int
-    timestamp: str
+    timestamp: str                    # Close timestamp for backward compatibility
     symbol: str
     timeframe: str = "15m"
     session: str = "LONDON"           # ASIA | LONDON | NY | OVERLAP
@@ -59,6 +67,12 @@ class ExperienceRecord(BaseModel):
     model_version: str = "deterministic_v2"
     feature_version: str = "feat_v2"
     execution_version: str = "mt5_standard_v2"
+    decision_timestamp: Optional[str] = None
+    entry_timestamp: Optional[str] = None
+    close_timestamp: Optional[str] = None
+    dataset_phase: str = "TRAIN"
+    discovery_trade: bool = False
+    evidence_source: str = "PRODUCTION"
 
 
 class SimilarityQueryResponse(BaseModel):
@@ -68,30 +82,51 @@ class SimilarityQueryResponse(BaseModel):
     evidence_tier: str
     win_rate: float
     average_r: float
-    expectancy: float
-    cost_adjusted_expectancy: float
-    profit_factor: float
-    average_mfe_r: float
-    average_mae_r: float
-    statistical_edge: str  # POSITIVE | NEUTRAL | NEGATIVE | INSUFFICIENT_DATA
-    recommended_action: str # TRADE | WAIT | NO_TRADE
+    expectancy: Optional[float] = None
+    cost_adjusted_expectancy: Optional[float] = None
+    profit_factor: Optional[float] = None
+    average_mfe_r: float = 0.0
+    average_mae_r: float = 0.0
+    statistical_edge: str = "INSUFFICIENT_DATA"  # POSITIVE | NEUTRAL | NEGATIVE | INSUFFICIENT_DATA
+    edge_state: EdgeState = EdgeState.UNKNOWN_EDGE
+    recommended_action: str = "WAIT" # TRADE | WAIT | NO_TRADE
     matching_records: List[ExperienceRecord] = []
 
 
 class ExperienceMemory:
     """
-    In-memory and indexed experience storage for statistical setup evaluation across all instruments.
+    Phase-aware and point-in-time indexed experience storage for statistical setup evaluation across all instruments.
     """
 
     def __init__(self):
         self.records: List[ExperienceRecord] = []
+        self.phase: DatasetPhase = DatasetPhase.TRAIN
 
-    def add_record(self, rec: ExperienceRecord):
+    def reset(self):
+        """Clears all records for a clean simulation environment."""
+        self.records.clear()
+        self.phase = DatasetPhase.TRAIN
+
+    def set_phase(self, phase: DatasetPhase):
+        """Sets the current dataset phase (TRAIN, VALIDATION, OOS)."""
+        self.phase = phase
+
+    def add_record(self, rec: ExperienceRecord) -> bool:
         """
-        Stores completed trade record. Losses and wins become empirical evidence.
-        Strategy is never modified from a single trade.
+        Stores completed trade record.
+        Strictly enforces phase isolation: In VALIDATION or OOS phases, new outcomes
+        are NEVER added to memory, preventing evaluation contamination.
         """
+        if self.phase in [DatasetPhase.VALIDATION, DatasetPhase.OOS]:
+            # Frozen memory: OOS outcomes cannot contaminate future decisions
+            return False
+
+        # Ensure close timestamp is set
+        if not rec.close_timestamp:
+            rec.close_timestamp = rec.timestamp
+
         self.records.append(rec)
+        return True
 
     def query_experiences(
         self,
@@ -103,11 +138,23 @@ class ExperienceMemory:
     ) -> List[ExperienceRecord]:
         """
         Retrieves matching experiences chronologically.
-        Guarantees that trades occurring after as_of_timestamp cannot contaminate historical decisions.
+        Guarantees that trades closing after as_of_timestamp cannot contaminate historical decisions.
         """
         records = self.records
         if as_of_timestamp:
-            records = [r for r in records if r.timestamp <= as_of_timestamp]
+            cutoff_dt = parse_to_utc_timestamp(as_of_timestamp)
+            filtered = []
+            for r in records:
+                rec_ts = r.close_timestamp or r.timestamp
+                try:
+                    rec_dt = parse_to_utc_timestamp(rec_ts)
+                    if rec_dt <= cutoff_dt:
+                        filtered.append(r)
+                except Exception:
+                    # Fallback string comparison
+                    if rec_ts <= as_of_timestamp:
+                        filtered.append(r)
+            records = filtered
 
         if symbol and symbol != "ALL":
             clean_sym = symbol.upper().replace("/", "").replace(" ", "")
@@ -143,7 +190,17 @@ class ExperienceMemory:
         """
         records = self.records
         if as_of_timestamp:
-            records = [r for r in records if r.timestamp <= as_of_timestamp]
+            cutoff_dt = parse_to_utc_timestamp(as_of_timestamp)
+            filtered = []
+            for r in records:
+                rec_ts = r.close_timestamp or r.timestamp
+                try:
+                    if parse_to_utc_timestamp(rec_ts) <= cutoff_dt:
+                        filtered.append(r)
+                except Exception:
+                    if rec_ts <= as_of_timestamp:
+                        filtered.append(r)
+            records = filtered
 
         sym = symbol.upper().replace("/", "").replace(" ", "")
         all_sym_fam = [
@@ -151,7 +208,6 @@ class ExperienceMemory:
             if r.symbol == sym and r.setup_family == setup_family
         ]
 
-        # Hierarchical filtering
         matches = all_sym_fam
         if session and session != "ALL":
             s_matches = [r for r in matches if r.session.upper() == session.upper()]
@@ -168,7 +224,6 @@ class ExperienceMemory:
             if len(d_matches) >= 10:
                 matches = d_matches
 
-        # Fallback to broader dataset if sample count is zero
         if not matches and all_sym_fam:
             matches = all_sym_fam
 
@@ -179,6 +234,8 @@ class ExperienceMemory:
                 "mfe_r": r.mfe_r,
                 "mae_r": r.mae_r,
                 "duration_bars": r.duration_bars,
+                "market_regime": r.market_regime,
+                "session": r.session
             }
             for r in matches
         ]
@@ -186,13 +243,12 @@ class ExperienceMemory:
         exp_res: EmpiricalExpectancyResult = EmpiricalExpectancyEngine.calculate_expectancy(trade_dicts)
 
         edge_str = "INSUFFICIENT_DATA"
-        if exp_res.evidence_tier in [SampleEvidenceTier.WEAK, SampleEvidenceTier.MODERATE, SampleEvidenceTier.STRONG]:
-            if exp_res.cost_adjusted_expectancy_r >= 0.20 and exp_res.profit_factor >= 1.25:
-                edge_str = "POSITIVE"
-            elif exp_res.cost_adjusted_expectancy_r >= -0.05:
-                edge_str = "NEUTRAL"
-            else:
-                edge_str = "NEGATIVE"
+        if exp_res.edge_state == EdgeState.NEGATIVE_EDGE:
+            edge_str = "NEGATIVE"
+        elif exp_res.has_statistical_edge:
+            edge_str = "POSITIVE"
+        elif exp_res.edge_state in [EdgeState.WEAK_EVIDENCE, EdgeState.MODERATE_EVIDENCE, EdgeState.STRONG_EVIDENCE]:
+            edge_str = "NEUTRAL"
 
         return SimilarityQueryResponse(
             symbol=sym,
@@ -207,15 +263,13 @@ class ExperienceMemory:
             average_mfe_r=exp_res.average_mfe_r,
             average_mae_r=exp_res.average_mae_r,
             statistical_edge=edge_str,
+            edge_state=exp_res.edge_state,
             recommended_action=exp_res.recommended_action,
             matching_records=matches[-10:]
         )
 
     def get_setup_family_stats(self, symbol: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
-        """
-        Aggregates authoritative empirical performance statistics grouped by setup family,
-        optionally filtered by instrument.
-        """
+        """Aggregates performance statistics grouped by setup family."""
         target_records = self.records
         if symbol:
             sym_clean = symbol.upper().replace("/", "").replace(" ", "")
@@ -233,6 +287,8 @@ class ExperienceMemory:
                     "mfe_r": r.mfe_r,
                     "mae_r": r.mae_r,
                     "duration_bars": r.duration_bars,
+                    "market_regime": r.market_regime,
+                    "session": r.session
                 }
                 for r in recs
             ]
@@ -250,6 +306,7 @@ class ExperienceMemory:
                 "expectancy_r": exp_res.expectancy_r,
                 "cost_adjusted_expectancy_r": exp_res.cost_adjusted_expectancy_r,
                 "evidence_tier": exp_res.evidence_tier,
+                "edge_state": exp_res.edge_state,
                 "has_statistical_edge": exp_res.has_statistical_edge,
                 "average_mfe_r": exp_res.average_mfe_r,
                 "average_mae_r": exp_res.average_mae_r,
@@ -264,7 +321,17 @@ class ExperienceMemory:
 
         breakdown = {}
         for sym, recs in by_symbol.items():
-            trade_dicts = [{"r_multiple": r.r_multiple, "mfe_r": r.mfe_r, "mae_r": r.mae_r, "duration_bars": r.duration_bars} for r in recs]
+            trade_dicts = [
+                {
+                    "r_multiple": r.r_multiple,
+                    "mfe_r": r.mfe_r,
+                    "mae_r": r.mae_r,
+                    "duration_bars": r.duration_bars,
+                    "market_regime": r.market_regime,
+                    "session": r.session
+                }
+                for r in recs
+            ]
             exp = EmpiricalExpectancyEngine.calculate_expectancy(trade_dicts)
             breakdown[sym] = {
                 "trades": exp.sample_count,
@@ -273,7 +340,8 @@ class ExperienceMemory:
                 "expectancy_r": exp.expectancy_r,
                 "cost_adjusted_expectancy_r": exp.cost_adjusted_expectancy_r,
                 "net_pnl": round(sum(r.net_pnl for r in recs), 2),
-                "evidence_tier": exp.evidence_tier
+                "evidence_tier": exp.evidence_tier,
+                "edge_state": exp.edge_state
             }
         return breakdown
 

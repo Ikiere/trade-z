@@ -375,7 +375,9 @@ class VirtualMT5Account:
         close_timestamp: str,
         exit_bid: float = 0.0,
         exit_ask: float = 0.0,
-        intrabar_resolution_method: str = "OHLC_UNAMBIGUOUS"
+        intrabar_resolution_method: str = "OHLC_UNAMBIGUOUS",
+        event_sequence: Optional[List[str]] = None,
+        data_resolution_level: str = "OHLC_UNAMBIGUOUS"
     ) -> Optional[Dict[str, Any]]:
         """
         Closes an open simulated position, realizes P/L, frees margin, and logs record.
@@ -396,16 +398,17 @@ class VirtualMT5Account:
         # Close-side commission (for ECN brokers that charge on both sides).
         # For Exness (commission_per_lot_close=0.0), this is $0. For IC Markets Raw, this is $7/lot.
         close_commission = round(spec.commission_per_lot_close * pos.volume, 2)
+        total_trade_commission = round(pos.commission + close_commission, 2)
         if close_commission > 0:
-            self.balance = round(self.balance - close_commission, 2)
             self.total_commission = round(self.total_commission + close_commission, 2)
 
-        # Net PnL: entry commission was already deducted at open_position.
-        # Do NOT subtract pos.commission again here — that was a double-charge.
-        net_pnl = round(gross_pnl + pos.swap - close_commission, 2)
+        # Net PnL of this trade: Gross PnL + Swap - Total Commission
+        net_pnl = round(gross_pnl + pos.swap - total_trade_commission, 2)
 
-        # Update balance and margins
-        self.balance = round(self.balance + net_pnl, 2)
+        # Update balance: entry commission was deducted at open, so the cash flow realized at close is
+        # (gross_pnl + pos.swap - close_commission), ensuring ending_balance == initial_balance + sum(net_pnl) exactly.
+        balance_realization = round(gross_pnl + pos.swap - close_commission, 2)
+        self.balance = round(self.balance + balance_realization, 2)
         if self.balance > self.peak_balance:
             self.peak_balance = self.balance
         closed_dd_dollars = self.peak_balance - self.balance
@@ -465,6 +468,8 @@ class VirtualMT5Account:
             "lot": pos.volume,
             "entry": pos.entry_price,
             "entry_price": pos.entry_price,
+            "exit": exit_price,
+            "exit_price": exit_price,
             "sl": initial_sl,
             "stop_loss": initial_sl,
             "initial_stop_loss": initial_sl,
@@ -477,6 +482,7 @@ class VirtualMT5Account:
             "gross_pnl": gross_pnl,
             "commission": pos.commission,
             "close_commission": close_commission,
+            "total_commission": total_trade_commission,
             "swap": pos.swap,
             "fees": round(pos.commission + close_commission + abs(pos.swap), 2),
             "spread": pos.entry_spread,
@@ -501,6 +507,8 @@ class VirtualMT5Account:
             "mae_pips": mae_pips,
             "exit_reason": exit_reason,
             "intrabar_resolution_method": intrabar_resolution_method,
+            "event_sequence": event_sequence or [],
+            "data_resolution_level": data_resolution_level,
             "outcome": outcome,
             "balance_before": pos.balance_before,
             "equity_before": pos.equity_before,

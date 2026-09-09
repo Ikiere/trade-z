@@ -599,9 +599,9 @@ class MT5BridgeHandler(BaseHTTPRequestHandler):
             '1d': mt5.TIMEFRAME_D1,
             '1day': mt5.TIMEFRAME_D1,
         }
-        tf = tf_map.get(tf_str, mt5.TIMEFRAME_M15)
-
-        rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)
+        include_forming = params.get('include_forming', ['false'])[0].lower() in ['true', '1', 'yes']
+        start_pos = 0 if include_forming else 1
+        rates = mt5.copy_rates_from_pos(symbol, tf, start_pos, count)
         if rates is None or len(rates) == 0:
             self._send_json(400, {'success': False, 'error': f'No candle data available from MT5 for {symbol}'})
             return

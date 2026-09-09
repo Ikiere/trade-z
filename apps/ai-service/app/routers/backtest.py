@@ -6,6 +6,7 @@ experience memory queries, and broker profile configuration.
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+import os
 from typing import Optional, Dict, Any, List
 import pandas as pd
 

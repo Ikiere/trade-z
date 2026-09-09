@@ -20,7 +20,9 @@ export class BacktestService {
     broker_name?: string;
     custom_leverage?: number;
     allow_synthetic?: boolean;
+    is_cent_account?: boolean;
   }) {
+    let failureDetail = '';
     try {
       const response = await fetch(`${this.aiServiceUrl}/api/v1/backtest/simulate`, {
         method: 'POST',
@@ -35,13 +37,19 @@ export class BacktestService {
           broker_name: params.broker_name || 'exness',
           custom_leverage: params.custom_leverage || 2000.0,
           allow_synthetic: params.allow_synthetic ?? false,
+          is_cent_account: params.is_cent_account ?? false,
         }),
       });
 
       if (response.ok) {
         return await response.json();
+      } else {
+        const errText = await response.text();
+        failureDetail = `HTTP ${response.status}: ${errText}`;
+        console.error(`[BacktestService] AI Service returned non-200 for simulate (${response.status}):`, errText);
       }
     } catch (e: any) {
+      failureDetail = e.message;
       console.error('[BacktestService] Error calling AI service simulate:', e.message);
     }
 
@@ -50,7 +58,7 @@ export class BacktestService {
     return {
       success: false,
       status: 'BACKTEST_DATA_UNAVAILABLE',
-      error: 'BACKTEST_DATA_UNAVAILABLE: Historical market data or AI Simulation Engine is unreachable. Trade-Z strictly forbids synthetic random fallback.',
+      error: `BACKTEST_DATA_UNAVAILABLE: Historical market data or AI Simulation Engine is unreachable (${failureDetail || 'Network/Server Error'}). Trade-Z strictly forbids synthetic random fallback.`,
       timestamp: new Date().toISOString(),
       summary: {
         status: 'BACKTEST_DATA_UNAVAILABLE',

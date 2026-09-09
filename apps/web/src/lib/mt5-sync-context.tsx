@@ -88,12 +88,13 @@ interface Mt5ContextType {
 const Mt5Context = createContext<Mt5ContextType | null>(null);
 
 export function Mt5SyncProvider({ children }: { children: React.ReactNode }) {
-  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('tradez_bridge_connected') === 'true' ? 'connected' : 'loading';
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>('loading');
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && localStorage.getItem('tradez_bridge_connected') === 'true') {
+      setBridgeStatus('connected');
     }
-    return 'loading';
-  });
+  }, []);
   const [positions, setPositions] = useState<Mt5Position[]>([]);
   const [orders, setOrders] = useState<Mt5Order[]>([]);
   const [summary, setSummary] = useState<Mt5AccountSummary | null>(null);

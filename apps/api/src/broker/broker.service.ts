@@ -75,7 +75,7 @@ export class BrokerService {
   }
 
   private getBridgeUrl(): string {
-    return process.env.MT5_BRIDGE_URL || 'http://127.0.0.1:5001';
+    return process.env.MT5_BRIDGE_URL || 'http://40.123.242.172:5001';
   }
 
   /**

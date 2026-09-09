@@ -63,7 +63,8 @@ class MarketDataService:
 
         # ── PRIORITY 1: MT5 Bridge Direct Broker Candles ──
         try:
-            mt5_url = f"http://127.0.0.1:5001/candles?symbol={clean_symbol}&timeframe={interval}&count={outputsize}"
+            bridge_base = os.environ.get("MT5_BRIDGE_URL", "http://40.123.242.172:5001").rstrip("/")
+            mt5_url = f"{bridge_base}/candles?symbol={clean_symbol}&timeframe={interval}&count={outputsize}"
             async with httpx.AsyncClient(timeout=2.0) as bridge_client:
                 b_res = await bridge_client.get(mt5_url)
                 if b_res.status_code == 200:

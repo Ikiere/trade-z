@@ -8,7 +8,7 @@ export function getDirectBridgeUrl(): string {
       return custom.trim().replace(/\/$/, '');
     }
   }
-  return process.env.NEXT_PUBLIC_MT5_BRIDGE_URL || 'http://localhost:5001';
+  return process.env.NEXT_PUBLIC_MT5_BRIDGE_URL || 'http://40.123.242.172:5001';
 }
 
 export async function getAuthToken(): Promise<string | undefined> {
@@ -23,30 +23,37 @@ export async function getAuthToken(): Promise<string | undefined> {
 
 /**
  * Universal resilient fetcher:
- * 1. Tries direct bridge URL (fast, works if client is on same machine or has direct access)
- * 2. If direct fails (like when on VPS or remote device), automatically proxies through backend API!
+ * 1. If on HTTPS and bridge URL is unencrypted HTTP, skips direct call to prevent ERR_CONNECTION_REFUSED
+ * 2. Uses secure backend API proxy on Render, which connects to the VPS bridge at MT5_BRIDGE_URL!
  */
 export async function mt5Fetch(endpoint: string, options: RequestInit = {}): Promise<any> {
   const directUrl = getDirectBridgeUrl();
   const apiBase = getApiBaseUrl();
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
 
-  // 1. Try direct call to bridge
-  try {
-    const controller = new AbortController();
-    const timeoutMs = options.signal ? 3500 : 1800;
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+  const isDirectHttp = directUrl.startsWith('http://');
 
-    const directRes = await fetch(`${directUrl}${cleanEndpoint}`, {
-      ...options,
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    if (directRes.ok) {
-      return await directRes.json();
+  // 1. Try direct call to bridge ONLY if on local development (http:) or if bridge has https:
+  // On production https://trade-z-web.vercel.app, calling an unencrypted http:// IP will produce
+  // browser console net::ERR_CONNECTION_REFUSED / mixed content warnings.
+  if (!isHttps || !isDirectHttp) {
+    try {
+      const controller = new AbortController();
+      const timeoutMs = options.signal ? 3500 : 1800;
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      const directRes = await fetch(`${directUrl}${cleanEndpoint}`, {
+        ...options,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (directRes.ok) {
+        return await directRes.json();
+      }
+    } catch (_) {
+      // Direct call failed or unreachable
     }
-  } catch (_) {
-    // Direct call failed or unreachable (e.g. running on VPS without direct browser CORS or local)
   }
 
   // 2. Fall back to backend API proxy (which is connected to Azure VPS via MT5_BRIDGE_URL)

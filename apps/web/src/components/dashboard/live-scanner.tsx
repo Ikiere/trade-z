@@ -123,12 +123,14 @@ export default function LiveScannerWidget() {
     account: contextAccount,
   } = useMt5();
 
-  const [mt5Status, setMt5Status] = useState<Mt5AccountInfo | null>(() => {
+  const [mt5Status, setMt5Status] = useState<Mt5AccountInfo | null>(null);
+
+  useEffect(() => {
     if (typeof window !== 'undefined' && localStorage.getItem('tradez_bridge_connected') === 'true') {
-      return { connected: true };
+      setMt5Status({ connected: true });
     }
-    return null;
-  });
+  }, []);
+
   const [latestSetup, setLatestSetup] = useState<LatestTradeSetup | null>(null);
 
   // Sync with context account

@@ -85,18 +85,16 @@ export default function SettingsPage() {
     connected: boolean;
     account?: any;
     error?: string;
-  }>(() => {
-    if (typeof window !== 'undefined' && localStorage.getItem('tradez_bridge_connected') === 'true') {
-      return { loading: false, connected: true };
-    }
-    return { loading: false, connected: false };
-  });
+  }>({ loading: false, connected: false });
 
   const [vpsBridgeUrl, setVpsBridgeUrl] = useState<string>('');
   const [msgVpsUrl, setMsgVpsUrl] = useState<string>('');
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      if (localStorage.getItem('tradez_bridge_connected') === 'true') {
+        setMt5Status(prev => ({ ...prev, connected: true }));
+      }
       setVpsBridgeUrl(localStorage.getItem('tradez_vps_bridge_url') || '');
     }
   }, []);

@@ -17,7 +17,7 @@ export class ChatService {
 
   async sendQuery(prompt: string, context?: any): Promise<string> {
     // If context is missing positions or positions is empty, fetch live from local MT5 Bridge or VPS
-    const bridgeUrl = process.env.MT5_BRIDGE_URL || 'http://127.0.0.1:5001';
+    const bridgeUrl = process.env.MT5_BRIDGE_URL || 'http://40.123.242.172:5001';
     let enrichedContext = context ? { ...context } : {};
     if (!enrichedContext.positions || enrichedContext.positions.length === 0) {
       try {

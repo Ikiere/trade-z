@@ -126,7 +126,16 @@ def evaluate_instrument_eligibility(
     # 3. Authoritative Broker Allowed Volume
     broker_allowed_vol = 100.0  # standard institutional cap
 
-    # 4. Canonical Volume Clamping: min(broker, risk, margin)
+    # 4. Hard Account-Size Lot Cap
+    # Cap lots so that the required margin never exceeds 10% of account equity.
+    # Formula: max_lot = (equity * 0.10 * leverage) / (base_price * contract_size)
+    # For cent accounts, contract_size is already scaled by cent_mult in margin formula.
+    _eff_contract = contract_size * (0.01 if is_cent_account else 1.0)
+    if base_price > 0 and _eff_contract > 0 and leverage > 0:
+        account_lot_cap = (equity * 0.10 * leverage) / (base_price * _eff_contract)
+        broker_allowed_vol = min(broker_allowed_vol, account_lot_cap)
+
+    # 5. Canonical Volume Clamping: min(broker, risk, margin)
     raw_vol = min(broker_allowed_vol, risk_allowed_vol, margin_allowed_vol)
 
     # Step down to broker volume_step
@@ -135,9 +144,9 @@ def evaluate_instrument_eligibility(
     stepped_vol = round(stepped_vol, 4)
 
     # Small account and risk check:
-    # If broker minimum volume would risk more than approved risk budget,
-    # NEVER increase risk. Result is strictly NO TRADE.
-    max_tolerated_risk = risk_budget if strict_risk_enforcement else (risk_budget * 2.0)
+    # If broker minimum volume would risk more than 3% of account equity, NEVER trade.
+    # This is the hard Balance Shield that prevents the 3.5% risk breach seen in the audit.
+    max_tolerated_risk = risk_budget if strict_risk_enforcement else min(risk_budget * 2.0, equity * 0.03)
     if stepped_vol < broker_min_volume and not (not strict_risk_enforcement and loss_at_min_vol <= max_tolerated_risk and margin_req_min_vol <= equity * 0.70):
         alternatives = []
         if "XAU" in sym or "GOLD" in sym or "BTC" in sym:

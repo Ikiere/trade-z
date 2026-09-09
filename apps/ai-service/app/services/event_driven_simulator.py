@@ -767,6 +767,27 @@ class EventDrivenSimulator:
                         spec = broker.get_symbol_spec(sym)
                         p_info = current_bar_prices.get(sym)
 
+                        # ── Hard Lot Sanity Cap (last-resort safety net) ──
+                        # Clamp lot so margin ≤ 20% of equity AND dollar risk ≤ 5% of equity.
+                        _lot = decision.recommended_lot
+                        _entry_px = decision.entry_price or (p_info.get("close", 0) if p_info else 0)
+                        if _entry_px > 0 and spec.contract_size > 0:
+                            _max_margin_lot = (account.equity * 0.20 * account.leverage) / (_entry_px * spec.contract_size * account.cent_mult)
+                            _lot = min(_lot, _max_margin_lot)
+                        _sl_dist = abs(decision.entry_price - decision.stop_loss) if decision.stop_loss > 0 else 0
+                        if _sl_dist > 0 and spec.tick_size > 0:
+                            _max_risk_lot = (account.equity * 0.05) / ((_sl_dist / spec.tick_size) * spec.tick_value * account.cent_mult)
+                            _lot = min(_lot, _max_risk_lot)
+                        # Floor at broker minimum, ceiling at broker max
+                        _lot = max(spec.min_volume, min(spec.max_volume, round(max(_lot, 0), 2)))
+                        # If even min lot exceeds hard risk cap, skip this trade
+                        if _sl_dist > 0 and spec.tick_size > 0:
+                            _min_lot_risk = ((_sl_dist / spec.tick_size) * spec.tick_value * spec.min_volume * account.cent_mult)
+                            if _min_lot_risk > account.equity * 0.05:
+                                print(f"[Simulator] Hard Balance Shield: min lot risk ${_min_lot_risk:.2f} > 5% of equity ${account.equity:.2f}. Skipping {sym}.")
+                                rejection_breakdown["HARD_BALANCE_SHIELD"] = rejection_breakdown.get("HARD_BALANCE_SHIELD", 0) + 1
+                                continue
+
                         if decision.discovery_trade:
                             funnel["discovery_trades"] += 1
                         else:
@@ -782,7 +803,7 @@ class EventDrivenSimulator:
                                 target_price=decision.entry_price,
                                 stop_loss=decision.stop_loss,
                                 take_profit=decision.take_profit,
-                                volume=decision.recommended_lot,
+                                volume=_lot,
                                 created_bar=timeline_step,
                                 expiry_bars=8,
                                 setup_id=f"DISC-{decision.setup_family}" if decision.discovery_trade else f"SET-{decision.setup_family}",
@@ -820,7 +841,7 @@ class EventDrivenSimulator:
                             account.open_position(
                                 spec=spec,
                                 direction="long" if decision.direction == "BUY" else "short",
-                                volume=decision.recommended_lot,
+                                volume=_lot,
                                 entry_price=round(actual_entry, spec.decimals),
                                 stop_loss=decision.stop_loss,
                                 take_profit=decision.take_profit,

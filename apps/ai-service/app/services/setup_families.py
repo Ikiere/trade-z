@@ -82,6 +82,32 @@ def detect_all_setup_families(
         tr[0] = hl[0]
         atr = float(np.mean(tr[-14:])) if len(tr) >= 14 else float(np.mean(tr))
 
+    # Symbol-aware decimal precision
+    # XAUUSD = 2dp, JPY pairs = 3dp, everything else = 5dp
+    sym_upper = symbol.upper()
+    if "XAU" in sym_upper or "GOLD" in sym_upper:
+        _decimals = 2
+    elif "JPY" in sym_upper:
+        _decimals = 3
+    elif "BTC" in sym_upper or "ETH" in sym_upper:
+        _decimals = 2
+    else:
+        _decimals = 5
+
+    def _sl_round(v: float) -> float:
+        return round(v, _decimals)
+
+    # Minimum SL buffer: enforce at least 1.0x ATR for metals/crypto, 0.5x for Forex
+    # This prevents microscopic stop distances that cause runaway lot calculations.
+    if "XAU" in sym_upper or "GOLD" in sym_upper or "BTC" in sym_upper or "ETH" in sym_upper:
+        _min_sl_buffer = atr * 1.0   # at least 1 full ATR for volatile metals/crypto
+    else:
+        _min_sl_buffer = atr * 0.5   # at least 0.5 ATR for Forex
+
+    def _buf(multiplier: float = 1.0) -> float:
+        """Return a stop buffer that is always >= _min_sl_buffer."""
+        return max(atr * multiplier, _min_sl_buffer)
+
     # Swing extremes (3-bar pivots)
     swing_highs: List[tuple[int, float]] = []
     swing_lows: List[tuple[int, float]] = []
@@ -117,9 +143,9 @@ def detect_all_setup_families(
     # ─────────────────────────────────────────────────────────────
     # Bullish Sweep
     if current_low < last_low and current_close > last_low:
-        sl = round(current_low - (atr * 0.2), 5)
+        sl = _sl_round(current_low - _buf(0.2))
         sl_dist = abs(current_close - sl)
-        tp = round(max(range_high, current_close + (sl_dist * 3.0)), 5)
+        tp = _sl_round(max(range_high, current_close + (sl_dist * 3.0)))
         rr = round(abs(tp - current_close) / sl_dist, 2) if sl_dist > 0 else 2.5
         candidates.append(CandidateSetup(
             id=f"{symbol}-SWEEP-BUY",
@@ -140,9 +166,9 @@ def detect_all_setup_families(
         ))
     # Bearish Sweep
     elif current_high > last_high and current_close < last_high:
-        sl = round(current_high + (atr * 0.2), 5)
+        sl = _sl_round(current_high + _buf(0.2))
         sl_dist = abs(sl - current_close)
-        tp = round(min(range_low, current_close - (sl_dist * 3.0)), 5)
+        tp = _sl_round(min(range_low, current_close - (sl_dist * 3.0)))
         rr = round(abs(current_close - tp) / sl_dist, 2) if sl_dist > 0 else 2.5
         candidates.append(CandidateSetup(
             id=f"{symbol}-SWEEP-SELL",
@@ -171,9 +197,9 @@ def detect_all_setup_families(
             fvg_low = float(highs[i - 2])
             fvg_high = float(lows[i])
             if current_close > last_high:  # BOS happened
-                sl = round(fvg_low - (atr * 0.2), 5)
+                sl = _sl_round(fvg_low - _buf(0.2))
                 sl_dist = abs(fvg_high - sl)
-                tp = round(current_close + (sl_dist * 3.2), 5)
+                tp = _sl_round(current_close + (sl_dist * 3.2))
                 candidates.append(CandidateSetup(
                     id=f"{symbol}-BOS-FVG-BUY",
                     symbol=symbol,
@@ -196,9 +222,9 @@ def detect_all_setup_families(
             fvg_high = float(lows[i - 2])
             fvg_low = float(highs[i])
             if current_close < last_low:  # Bearish BOS
-                sl = round(fvg_high + (atr * 0.2), 5)
+                sl = _sl_round(fvg_high + _buf(0.2))
                 sl_dist = abs(sl - fvg_low)
-                tp = round(current_close - (sl_dist * 3.2), 5)
+                tp = _sl_round(current_close - (sl_dist * 3.2))
                 candidates.append(CandidateSetup(
                     id=f"{symbol}-BOS-FVG-SELL",
                     symbol=symbol,
@@ -224,9 +250,9 @@ def detect_all_setup_families(
     # ─────────────────────────────────────────────────────────────
     if displacement_ratio >= 1.4:
         if current_close > last_high and current_open < last_high:
-            sl = round(current_low - (atr * 0.3), 5)
+            sl = _sl_round(current_low - _buf(0.3))
             sl_dist = abs(current_close - sl)
-            tp = round(current_close + (sl_dist * 3.5), 5)
+            tp = _sl_round(current_close + (sl_dist * 3.5))
             candidates.append(CandidateSetup(
                 id=f"{symbol}-CHOCH-BUY",
                 symbol=symbol,
@@ -245,9 +271,9 @@ def detect_all_setup_families(
                 details={"choch_pivot": last_high, "displacement": displacement_ratio}
             ))
         elif current_close < last_low and current_open > last_low:
-            sl = round(current_high + (atr * 0.3), 5)
+            sl = _sl_round(current_high + _buf(0.3))
             sl_dist = abs(sl - current_close)
-            tp = round(current_close - (sl_dist * 3.5), 5)
+            tp = _sl_round(current_close - (sl_dist * 3.5))
             candidates.append(CandidateSetup(
                 id=f"{symbol}-CHOCH-SELL",
                 symbol=symbol,
@@ -279,9 +305,9 @@ def detect_all_setup_families(
                 ob_high = float(highs[i])
                 ob_low = float(lows[i])
                 if ob_low <= current_close <= ob_high * 1.002 and current_close < equilibrium:
-                    sl = round(ob_low - (atr * 0.2), 5)
+                    sl = _sl_round(ob_low - _buf(0.2))
                     sl_dist = abs(current_close - sl)
-                    tp = round(range_high, 5)
+                    tp = _sl_round(range_high)
                     rr = round(abs(tp - current_close) / sl_dist, 2) if sl_dist > 0 else 2.8
                     if rr >= 2.0:
                         candidates.append(CandidateSetup(
@@ -307,9 +333,9 @@ def detect_all_setup_families(
                 ob_high = float(highs[i])
                 ob_low = float(lows[i])
                 if ob_low * 0.998 <= current_close <= ob_high and current_close > equilibrium:
-                    sl = round(ob_high + (atr * 0.2), 5)
+                    sl = _sl_round(ob_high + _buf(0.2))
                     sl_dist = abs(sl - current_close)
-                    tp = round(range_low, 5)
+                    tp = _sl_round(range_low)
                     rr = round(abs(current_close - tp) / sl_dist, 2) if sl_dist > 0 else 2.8
                     if rr >= 2.0:
                         candidates.append(CandidateSetup(
@@ -342,9 +368,9 @@ def detect_all_setup_families(
         if current_close <= ote_discount:
             # Bullish: SL must be strictly below current_close and range_low
             sl_anchor = min(current_close, range_low)
-            sl = round(sl_anchor - max(atr * 0.25, 0.0005), 5)
+            sl = _sl_round(sl_anchor - _buf(0.25))
             sl_dist = abs(current_close - sl)
-            tp = round(max(range_high, current_close + (sl_dist * 2.5)), 5)
+            tp = _sl_round(max(range_high, current_close + (sl_dist * 2.5)))
             rr = round(abs(tp - current_close) / sl_dist, 2) if sl_dist > 0 else 2.5
             if rr >= 2.0 and sl < current_close < tp:
                 candidates.append(CandidateSetup(
@@ -367,9 +393,9 @@ def detect_all_setup_families(
         elif current_close >= ote_premium:
             # Bearish: SL must be strictly above current_close and range_high
             sl_anchor = max(current_close, range_high)
-            sl = round(sl_anchor + max(atr * 0.25, 0.0005), 5)
+            sl = _sl_round(sl_anchor + _buf(0.25))
             sl_dist = abs(sl - current_close)
-            tp = round(min(range_low, current_close - (sl_dist * 2.5)), 5)
+            tp = _sl_round(min(range_low, current_close - (sl_dist * 2.5)))
             rr = round(abs(current_close - tp) / sl_dist, 2) if sl_dist > 0 else 2.5
             if rr >= 2.0 and tp < current_close < sl:
                 candidates.append(CandidateSetup(
@@ -398,9 +424,9 @@ def detect_all_setup_families(
         if closes[i] > opens[i] and lows[i] < last_low:  # Bullish OB violated into breakdown
             breaker_level = float(highs[i])
             if abs(current_close - breaker_level) <= (atr * 0.3) and current_close < breaker_level:
-                sl = round(max(current_close, breaker_level) + max(atr * 0.3, 0.0005), 5)
+                sl = _sl_round(max(current_close, breaker_level) + _buf(0.3))
                 sl_dist = abs(sl - current_close)
-                tp = round(current_close - (sl_dist * 3.0), 5)
+                tp = _sl_round(current_close - (sl_dist * 3.0))
                 if tp < current_close < sl:
                     candidates.append(CandidateSetup(
                         id=f"{symbol}-BREAKER-SELL",
@@ -429,9 +455,9 @@ def detect_all_setup_families(
         pos_pct = (current_close - range_low) / total_range
         if pos_pct <= 0.15:  # Deep discount exhaustion
             sl_anchor = min(current_close, range_low)
-            sl = round(sl_anchor - max(atr * 0.25, 0.0005), 5)
+            sl = _sl_round(sl_anchor - _buf(0.25))
             sl_dist = abs(current_close - sl)
-            tp = round(max(equilibrium, current_close + (sl_dist * 2.0)), 5)
+            tp = _sl_round(max(equilibrium, current_close + (sl_dist * 2.0)))
             rr = round(abs(tp - current_close) / sl_dist, 2) if sl_dist > 0 else 2.5
             if rr >= 2.0 and sl < current_close < tp:
                 candidates.append(CandidateSetup(
@@ -453,9 +479,9 @@ def detect_all_setup_families(
                 ))
         elif pos_pct >= 0.85:  # Deep premium exhaustion
             sl_anchor = max(current_close, range_high)
-            sl = round(sl_anchor + max(atr * 0.25, 0.0005), 5)
+            sl = _sl_round(sl_anchor + _buf(0.25))
             sl_dist = abs(sl - current_close)
-            tp = round(min(equilibrium, current_close - (sl_dist * 2.0)), 5)
+            tp = _sl_round(min(equilibrium, current_close - (sl_dist * 2.0)))
             rr = round(abs(current_close - tp) / sl_dist, 2) if sl_dist > 0 else 2.5
             if rr >= 2.0 and tp < current_close < sl:
                 candidates.append(CandidateSetup(
@@ -484,9 +510,9 @@ def detect_all_setup_families(
         htf_high = float(higher_df["high"].max())
         htf_low = float(higher_df["low"].min())
         if current_high >= htf_high and current_close < htf_high:
-            sl = round(current_high + (atr * 0.2), 5)
+            sl = _sl_round(current_high + _buf(0.2))
             sl_dist = abs(sl - current_close)
-            tp = round(current_close - (sl_dist * 3.5), 5)
+            tp = _sl_round(current_close - (sl_dist * 3.5))
             candidates.append(CandidateSetup(
                 id=f"{symbol}-HTF-RAID-SELL",
                 symbol=symbol,
@@ -505,9 +531,9 @@ def detect_all_setup_families(
                 details={"htf_high": htf_high}
             ))
         elif current_low <= htf_low and current_close > htf_low:
-            sl = round(current_low - (atr * 0.2), 5)
+            sl = _sl_round(current_low - _buf(0.2))
             sl_dist = abs(current_close - sl)
-            tp = round(current_close + (sl_dist * 3.5), 5)
+            tp = _sl_round(current_close + (sl_dist * 3.5))
             candidates.append(CandidateSetup(
                 id=f"{symbol}-HTF-RAID-BUY",
                 symbol=symbol,
@@ -532,9 +558,9 @@ def detect_all_setup_families(
     # ─────────────────────────────────────────────────────────────
     if displacement_ratio >= 1.6:
         if current_close > opens[-3] and closes[-1] > closes[-2] > closes[-3]:
-            sl = round(lows[-3] - (atr * 0.1), 5)
+            sl = _sl_round(lows[-3] - _buf(0.1))
             sl_dist = abs(current_close - sl)
-            tp = round(current_close + (sl_dist * 2.8), 5)
+            tp = _sl_round(current_close + (sl_dist * 2.8))
             candidates.append(CandidateSetup(
                 id=f"{symbol}-SESSION-EXP-BUY",
                 symbol=symbol,
@@ -553,9 +579,9 @@ def detect_all_setup_families(
                 details={"expansion_ratio": displacement_ratio}
             ))
         elif current_close < opens[-3] and closes[-1] < closes[-2] < closes[-3]:
-            sl = round(highs[-3] + (atr * 0.1), 5)
+            sl = _sl_round(highs[-3] + _buf(0.1))
             sl_dist = abs(sl - current_close)
-            tp = round(current_close - (sl_dist * 2.8), 5)
+            tp = _sl_round(current_close - (sl_dist * 2.8))
             candidates.append(CandidateSetup(
                 id=f"{symbol}-SESSION-EXP-SELL",
                 symbol=symbol,
@@ -582,9 +608,9 @@ def detect_all_setup_families(
         recent_bodies = body_sizes[-3:]
         if all(rb >= avg_body * 1.2 for rb in recent_bodies):
             if closes[-1] > opens[-1] and closes[-2] > opens[-2]:
-                sl = round(lows[-2] - (atr * 0.15), 5)
+                sl = _sl_round(lows[-2] - _buf(0.15))
                 sl_dist = abs(current_close - sl)
-                tp = round(current_close + (sl_dist * 3.0), 5)
+                tp = _sl_round(current_close + (sl_dist * 3.0))
                 candidates.append(CandidateSetup(
                     id=f"{symbol}-DISP-CONT-BUY",
                     symbol=symbol,
@@ -603,9 +629,9 @@ def detect_all_setup_families(
                     details={"avg_impulse_ratio": float(np.mean(recent_bodies) / avg_body)}
                 ))
             elif closes[-1] < opens[-1] and closes[-2] < opens[-2]:
-                sl = round(highs[-2] + (atr * 0.15), 5)
+                sl = _sl_round(highs[-2] + _buf(0.15))
                 sl_dist = abs(sl - current_close)
-                tp = round(current_close - (sl_dist * 3.0), 5)
+                tp = _sl_round(current_close - (sl_dist * 3.0))
                 candidates.append(CandidateSetup(
                     id=f"{symbol}-DISP-CONT-SELL",
                     symbol=symbol,

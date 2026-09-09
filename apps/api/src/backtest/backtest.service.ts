@@ -19,7 +19,6 @@ export class BacktestService {
     risk_percent?: number;
     broker_name?: string;
     custom_leverage?: number;
-    allow_synthetic?: boolean;
     is_cent_account?: boolean;
   }) {
     let failureDetail = '';
@@ -36,7 +35,7 @@ export class BacktestService {
           risk_percent: params.risk_percent || 1.0,
           broker_name: params.broker_name || 'exness',
           custom_leverage: params.custom_leverage || 2000.0,
-          allow_synthetic: params.allow_synthetic ?? false,
+          allow_synthetic: false,
           is_cent_account: params.is_cent_account ?? false,
         }),
       });

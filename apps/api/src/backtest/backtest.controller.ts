@@ -18,7 +18,6 @@ export class BacktestController {
       risk_percent?: number;
       broker_name?: string;
       custom_leverage?: number;
-      allow_synthetic?: boolean;
     },
   ) {
     const result = await this.backtestService.simulateMarket(body);

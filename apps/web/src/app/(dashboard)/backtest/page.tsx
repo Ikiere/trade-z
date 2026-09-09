@@ -198,7 +198,6 @@ export default function BacktestSimulatorPage() {
   const [riskProfile, setRiskProfile] = useState<'conservative' | 'balanced' | 'aggressive' | 'custom'>('balanced');
   const [customRiskPct, setCustomRiskPct] = useState<number>(2.0);
   const [brokerProfile, setBrokerProfile] = useState<string>('exness');
-  const [allowSynthetic, setAllowSynthetic] = useState<boolean>(false);
   const [isCentAccount, setIsCentAccount] = useState<boolean>(false);
   const [simulationError, setSimulationError] = useState<string | null>(null);
 
@@ -283,7 +282,6 @@ export default function BacktestSimulatorPage() {
           risk_percent: effectiveRiskPercent,
           broker_name: brokerProfile,
           custom_leverage: brokerProfile === 'exness' ? 2000 : 500,
-          allow_synthetic: allowSynthetic,
           is_cent_account: isCentAccount,
         }),
       });
@@ -307,7 +305,7 @@ export default function BacktestSimulatorPage() {
         if (isDataUnavailable) {
           setSimulationError(
             data.error ||
-            'Historical market candles could not be retrieved for the selected assets. Toggle Demo Mode below if you wish to run a simulated stress-test.'
+            'Historical market candles could not be retrieved for the selected assets. Ensure the selected symbols are supported and try again.'
           );
         }
 
@@ -937,15 +935,6 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
               <span className="text-white font-bold">{periodDays}</span> Days Replay
             </div>
             <div className="flex flex-wrap items-center gap-4 mt-1">
-              <label className="inline-flex items-center gap-2 cursor-pointer text-[10px] select-none text-[#94a3b8] hover:text-white">
-                <input
-                  type="checkbox"
-                  checked={allowSynthetic}
-                  onChange={(e) => setAllowSynthetic(e.target.checked)}
-                  className="rounded border-[#334155] bg-[#12121a] text-brand-500 focus:ring-brand-500/20"
-                />
-                <span>Demo Mode (Synthetic Fallback)</span>
-              </label>
               <label className="inline-flex items-center gap-2 cursor-pointer text-[10px] select-none text-amber-400 hover:text-amber-300 font-bold">
                 <input
                   type="checkbox"
@@ -1000,30 +989,16 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
 
       {/* ── Error / Market Data Notice Banner ── */}
       {simulationError && (
-        <div className="card p-4 border-amber-500/40 bg-amber-500/10 text-amber-200 space-y-2">
+        <div className="card p-4 border-red-500/40 bg-red-500/10 text-red-200 space-y-2">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
             <div className="space-y-1">
-              <h4 className="text-xs font-bold uppercase tracking-wider font-mono text-amber-300">
-                Market Data Availability Notice
+              <h4 className="text-xs font-bold uppercase tracking-wider font-mono text-red-300">
+                Market Data Unavailable
               </h4>
-              <p className="text-xs font-mono text-amber-200/90 leading-relaxed">
+              <p className="text-xs font-mono text-red-200/90 leading-relaxed">
                 {simulationError}
               </p>
-              {!allowSynthetic && (
-                <div className="pt-1.5">
-                  <button
-                    onClick={() => {
-                      setAllowSynthetic(true);
-                      setSimulationError(null);
-                    }}
-                    className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 rounded text-[11px] font-mono font-bold text-amber-300 transition-colors inline-flex items-center gap-1.5"
-                  >
-                    <Zap className="w-3.5 h-3.5" />
-                    Enable Demo Mode & Test Engine
-                  </button>
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -1233,7 +1208,7 @@ TRADE-Z INSTITUTIONAL RISK AUDIT • ALL RIGHTS RESERVED
                       {summary.status === 'ACCOUNT_FAILED'
                         ? 'Stop-out liquidation was executed by broker emulator. Minimum lot size (0.01) created excessive drawdowns.'
                         : summary.status === 'DATA_UNAVAILABLE'
-                        ? (simulationError || 'Historical market candles were not supplied for the selected symbols. Check Demo Mode to run with simulated data.')
+                        ? (simulationError || 'Historical market candles were not supplied for the selected symbols.')
                         : `Account survived ${summary.total_trades ?? 0} chronological executions with realistic spread and zero look-ahead bias.`}
                     </p>
                   </div>

@@ -28,7 +28,6 @@ class LegacyBacktestRequest(BaseModel):
     risk_reward: float = 2.5
     min_confidence: float = 65.0
     initial_balance: float = 1000.0
-    allow_synthetic: bool = False
 
 
 class SimulationPayload(BaseModel):
@@ -40,7 +39,6 @@ class SimulationPayload(BaseModel):
     risk_percent: float = 1.0
     broker_name: str = "exness"
     custom_leverage: Optional[float] = None
-    allow_synthetic: bool = False
     mode: str = "DISCOVERY"
     bootstrap_unknown_edge: bool = True
     dataset_phase: str = "TRAIN"
@@ -105,7 +103,7 @@ async def simulate_market(payload: SimulationPayload):
         broker_name=payload.broker_name,
         custom_leverage=payload.custom_leverage,
         custom_candles_map=candles_map if candles_map else None,
-        allow_synthetic=payload.allow_synthetic,
+        allow_synthetic=False,
         edge_mode=edge_mode_enum,
         bootstrap_unknown_edge=payload.bootstrap_unknown_edge,
         dataset_phase=phase_enum,
@@ -194,7 +192,7 @@ async def run_legacy_backtest_endpoint(request: LegacyBacktestRequest):
         risk_percent=1.0,
         broker_name="exness",
         custom_candles_map=candles_map if candles_map else None,
-        allow_synthetic=request.allow_synthetic
+        allow_synthetic=False
     )
 
 
